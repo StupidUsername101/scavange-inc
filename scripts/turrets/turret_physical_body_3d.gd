@@ -79,7 +79,15 @@ func set_visual_color(color: Color) -> void:
 	_apply_visual_group_material()
 
 
-func reset_body(spawn_transform: Transform3D, random_seed: int) -> void:
+func reset_body(spawn_transform: Transform3D, random_seed: int) -> bool:
+	# reset_body() is called from trainers/evaluators after the node is already inside the tree.
+	# Never assume _ready() succeeded: a missing/invalid loadout must fail closed instead of
+	# dereferencing Nil and producing a second, less useful error.
+	if loadout == null or not loadout.ensure_contract():
+		active = false
+		alive = false
+		current_health = 0.0
+		return false
 	global_transform = spawn_transform
 	yaw_angle_radians = 0.0
 	pitch_angle_radians = 0.0
@@ -100,6 +108,7 @@ func reset_body(spawn_transform: Transform3D, random_seed: int) -> void:
 	misses_since_consume = 0
 	rng.seed = random_seed
 	_apply_joint_transforms()
+	return true
 
 
 func submit_ml_action(action: Dictionary) -> bool:

@@ -49,6 +49,8 @@ func _run() -> void:
 	_test_checkpoint_room_metadata_is_sanitized()
 	_test_loadout_json_round_trip()
 	_test_incomplete_loadout_does_not_invent_preset_parts()
+	_test_invalid_turret_reset_fails_closed()
+	_test_evaluation_threat_turrets_use_accepted_preset_body()
 	_test_existing_workers_expose_turret_features()
 	_test_drone_combat_adapter_identity()
 	_test_rebuilt_turret_ui_avoids_object_capturing_lambdas()
@@ -1660,6 +1662,46 @@ func _test_incomplete_loadout_does_not_invent_preset_parts() -> void:
 		decoded != null and not decoded.ensure_contract(),
 		"empty serialized turret data does not create hidden preset parts"
 	)
+
+
+func _test_invalid_turret_reset_fails_closed() -> void:
+	var invalid: TurretPhysicalBody3D = TurretPhysicalBody3D.new()
+	_expect(
+		not invalid.reset_body(Transform3D.IDENTITY, 77)
+		and not invalid.alive
+		and not invalid.active
+		and is_zero_approx(invalid.current_health),
+		"turret reset fails closed when no accepted/preset base + gun body exists"
+	)
+	invalid.free()
+
+
+func _test_evaluation_threat_turrets_use_accepted_preset_body() -> void:
+	var drone_job: DroneCandidateEvaluationJob = DroneCandidateEvaluationJob.new()
+	test_root.add_child(drone_job)
+	var drone_threat_ready: bool = drone_job._build_turret_exposure(701)
+	_expect(
+		drone_threat_ready
+		and is_instance_valid(drone_job.evaluation_turret)
+		and drone_job.evaluation_turret.loadout != null
+		and drone_job.evaluation_turret.loadout.ensure_contract(),
+		"drone fixed-seed turret-exposure fixture receives the authored turret preset before _ready"
+	)
+	test_root.remove_child(drone_job)
+	drone_job.free()
+
+	var limb_job: FourLimbCandidateEvaluationJob = FourLimbCandidateEvaluationJob.new()
+	test_root.add_child(limb_job)
+	var limb_threat_ready: bool = limb_job._build_threat_turret(702)
+	_expect(
+		limb_threat_ready
+		and is_instance_valid(limb_job.evaluation_turret)
+		and limb_job.evaluation_turret.loadout != null
+		and limb_job.evaluation_turret.loadout.ensure_contract(),
+		"four-limb fixed-seed turret-exposure fixture receives the authored turret preset before _ready"
+	)
+	test_root.remove_child(limb_job)
+	limb_job.free()
 
 
 func _test_existing_workers_expose_turret_features() -> void:

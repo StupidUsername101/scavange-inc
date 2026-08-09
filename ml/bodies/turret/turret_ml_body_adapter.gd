@@ -115,7 +115,8 @@ func apply_model_body_commands(_commands: PackedFloat64Array, routed: Dictionary
 func reset_body(spawn_transform: Transform3D, random_seed: int = 0) -> bool:
 	if not is_instance_valid(turret):
 		return false
-	turret.reset_body(spawn_transform, random_seed)
+	if not turret.reset_body(spawn_transform, random_seed):
+		return false
 	previous_commands = TurretMLAction.neutral_commands()
 	return true
 

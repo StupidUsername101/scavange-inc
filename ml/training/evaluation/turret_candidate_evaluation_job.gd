@@ -140,9 +140,14 @@ func configure(
 
 
 func begin() -> bool:
+	var runtime_loadout: TurretLoadout = (
+		MLBodyPartContract.deep_duplicate_resource(loadout) as TurretLoadout
+	)
+	if runtime_loadout == null or not runtime_loadout.ensure_contract():
+		return _fail_start("hidden turret evaluator could not duplicate its accepted body")
 	turret = TurretPhysicalBody3D.new()
 	turret.name = "TurretCandidateEvaluator"
-	turret.loadout = MLBodyPartContract.deep_duplicate_resource(loadout) as TurretLoadout
+	turret.loadout = runtime_loadout
 	turret.auto_start_active = true
 	turret.training_invulnerable = true
 	turret.visible = false
@@ -358,7 +363,8 @@ func _begin_case(next_case_index: int) -> bool:
 	scenario_phase = deg_to_rad(float(posmod(seed, 360)))
 	if not _build_case_environment(scenario_id, seed):
 		return _fail_start("unsupported deterministic turret scenario: %s" % scenario_id)
-	turret.reset_body(Transform3D(Basis.IDENTITY, world_offset), seed)
+	if not turret.reset_body(Transform3D(Basis.IDENTITY, world_offset), seed):
+		return _fail_start("hidden turret evaluator could not reset its accepted body")
 	entity_spatial_hash.refresh_all()
 	_update_targets(0.0)
 	latest_target_probe = TurretTrainingTargetSensor.acquire(

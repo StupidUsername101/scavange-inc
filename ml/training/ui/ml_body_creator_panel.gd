@@ -8,7 +8,13 @@ const GREEN: Color = Color("54e6b1")
 const MUTED: Color = Color("a8d8c1")
 const EMPTY_KEY: String = "__empty__"
 const CURRENT_KEY_PREFIX: String = "__current__:"
+const DEFAULT_WINDOW_SIZE: Vector2i = Vector2i(900, 860)
+const WINDOW_EDGE_MARGIN_PX: int = 40
+const SLOT_SCROLL_MINIMUM_HEIGHT_PX: float = 120.0
+const SLOT_SCROLL_MAXIMUM_VIEWPORT_FRACTION: float = 0.42
 
+var root_panel: PanelContainer
+var slots_scroll: ScrollContainer
 var preset_picker: OptionButton
 var core_picker: OptionButton
 var group_name_input: LineEdit
@@ -43,7 +49,7 @@ var suppress_training_ui_callbacks: bool = false
 
 func _ready() -> void:
 	title = "Model Body Creator"
-	size = Vector2i(860, 820)
+	size = DEFAULT_WINDOW_SIZE
 	min_size = Vector2i(640, 600)
 	unresizable = false
 	transient = true
@@ -59,11 +65,77 @@ func open_creator() -> void:
 		return
 	if preset_picker.item_count > 0 and current_draft == null:
 		_load_preset_at(0)
-	# Match the room's other authored windows: restore intended bounds before centering instead of
-	# passing them as popup_centered()'s minimum-size argument.
-	size = Vector2i(860, 820)
+	# Derive the first-open size from the realized creator contents. The parts list gets enough
+	# height to show all cards when the viewport permits it, then becomes the intentional scroll
+	# region when the complete creator is taller than the game window.
+	_prepare_creator_window_size()
 	popup_centered()
+	# Window/content minimums settle one frame after the popup becomes visible. Re-apply the
+	# content-derived bounds so Godot cannot leave the first open too small or partially off-screen.
+	call_deferred("_fit_creator_window_to_content")
 	call_deferred("_focus_group_name")
+
+
+func _creator_viewport_size() -> Vector2i:
+	var parent_node: Node = get_parent()
+	var parent_viewport: Viewport = (
+		parent_node.get_viewport() if parent_node != null else get_tree().root
+	)
+	return Vector2i(parent_viewport.get_visible_rect().size)
+
+
+func _update_slot_scroll_minimum() -> void:
+	if slots_scroll == null or slots_content == null:
+		return
+	var viewport_size: Vector2i = _creator_viewport_size()
+	var natural_height: float = slots_content.get_combined_minimum_size().y
+	var viewport_limit: float = maxf(
+		float(viewport_size.y) * SLOT_SCROLL_MAXIMUM_VIEWPORT_FRACTION,
+		SLOT_SCROLL_MINIMUM_HEIGHT_PX
+	)
+	slots_scroll.custom_minimum_size.y = clampf(
+		natural_height,
+		SLOT_SCROLL_MINIMUM_HEIGHT_PX,
+		viewport_limit
+	)
+
+
+func _desired_creator_window_size() -> Vector2i:
+	var viewport_size: Vector2i = _creator_viewport_size()
+	var available_width: int = maxi(viewport_size.x - WINDOW_EDGE_MARGIN_PX, min_size.x)
+	var available_height: int = maxi(viewport_size.y - WINDOW_EDGE_MARGIN_PX, min_size.y)
+	var content_minimum: Vector2 = (
+		root_panel.get_combined_minimum_size() if root_panel != null else Vector2(float(DEFAULT_WINDOW_SIZE.x), float(DEFAULT_WINDOW_SIZE.y))
+	)
+	var desired_width: int = maxi(DEFAULT_WINDOW_SIZE.x, int(ceil(content_minimum.x)))
+	var desired_height: int = maxi(min_size.y, int(ceil(content_minimum.y)))
+	return Vector2i(
+		mini(desired_width, available_width),
+		mini(desired_height, available_height)
+	)
+
+
+func _prepare_creator_window_size() -> void:
+	_update_slot_scroll_minimum()
+	size = _desired_creator_window_size()
+
+
+func _fit_creator_window_to_content() -> void:
+	if not visible:
+		return
+	_update_slot_scroll_minimum()
+	var viewport_size: Vector2i = _creator_viewport_size()
+	var desired_size: Vector2i = _desired_creator_window_size()
+	size = desired_size
+	position = Vector2i(
+		maxi((viewport_size.x - desired_size.x) / 2, 0),
+		maxi((viewport_size.y - desired_size.y) / 2, 0)
+	)
+
+
+func _refresh_creator_window_after_layout() -> void:
+	if visible:
+		_fit_creator_window_to_content()
 
 
 func _focus_group_name() -> void:
@@ -74,7 +146,7 @@ func _focus_group_name() -> void:
 
 
 func _build_ui() -> void:
-	var root_panel: PanelContainer = PanelContainer.new()
+	root_panel = PanelContainer.new()
 	root_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root_panel.add_theme_stylebox_override(
 		"panel",
@@ -117,6 +189,7 @@ func _build_ui() -> void:
 	preset_label.custom_minimum_size.x = 120.0
 	preset_row.add_child(preset_label)
 	preset_picker = OptionButton.new()
+	preset_picker.fit_to_longest_item = false
 	preset_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	preset_picker.item_selected.connect(_on_preset_selected)
 	preset_row.add_child(preset_picker)
@@ -129,6 +202,7 @@ func _build_ui() -> void:
 	physical_core_label.custom_minimum_size.x = 120.0
 	core_row.add_child(physical_core_label)
 	core_picker = OptionButton.new()
+	core_picker.fit_to_longest_item = false
 	core_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	core_picker.item_selected.connect(_on_core_selected)
 	core_row.add_child(core_picker)
@@ -161,14 +235,14 @@ func _build_ui() -> void:
 	parts_heading.add_theme_color_override("font_color", ORANGE)
 	root.add_child(parts_heading)
 
-	var scroll: ScrollContainer = ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(scroll)
+	slots_scroll = ScrollContainer.new()
+	slots_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	slots_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(slots_scroll)
 	slots_content = VBoxContainer.new()
 	slots_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slots_content.add_theme_constant_override("separation", 7)
-	scroll.add_child(slots_content)
+	slots_scroll.add_child(slots_content)
 
 	var footer_panel: PanelContainer = PanelContainer.new()
 	footer_panel.add_theme_stylebox_override(
@@ -224,6 +298,7 @@ func _build_training_settings(root: VBoxContainer) -> void:
 	algorithm_label.custom_minimum_size.x = 170.0
 	algorithm_row.add_child(algorithm_label)
 	algorithm_picker = OptionButton.new()
+	algorithm_picker.fit_to_longest_item = false
 	algorithm_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	algorithm_picker.item_selected.connect(_on_algorithm_selected)
 	algorithm_row.add_child(algorithm_picker)
@@ -284,6 +359,7 @@ func _build_training_settings(root: VBoxContainer) -> void:
 	reward_label.tooltip_text = "Starting reward-card preset. This uses the same reward-card library as the worker-group tuning UI and can be changed later while the group is paused."
 	reward_row.add_child(reward_label)
 	reward_cardset_picker = OptionButton.new()
+	reward_cardset_picker.fit_to_longest_item = false
 	reward_cardset_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	reward_cardset_picker.tooltip_text = reward_label.tooltip_text
 	reward_cardset_picker.item_selected.connect(func(_index: int) -> void:
@@ -702,6 +778,9 @@ func _rebuild_slot_rows() -> void:
 		var slot: MLBodySlotDefinition = entry.get("definition") as MLBodySlotDefinition
 		if slot != null:
 			_build_slot_row(slot, entry.get("part") as Resource)
+	# queue_free() removes old rows at the end of the frame. Measure after that point so stale rows
+	# do not inflate the next preset/Core's opening size.
+	call_deferred("_refresh_creator_window_after_layout")
 
 
 func _build_slot_row(slot: MLBodySlotDefinition, current_part: Resource) -> void:
@@ -724,6 +803,7 @@ func _build_slot_row(slot: MLBodySlotDefinition, current_part: Resource) -> void
 	label.add_theme_color_override("font_color", GREEN)
 	row.add_child(label)
 	var picker: OptionButton = OptionButton.new()
+	picker.fit_to_longest_item = false
 	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(picker)
 	slot_pickers[slot_id] = picker

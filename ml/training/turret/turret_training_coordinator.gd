@@ -695,14 +695,28 @@ func _start_group_episode(
 		if worker_index < existing.size() and existing[worker_index] is Dictionary:
 			turret = _worker_turret(existing[worker_index])
 		if not is_instance_valid(turret):
+			var worker_loadout: TurretLoadout = (
+				MLBodyPartContract.deep_duplicate_resource(group_loadout) as TurretLoadout
+			)
+			if worker_loadout == null or not worker_loadout.ensure_contract():
+				last_error = "The accepted turret body could not be duplicated for a training worker."
+				group["active"] = false
+				_clear_group_workers(group)
+				return
 			turret = TurretPhysicalBody3D.new()
 			turret.name = "TurretGroup%02dWorker%03d" % [int(group["group_id"]), worker_index]
-			turret.loadout = MLBodyPartContract.deep_duplicate_resource(group_loadout) as TurretLoadout
+			turret.loadout = worker_loadout
 			turret.training_invulnerable = true
 			host.add_child(turret)
 		var spawn: Transform3D = _group_spawn_transform(group, worker_index, count, arena_size)
 		_cancel_projectiles_for_turret_id(int(turret.get_instance_id()))
-		turret.reset_body(spawn, int(group["episode"]) * 1000 + worker_index)
+		if not turret.reset_body(spawn, int(group["episode"]) * 1000 + worker_index):
+			last_error = "A turret worker rejected its accepted body during episode reset."
+			group["active"] = false
+			if is_instance_valid(turret):
+				turret.queue_free()
+			_clear_group_workers(group)
+			return
 		turret.set_visual_color(group["color"])
 		var entity_id = int(turret.get_instance_id())
 		var combat_adapter = TurretTrainingCombatantAdapter.new(

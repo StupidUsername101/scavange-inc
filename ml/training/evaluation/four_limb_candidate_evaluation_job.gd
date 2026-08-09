@@ -358,7 +358,10 @@ func _begin_case(next_case_index: int) -> bool:
 	var scenario_id: String = str(current_case.get("scenario_id", ""))
 	var seed: int = int(current_case.get("seed", 0))
 	if not _build_case_environment(scenario_id, seed):
-		return _fail_start("unsupported deterministic four-limb scenario: %s" % scenario_id)
+		var environment_error: String = last_error.strip_edges()
+		if environment_error.is_empty():
+			environment_error = "unsupported deterministic four-limb scenario: %s" % scenario_id
+		return _fail_start(environment_error)
 	var spawn_transform: Transform3D = _case_spawn_transform(scenario_id, seed)
 	if not adapter.reset_body(spawn_transform, seed):
 		return _fail_start("hidden four-limb body could not reset")
@@ -528,13 +531,15 @@ func _build_case_environment(scenario_id: String, seed: int) -> bool:
 			return true
 		"item_pickup":
 			target_position_world = spawn + Vector3(0.0, 0.0, -6.0)
-			_build_pickup_item(spawn + Vector3(0.0, 0.17, -2.25))
+			if not _build_pickup_item(spawn + Vector3(0.0, 0.17, -2.25)):
+				return false
 		"item_delivery":
 			# This canonical case tests the full pickup -> conditional route switch -> carry into
 			# destination contract. Before grip, the dedicated pickup observation identifies cargo;
 			# once held, capture_observation redirects the generic task target to the drop-off.
 			target_position_world = spawn + Vector3(0.0, 0.0, -7.0)
-			_build_pickup_item(spawn + Vector3(0.0, 0.17, -2.25))
+			if not _build_pickup_item(spawn + Vector3(0.0, 0.17, -2.25)):
+				return false
 			_build_delivery_destination(spawn + Vector3(0.0, 0.0, -7.0))
 		"controlled_jump":
 			target_position_world = spawn + Vector3(0.0, 0.0, -8.0)
@@ -543,7 +548,8 @@ func _build_case_environment(scenario_id: String, seed: int) -> bool:
 			target_position_world = spawn + Vector3(5.0, 0.0, -3.0)
 		"turret_exposure":
 			target_position_world = spawn + Vector3(7.0, 0.0, -5.0)
-			_build_threat_turret(seed)
+			if not _build_threat_turret(seed):
+				return false
 		_:
 			return false
 	# Ground benchmark targets are support-surface destinations, matching live four-limb target
@@ -670,7 +676,7 @@ func _add_box_wall(center: Vector3, size: Vector3, yaw_radians: float) -> void:
 	scenario_walls.append(wall)
 
 
-func _build_pickup_item(position_world: Vector3) -> void:
+func _build_pickup_item(position_world: Vector3) -> bool:
 	evaluation_pickup_item = TrainingItem3D.new()
 	evaluation_pickup_item.name = "FourLimbEvaluationPickupItem"
 	evaluation_pickup_item.visible = false
@@ -680,8 +686,11 @@ func _build_pickup_item(position_world: Vector3) -> void:
 		PICKUP_ITEM_DEFINITION,
 		Transform3D(Basis.IDENTITY, position_world)
 	):
+		last_error = "four-limb evaluator could not build its frozen pickup-item fixture"
 		evaluation_pickup_item.queue_free()
 		evaluation_pickup_item = null
+		return false
+	return true
 
 
 func _build_delivery_destination(position_world: Vector3) -> void:
@@ -699,17 +708,35 @@ func _build_delivery_destination(position_world: Vector3) -> void:
 	)
 
 
-func _build_threat_turret(seed: int) -> void:
+func _build_threat_turret(seed: int) -> bool:
+	var threat_loadout: TurretLoadout = MLBodyPresetLibrary.stationary_turret_loadout()
+	if threat_loadout == null or not threat_loadout.ensure_contract():
+		last_error = "four-limb evaluator could not load the stationary threat-turret preset"
+		return false
+	var threat_runtime_loadout: TurretLoadout = (
+		MLBodyPartContract.deep_duplicate_resource(threat_loadout) as TurretLoadout
+	)
+	if threat_runtime_loadout == null or not threat_runtime_loadout.ensure_contract():
+		last_error = "four-limb evaluator could not duplicate the stationary threat-turret preset"
+		return false
 	evaluation_turret = TurretPhysicalBody3D.new()
 	evaluation_turret.name = "FourLimbEvaluationThreatTurret"
+	# _ready() validates the loadout, so the authored preset must be assigned before add_child().
+	# The previous order created a body with a Nil loadout and then reset it, which explains the
+	# loadout + maximum_health errors even when no live-room turret had been placed.
+	evaluation_turret.loadout = threat_runtime_loadout
 	evaluation_turret.auto_start_active = true
 	evaluation_turret.training_invulnerable = true
 	evaluation_turret.visible = false
 	add_child(evaluation_turret)
-	evaluation_turret.reset_body(
+	if not evaluation_turret.reset_body(
 		Transform3D(Basis.IDENTITY, _world_spawn_position() + Vector3(7.0, 0.0, 3.0)),
 		seed + 90001
-	)
+	):
+		last_error = "four-limb evaluator threat turret could not initialize its accepted body"
+		evaluation_turret.queue_free()
+		evaluation_turret = null
+		return false
 	evaluation_turret_adapter = TurretTrainingCombatantAdapter.new(
 		evaluation_turret,
 		910000000 + candidate_id * 100 + case_index,
@@ -727,6 +754,7 @@ func _build_threat_turret(seed: int) -> void:
 	var shot_callable: Callable = _on_evaluation_turret_shot_requested
 	if not evaluation_turret.shot_requested.is_connected(shot_callable):
 		evaluation_turret.shot_requested.connect(shot_callable)
+	return true
 
 
 func _register_limb_combatant() -> void:

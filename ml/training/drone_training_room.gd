@@ -380,6 +380,8 @@ var delivery_destination_placement_active: bool = false
 var delivery_destination_placement_group_id: int = -1
 var delivery_destination_placement_position: Vector3 = Vector3.ZERO
 var delivery_destination_preview: MeshInstance3D
+var delivery_destination_preview_mesh: CylinderMesh
+var delivery_destination_preview_material: StandardMaterial3D
 
 var episode_duration = DroneTrainingEpisode.DEFAULT_DURATION_SECONDS
 var unlimited_episode_battery = true
@@ -5003,11 +5005,21 @@ func _cancel_delivery_destination_placement(message: String, _restart_if_changed
 
 
 func _ensure_delivery_destination_preview() -> void:
-	if delivery_destination_preview != null:
+	if is_instance_valid(delivery_destination_preview):
 		return
 	delivery_destination_preview = MeshInstance3D.new()
 	delivery_destination_preview.name = "DeliveryDestinationPreview"
 	delivery_destination_preview.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	delivery_destination_preview_mesh = CylinderMesh.new()
+	delivery_destination_preview_mesh.radial_segments = 40
+	delivery_destination_preview.mesh = delivery_destination_preview_mesh
+	var initial_preview_color: Color = Color("54e6b1")
+	initial_preview_color.a = DELIVERY_DESTINATION_PREVIEW_ALPHA
+	delivery_destination_preview_material = DroneTrainingRoomPresentation.material(
+		initial_preview_color,
+		true
+	)
+	delivery_destination_preview.material_override = delivery_destination_preview_material
 	add_child(delivery_destination_preview)
 
 
@@ -5020,17 +5032,22 @@ func _update_delivery_destination_preview() -> void:
 		return
 	var radius_m: float = maxf(float(group.get("radius_m", 1.25)), 0.10)
 	var height_m: float = maxf(float(group.get("height_m", 1.25)), 0.10)
-	var mesh: CylinderMesh = CylinderMesh.new()
-	mesh.top_radius = radius_m
-	mesh.bottom_radius = radius_m
-	mesh.height = height_m
-	mesh.radial_segments = 40
-	delivery_destination_preview.mesh = mesh
+	if delivery_destination_preview_mesh == null:
+		delivery_destination_preview_mesh = CylinderMesh.new()
+		delivery_destination_preview_mesh.radial_segments = 40
+		delivery_destination_preview.mesh = delivery_destination_preview_mesh
+	delivery_destination_preview_mesh.top_radius = radius_m
+	delivery_destination_preview_mesh.bottom_radius = radius_m
+	delivery_destination_preview_mesh.height = height_m
 	delivery_destination_preview.global_position = delivery_destination_placement_position + Vector3.UP * (height_m * 0.5)
 	var color: Color = group.get("color", Color("54e6b1"))
-	delivery_destination_preview.material_override = DroneTrainingRoomPresentation.material(
-		Color(color.r, color.g, color.b, DELIVERY_DESTINATION_PREVIEW_ALPHA), true
-	)
+	var preview_color: Color = Color(color.r, color.g, color.b, DELIVERY_DESTINATION_PREVIEW_ALPHA)
+	if delivery_destination_preview_material == null:
+		delivery_destination_preview_material = DroneTrainingRoomPresentation.material(preview_color, true)
+		delivery_destination_preview.material_override = delivery_destination_preview_material
+	else:
+		delivery_destination_preview_material.albedo_color = preview_color
+		delivery_destination_preview_material.emission = Color(color.r, color.g, color.b)
 	delivery_destination_preview.visible = delivery_destination_placement_active
 
 

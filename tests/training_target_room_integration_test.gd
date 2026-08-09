@@ -18,6 +18,7 @@ func _init() -> void:
 	_test_turret_group_publishes_live_runtime_members()
 	_test_fresh_drone_model_architecture_reaches_constructor()
 	_test_model_body_creator_carries_training_setup()
+	_test_model_body_creator_fits_realized_content_to_viewport()
 	_test_paused_drone_candidate_keeps_frozen_hardware()
 	_test_room_episode_status_is_one_shared_line()
 	_test_room_ready_does_not_create_default_worker_group()
@@ -87,6 +88,33 @@ func _test_model_body_creator_carries_training_setup() -> void:
 		str(request.get("reward_cardset_id", "")) == "builtin:drone_balanced"
 		and not (request.get("reward_cards", {}) as Dictionary).is_empty(),
 		"model creator sends the selected reward-card preset with the fresh worker group"
+	)
+	panel.free()
+
+
+func _test_model_body_creator_fits_realized_content_to_viewport() -> void:
+	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
+	get_root().add_child(panel)
+	panel._load_preset_at(0)
+	panel._prepare_creator_window_size()
+	var viewport_size: Vector2i = panel._creator_viewport_size()
+	var maximum_width: int = maxi(
+		viewport_size.x - MLBodyCreatorPanel.WINDOW_EDGE_MARGIN_PX,
+		panel.min_size.x
+	)
+	var maximum_height: int = maxi(
+		viewport_size.y - MLBodyCreatorPanel.WINDOW_EDGE_MARGIN_PX,
+		panel.min_size.y
+	)
+	_expect(
+		panel.size.x <= maximum_width and panel.size.y <= maximum_height,
+		"model creator clamps its realized content size to the visible game viewport"
+	)
+	_expect(
+		panel.slots_scroll != null
+		and panel.slots_scroll.custom_minimum_size.y
+			>= MLBodyCreatorPanel.SLOT_SCROLL_MINIMUM_HEIGHT_PX,
+		"model creator reserves a real parts-list region instead of clipping attached-part cards"
 	)
 	panel.free()
 

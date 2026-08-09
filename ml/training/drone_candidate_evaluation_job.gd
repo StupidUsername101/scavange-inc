@@ -326,7 +326,10 @@ func _begin_case(next_case_index: int) -> bool:
 	_restore_full_loadout()
 	_clear_case_environment()
 	if not _build_case_environment(scenario_id, case_seed):
-		return _fail_start("unsupported deterministic evaluation scenario: %s" % scenario_id)
+		var environment_error: String = last_error.strip_edges()
+		if environment_error.is_empty():
+			environment_error = "unsupported deterministic evaluation scenario: %s" % scenario_id
+		return _fail_start(environment_error)
 	_configure_case_target(scenario_id, case_seed)
 	if target_handler == null:
 		return _fail_start("evaluation target handler could not be created")
@@ -515,7 +518,8 @@ func _build_case_environment(scenario_id: String, case_seed: int) -> bool:
 		"corridor":
 			_build_corridor_course(case_seed)
 		"turret_exposure":
-			_build_turret_exposure(case_seed)
+			if not _build_turret_exposure(case_seed):
+				return false
 		_:
 			return false
 	scenario_wall_spatial_hash.rebuild(scenario_walls)
@@ -558,15 +562,33 @@ func _build_corridor_course(case_seed: int) -> void:
 	)
 
 
-func _build_turret_exposure(case_seed: int) -> void:
+func _build_turret_exposure(case_seed: int) -> bool:
+	var threat_loadout: TurretLoadout = MLBodyPresetLibrary.stationary_turret_loadout()
+	if threat_loadout == null or not threat_loadout.ensure_contract():
+		last_error = "drone evaluator could not load the stationary threat-turret preset"
+		return false
+	var threat_runtime_loadout: TurretLoadout = (
+		MLBodyPartContract.deep_duplicate_resource(threat_loadout) as TurretLoadout
+	)
+	if threat_runtime_loadout == null or not threat_runtime_loadout.ensure_contract():
+		last_error = "drone evaluator could not duplicate the stationary threat-turret preset"
+		return false
 	evaluation_turret = TurretPhysicalBody3D.new()
 	evaluation_turret.name = "CandidateEvaluationThreatTurret"
+	evaluation_turret.loadout = threat_runtime_loadout
 	evaluation_turret.auto_start_active = true
 	evaluation_turret.training_invulnerable = true
 	evaluation_turret.visible = false
 	add_child(evaluation_turret)
 	var turret_position: Vector3 = Vector3(5.5, 0.0, -5.0)
-	evaluation_turret.reset_body(Transform3D(Basis.IDENTITY, turret_position), case_seed + 70001)
+	if not evaluation_turret.reset_body(
+		Transform3D(Basis.IDENTITY, turret_position),
+		case_seed + 70001
+	):
+		last_error = "drone evaluator threat turret could not initialize its accepted body"
+		evaluation_turret.queue_free()
+		evaluation_turret = null
+		return false
 	evaluation_turret_adapter = TurretTrainingCombatantAdapter.new(
 		evaluation_turret,
 		900000000 + candidate_id * 100 + case_index,
@@ -584,6 +606,7 @@ func _build_turret_exposure(case_seed: int) -> void:
 	var shot_callable: Callable = _on_evaluation_turret_shot_requested
 	if not evaluation_turret.shot_requested.is_connected(shot_callable):
 		evaluation_turret.shot_requested.connect(shot_callable)
+	return true
 
 
 func _register_evaluation_drone_combatant() -> void:
