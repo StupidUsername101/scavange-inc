@@ -43,18 +43,8 @@ static func create_draft(loadout: DroneLoadout) -> MLBodyBuildDraft:
 		slot.accepted_part_tags.append(&"propeller")
 		if not draft.add_slot(slot, safe_loadout.get_propeller(slot_index)):
 			return draft
-	for slot_index: int in range(safe_loadout.core.ai_chip_slot_count):
-		var slot: MLBodySlotDefinition = MLBodySlotDefinition.new()
-		slot.slot_id = StringName("ai_chip_%d" % slot_index)
-		slot.display_name = "AI Chip %d" % (slot_index + 1)
-		slot.slot_type = &"ai_chip"
-		slot.accepted_part_tags.append(&"ai_chip")
-		slot.mount_transform = Transform3D(
-			Basis.IDENTITY,
-			SLOT_LAYOUT.get_ai_chip_position(slot_index, safe_loadout.core.body_size)
-		)
-		if not draft.add_slot(slot, safe_loadout.get_ai_chip(slot_index)):
-			return draft
+	# Legacy gameplay AI chips are not part of a trainable model body. The learned policy itself
+	# is the drone intelligence, so creator/training contracts expose only physical/control hardware.
 	for slot_index: int in range(safe_loadout.core.attachment_slot_count):
 		var slot: MLBodySlotDefinition = MLBodySlotDefinition.new()
 		slot.slot_id = StringName("attachment_%d" % slot_index)
@@ -133,10 +123,6 @@ static func host_state(drone: ServerDrone) -> Dictionary:
 
 static func _core_contract(loadout: DroneLoadout) -> Dictionary:
 	var core: DroneCoreDefinition = loadout.core
-	var ai_paths: Array[String] = []
-	var ai_slot_count: int = core.ai_chip_slot_count if core != null else 0
-	for slot_index: int in range(ai_slot_count):
-		ai_paths.append(MLBodyPartContract.resource_source_path(loadout.get_ai_chip(slot_index)))
 	return {
 		"body_kind": "drone",
 		"core_resource_path": MLBodyPartContract.resource_source_path(core),
@@ -149,5 +135,4 @@ static func _core_contract(loadout: DroneLoadout) -> Dictionary:
 		"propeller_slot_count": core.propeller_slot_count if core != null else 0,
 		"attachment_slot_count": core.attachment_slot_count if core != null else 0,
 		"battery_resource_path": MLBodyPartContract.resource_source_path(loadout.battery),
-		"ai_chip_resource_paths": ai_paths,
 	}

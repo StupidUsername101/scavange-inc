@@ -448,7 +448,7 @@ ml_models/
 
 `model.json` contains the model identity, topology, creation time and parent version. New PPO
 manifests also carry a deployment contract for the runtime model: observation schema, actor/critic
-input sizes, four motor outputs, control interval and intended AI-model-chip slot. The checkpoint
+input sizes, body/action topology, control interval and intended drone body kind. The checkpoint
 records the reward recipe and training-room configuration that produced it. Manual
 baselines store their parameters there; PPO versions store the network, Adam moments and training
 counters in `checkpoint.json`. Each completed evaluation writes a separate result file under the

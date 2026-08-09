@@ -23,6 +23,11 @@ func _init() -> void:
 			"Quad Drone preset has propeller slot %d" % slot_index
 		)
 
+	_expect(
+		baseline.ai_chips.is_empty(),
+		"model-forge drone presets do not carry the removed legacy AI chips"
+	)
+
 	var private_copy = DroneTrainingLoadoutConfig.duplicate_loadout(baseline)
 	_expect(private_copy != baseline, "loadout container is copied")
 	_expect(private_copy.core != baseline.core, "core resource is copied")
@@ -35,8 +40,7 @@ func _init() -> void:
 	_expect(
 		DroneLoadout.definition_path(private_copy.core) == DroneLoadout.definition_path(baseline.core)
 		and DroneLoadout.definition_path(private_copy.battery) == DroneLoadout.definition_path(baseline.battery)
-		and private_copy.get_propeller_definition_paths() == baseline.get_propeller_definition_paths()
-		and private_copy.get_ai_chip_definition_paths() == baseline.get_ai_chip_definition_paths(),
+		and private_copy.get_propeller_definition_paths() == baseline.get_propeller_definition_paths(),
 		"deep-copied drone hardware keeps stable .tres definition paths for UI/network replication"
 	)
 	var loose_part_scene: PackedScene = load("res://scenes/server/server_drone_part.tscn") as PackedScene
@@ -126,7 +130,8 @@ func _init() -> void:
 
 	var record = DroneTrainingLoadoutConfig.to_record(private_copy)
 	_expect(not record.is_empty(), "checkpoint hardware record is produced")
-	_expect(int(record.get("schema_version", -1)) == 3, "hardware record uses generic Resource snapshots")
+	_expect(int(record.get("schema_version", -1)) == 4, "hardware record uses chip-free generic Resource snapshots")
+	_expect(not record.has("ai_chips"), "training hardware persistence no longer serializes legacy AI chips")
 	var json_text = JSON.stringify(record)
 	_expect(not json_text.is_empty(), "checkpoint hardware record is JSON serializable")
 	var parsed = JSON.parse_string(json_text)
@@ -168,21 +173,9 @@ func _init() -> void:
 		"propeller power survives checkpoint round-trip"
 	)
 	_expect(
-		restored.ai_chips.size() == private_copy.ai_chips.size(),
-		"checkpoint round-trip preserves installed AI-chip slots and their mass"
+		restored.ai_chips.is_empty(),
+		"checkpoint round-trip keeps model-forge drone loadouts free of legacy AI chips"
 	)
-	for slot_index in range(private_copy.ai_chips.size()):
-		var expected_chip = private_copy.get_ai_chip(slot_index)
-		var restored_chip = restored.get_ai_chip(slot_index)
-		_expect(
-			(expected_chip == null and restored_chip == null)
-			or (
-				expected_chip != null
-				and restored_chip != null
-				and expected_chip.display_name == restored_chip.display_name
-			),
-			"AI-chip slot %d survives checkpoint round-trip" % slot_index
-		)
 	_expect(
 		is_equal_approx(restored.get_total_mass(), private_copy.get_total_mass()),
 		"checkpoint round-trip preserves exact installed-part mass"

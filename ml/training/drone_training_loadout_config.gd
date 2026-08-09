@@ -29,12 +29,10 @@ static func duplicate_loadout(source: DroneLoadout) -> DroneLoadout:
 	# destroy additional creator-authored slots while cloning or serializing a body.
 	for slot_index in range(_propeller_slot_count(source)):
 		result.propellers.append(_duplicate_propeller(source.get_propeller(slot_index)))
-	for chip in source.ai_chips:
-		var chip_copy: DroneAIChipDefinition = null
-		if chip != null:
-			chip_copy = MLBodyPartContract.deep_duplicate_resource(chip) as DroneAIChipDefinition
-			_set_source_path(chip_copy, source_path(chip))
-		result.ai_chips.append(chip_copy)
+	# Training/model-forge loadouts intentionally discard the legacy scripted AI chips. The
+	# learned model owns control; carrying old behavior chips into a worker body would mix two
+	# independent control systems and exposes meaningless creator slots.
+	result.ai_chips.clear()
 	for attachment in source.attachments:
 		var attachment_copy: DroneAttachmentDefinition = null
 		if attachment != null:
@@ -269,20 +267,17 @@ static func to_record(loadout: DroneLoadout) -> Dictionary:
 	if core_snapshot.is_empty() or battery_snapshot.is_empty():
 		return {}
 	var propeller_snapshots: Array[Dictionary] = _snapshot_part_slots(loadout, &"propeller")
-	var chip_snapshots: Array[Dictionary] = _snapshot_part_slots(loadout, &"ai_chip")
 	var attachment_snapshots: Array[Dictionary] = _snapshot_part_slots(loadout, &"attachment")
 	if (
 		propeller_snapshots.size() != maxi(loadout.core.propeller_slot_count, 0)
-		or chip_snapshots.size() != maxi(loadout.core.ai_chip_slot_count, 0)
 		or attachment_snapshots.size() != maxi(loadout.core.attachment_slot_count, 0)
 	):
 		return {}
 	return {
-		"schema_version": 3,
+		"schema_version": 4,
 		"core": core_snapshot,
 		"battery": battery_snapshot,
 		"propellers": propeller_snapshots,
-		"ai_chips": chip_snapshots,
 		"attachments": attachment_snapshots,
 		"summary": physical_summary(loadout),
 	}
@@ -291,7 +286,7 @@ static func to_record(loadout: DroneLoadout) -> Dictionary:
 static func from_record(record: Dictionary) -> DroneLoadout:
 	# Serialized hardware is either complete or invalid. Stock hardware is selected explicitly via
 	# MLBodyPresetLibrary; malformed checkpoint data must never turn into an implicit preset.
-	if record.is_empty() or int(record.get("schema_version", -1)) != 3:
+	if record.is_empty() or int(record.get("schema_version", -1)) != 4:
 		return null
 	var core_value: Variant = record.get("core", {})
 	var battery_value: Variant = record.get("battery", {})
@@ -309,8 +304,6 @@ static func from_record(record: Dictionary) -> DroneLoadout:
 	result.install_core(core)
 	result.install_battery(battery)
 	if not _restore_part_slots(result, record.get("propellers", []), &"propeller"):
-		return null
-	if not _restore_part_slots(result, record.get("ai_chips", []), &"ai_chip"):
 		return null
 	if not _restore_part_slots(result, record.get("attachments", []), &"attachment"):
 		return null
@@ -457,8 +450,6 @@ static func _snapshot_part_slots(loadout: DroneLoadout, part_kind: StringName) -
 	match part_kind:
 		&"propeller":
 			slot_count = maxi(loadout.core.propeller_slot_count, 0)
-		&"ai_chip":
-			slot_count = maxi(loadout.core.ai_chip_slot_count, 0)
 		&"attachment":
 			slot_count = maxi(loadout.core.attachment_slot_count, 0)
 	for slot_index in range(slot_count):
@@ -466,8 +457,6 @@ static func _snapshot_part_slots(loadout: DroneLoadout, part_kind: StringName) -
 		match part_kind:
 			&"propeller":
 				part = loadout.get_propeller(slot_index)
-			&"ai_chip":
-				part = loadout.get_ai_chip(slot_index)
 			&"attachment":
 				part = loadout.get_attachment(slot_index)
 		var snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(part)
@@ -491,8 +480,6 @@ static func _restore_part_slots(
 	match part_kind:
 		&"propeller":
 			slot_count = maxi(loadout.core.propeller_slot_count, 0)
-		&"ai_chip":
-			slot_count = maxi(loadout.core.ai_chip_slot_count, 0)
 		&"attachment":
 			slot_count = maxi(loadout.core.attachment_slot_count, 0)
 		_:
@@ -514,10 +501,6 @@ static func _restore_part_slots(
 				if part != null and not (part is DronePropellerDefinition):
 					return false
 				loadout.propellers.append(part as DronePropellerDefinition)
-			&"ai_chip":
-				if part != null and not (part is DroneAIChipDefinition):
-					return false
-				loadout.ai_chips.append(part as DroneAIChipDefinition)
 			&"attachment":
 				if part != null and not (part is DroneAttachmentDefinition):
 					return false

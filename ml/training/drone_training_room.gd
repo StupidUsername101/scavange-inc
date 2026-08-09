@@ -1532,18 +1532,21 @@ func _refresh_camera_orbit_controls() -> void:
 func _install_training_camera_part(drone: ServerDrone) -> Camera3D:
 	if not is_instance_valid(drone):
 		return null
-	var existing = drone.get_camera_attachment()
+	var existing: Camera3D = drone.get_camera_attachment()
 	if existing != null:
 		return existing
-	var definition = TRAINING_CAMERA_ATTACHMENT.duplicate(true) as DroneCameraAttachmentDefinition
-	if drone.loadout != null and drone.loadout.core != null:
-		for slot_index in range(drone.loadout.core.attachment_slot_count):
-			if drone.loadout.get_attachment(slot_index) != null:
-				continue
-			if drone.install_attachment(slot_index, definition):
-				return drone.get_camera_attachment(slot_index)
-	# A fully occupied gameplay loadout must not lose a weapon or arm merely to be observed.
-	# The fallback still uses the same zero-mass part definition, mounted directly to the core.
+	var definition: DroneCameraAttachmentDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(TRAINING_CAMERA_ATTACHMENT)
+		as DroneCameraAttachmentDefinition
+	)
+	if definition == null:
+		return null
+	# Training cameras are instrumentation, not authored body hardware. Installing this helper into
+	# a free attachment slot mutates the runtime MLBodyInterfaceManifest after the trainer has
+	# already accepted its body. That changes the interface signature (an empty attachment slot
+	# becomes a camera-tagged slot), so the worker is rejected before a trial is registered. Mount
+	# the observer directly on the Core instead; gameplay camera parts already present in the
+	# selected loadout are still preferred above.
 	return drone.mount_core_camera_part(definition)
 
 
@@ -12991,8 +12994,12 @@ func _set_group_worker_count(group_id: int, requested_count: int) -> void:
 		trainer.discard_incomplete_rollout()
 		_remove_trials_for_group(group_id)
 		group["control_elapsed"] = 0.0
-		for worker_index in range(worker_count):
-			_spawn_training_worker(group, worker_index)
+		if not _spawn_drone_group_population(group):
+			group["active"] = false
+			_rebuild_group_cards()
+			_refresh_selected_group_controls()
+			_refresh_all_groups_pause_button()
+			return
 		_start_episode("%s now uses %d workers." % [group["name"], worker_count])
 	else:
 		# Paused drones are retained for an ordinary pause, but changing the population is an
@@ -13131,6 +13138,7 @@ func _set_all_groups_active(active: bool) -> void:
 		return
 	var drone_changed = false
 	var drone_population_created = false
+	var drone_population_failure: String = ""
 	var unplaced_turret_count: int = 0
 	if active:
 		var rebuild_drone_groups: Array[Dictionary] = []
@@ -13150,8 +13158,10 @@ func _set_all_groups_active(active: bool) -> void:
 			(group["trainer"] as DroneTrainingAlgorithm).discard_incomplete_rollout()
 			_remove_trials_for_group(int(group["group_id"]))
 			group["control_elapsed"] = 0.0
-			for worker_index in range(int(group["worker_count"])):
-				_spawn_training_worker(group, worker_index)
+			if not _spawn_drone_group_population(group):
+				group["active"] = false
+				drone_population_failure = status_label.text
+				continue
 			drone_population_created = true
 			drone_changed = true
 		if drone_population_created:
@@ -13200,7 +13210,9 @@ func _set_all_groups_active(active: bool) -> void:
 			# Every retained trial is already finished and no suspended intermission remains,
 			# so a real new cycle is required.
 			_start_episode("All worker groups resumed into a new episode.")
-	if active and unplaced_turret_count > 0:
+	if active and not drone_population_failure.is_empty():
+		status_label.text = drone_population_failure
+	elif active and unplaced_turret_count > 0:
 		status_label.text = "Placed worker groups resumed; %d turret group%s still need placement." % [
 			unplaced_turret_count,
 			"" if unplaced_turret_count == 1 else "s",
@@ -13222,8 +13234,12 @@ func _set_group_active(group_id: int, active: bool) -> void:
 			(group["trainer"] as DroneTrainingAlgorithm).discard_incomplete_rollout()
 			_remove_trials_for_group(group_id)
 			group["control_elapsed"] = 0.0
-			for worker_index in range(int(group["worker_count"])):
-				_spawn_training_worker(group, worker_index)
+			if not _spawn_drone_group_population(group):
+				group["active"] = false
+				_rebuild_group_cards()
+				_refresh_selected_group_controls()
+				_refresh_all_groups_pause_button()
+				return
 			_start_episode("%s resumed." % str(group["name"]))
 		else:
 			_set_drone_group_trials_paused(group, false)
@@ -13491,14 +13507,43 @@ func _remove_group(group_id: int) -> void:
 		episode_running = false
 
 
-func _spawn_training_worker(group: Dictionary, worker_index: int) -> void:
+func _spawn_drone_group_population(group: Dictionary) -> bool:
+	if group.is_empty():
+		return false
+	var group_id: int = int(group.get("group_id", -1))
+	var worker_count: int = maxi(int(group.get("worker_count", 0)), 0)
+	if worker_count <= 0:
+		status_label.text = "%s has no workers configured; training was not started." % str(
+			group.get("name", "Drone group")
+		)
+		return false
+	for worker_index: int in range(worker_count):
+		if _spawn_training_worker(group, worker_index):
+			continue
+		# Never leave a UI group claiming to run with a partial/zero physical population. The old
+		# activation path overwrote the worker-spawn error with "resumed", which made this exact
+		# failure look like a renderer/episode bug instead of a rejected body contract.
+		_remove_trials_for_group(group_id)
+		group["control_elapsed"] = 0.0
+		return false
+	if not _drone_group_population_matches(group):
+		_remove_trials_for_group(group_id)
+		group["control_elapsed"] = 0.0
+		status_label.text = "%s could not create its complete worker population." % str(
+			group.get("name", "Drone group")
+		)
+		return false
+	return true
+
+
+func _spawn_training_worker(group: Dictionary, worker_index: int) -> bool:
 	if not _ensure_group_drone_profile_hardware(group):
 		status_label.text = "Could not build drone hardware matching this policy."
-		return
+		return false
 	var drone = DRONE_SCENE.instantiate() as ServerDrone
 	if drone == null:
 		status_label.text = "Could not instantiate a training drone."
-		return
+		return false
 	instance_counter += 1
 	drone.name = "PPOGroup%02dWorker%03d" % [int(group["group_id"]), worker_index]
 	drone.network_visible = false
@@ -13518,20 +13563,39 @@ func _spawn_training_worker(group: Dictionary, worker_index: int) -> void:
 	if drone.propeller_slots.size() != QUAD_PROPELLER_COUNT:
 		drone.queue_free()
 		status_label.text = "This training room accepts exactly four propellers."
-		return
+		return false
 	var runtime_manifest: MLBodyInterfaceManifest = drone.model_body_interface()
 	var trainer: DroneTrainingAlgorithm = group.get("trainer") as DroneTrainingAlgorithm
+	var trainer_architecture: Dictionary = (
+		trainer.network_architecture() if trainer != null else {}
+	)
 	if (
 		runtime_manifest == null
 		or trainer == null
 		or not DroneMLBodyInterfaceFactory.matches_trainer_architecture(
 			runtime_manifest,
-			trainer.network_architecture()
+			trainer_architecture
 		)
 	):
 		drone.queue_free()
-		status_label.text = "Drone body hardware does not match the accepted policy interface."
-		return
+		if runtime_manifest == null or trainer == null:
+			status_label.text = "Drone worker rejected before episode start: its runtime body or trainer contract is missing."
+		elif (
+			int(trainer_architecture.get("action_count", -1)) != runtime_manifest.control_count()
+			or int(trainer_architecture.get("body_feature_count", -1)) != runtime_manifest.observation_count()
+		):
+			status_label.text = (
+				"Drone worker rejected before episode start: policy expects %d controls / %d body observations, runtime body exposes %d / %d."
+				% [
+					int(trainer_architecture.get("action_count", -1)),
+					int(trainer_architecture.get("body_feature_count", -1)),
+					runtime_manifest.control_count(),
+					runtime_manifest.observation_count(),
+				]
+			)
+		else:
+			status_label.text = "Drone worker rejected before episode start: runtime body topology changed after the policy body was accepted."
+		return false
 	DroneTrainingRoomPresentation.add_drone_visual(drone, group["color"])
 	var trial: Dictionary = {
 		"drone": drone,
@@ -13571,6 +13635,7 @@ func _spawn_training_worker(group: Dictionary, worker_index: int) -> void:
 	}
 	trials.append(trial)
 	(group["trials"] as Array).append(trial)
+	return true
 
 
 func _close_model_browser() -> void:

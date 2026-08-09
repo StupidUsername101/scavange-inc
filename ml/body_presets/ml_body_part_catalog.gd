@@ -8,6 +8,7 @@ extends RefCounted
 #######################################################
 
 const RESOURCE_ROOT: String = "res://resources"
+const LEGACY_AI_CHIP_ROOT: String = "res://resources/drones/ai_chips"
 
 static var _cached_parts: Array[Resource] = []
 static var _cache_ready: bool = false
@@ -59,6 +60,10 @@ static func _ensure_cache() -> void:
 		var resource: Resource = load(path) as Resource
 		if resource == null:
 			continue
+		# The model forge replaces the old scripted AI-chip system; those legacy gameplay parts must
+		# never appear as selectable model-body hardware.
+		if MLBodyPartContract.part_tags(resource).has(&"ai_chip"):
+			continue
 		# Slot filtering below is authoritative. Caching only resources with an explicit model-part
 		# method avoids pulling unrelated maps/items/loadouts into every creator dropdown.
 		if resource.has_method("ml_part_tags"):
@@ -77,6 +82,8 @@ static func _collect_resource_paths(directory_path: String, target: Array[String
 		if entry == "." or entry == "..":
 			continue
 		var child_path: String = directory_path.path_join(entry)
+		if child_path == LEGACY_AI_CHIP_ROOT or child_path.begins_with(LEGACY_AI_CHIP_ROOT + "/"):
+			continue
 		if directory.current_is_dir():
 			_collect_resource_paths(child_path, target)
 		elif entry.get_extension().to_lower() in ["tres", "res"]:

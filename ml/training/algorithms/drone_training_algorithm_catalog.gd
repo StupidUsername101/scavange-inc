@@ -255,7 +255,7 @@ static func runtime_contract(checkpoint: Dictionary) -> Dictionary:
 					"DroneMLModel"
 				)),
 				"training_algorithm_id": str(descriptor_value.get("id", "")),
-				"intended_slot": "drone_ai_model_chip",
+				"intended_body_kind": "drone",
 				"observation_schema_version": RLTrainingMath.finite_int_or(network.get(
 					"observation_schema_version",
 					0
@@ -290,7 +290,7 @@ static func runtime_contract(checkpoint: Dictionary) -> Dictionary:
 			return {
 				"runtime_model_class": str(descriptor_value.get("runtime_model_class", "DroneMLModel")),
 				"training_algorithm_id": str(descriptor_value.get("id", "")),
-				"intended_slot": "drone_ai_model_chip",
+				"intended_body_kind": "drone",
 				"observation_schema_version": RLTrainingMath.finite_int_or(network.get("observation_schema_version", 0), -1),
 				"actor_feature_count": RLTrainingMath.finite_int_or(actor.get("input_size", 0), -1),
 				"actor_output_count": DroneSACActorCritic.POLICY_OUTPUT_COUNT,

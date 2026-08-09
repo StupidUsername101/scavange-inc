@@ -24,6 +24,7 @@ func _run() -> void:
 	_test_compound_obstacle_hashing()
 	_test_unrestricted_obstacle_hashing()
 	_test_camera_part_contract()
+	_test_training_drone_scene_starts_with_instrumentation()
 	_test_camera_finished_drone_fade()
 	_test_worker_group_rename_selection_dispatch()
 	_test_random_waypoint_limits()
@@ -316,8 +317,28 @@ func _test_camera_part_contract() -> void:
 
 	var loadout: DroneLoadout = MLBodyPresetLibrary.drone_quad_loadout(false)
 	var mass_before := loadout.get_total_mass()
-	_expect(loadout.install_attachment(0, definition), "the camera installs through an existing core attachment slot")
-	_expect(is_equal_approx(loadout.get_total_mass(), mass_before), "installing the camera does not change drone mass")
+	var baseline_manifest: MLBodyInterfaceManifest = DroneMLBodyInterfaceFactory.finalize_loadout(loadout)
+	_expect(baseline_manifest != null, "the stock training drone has a valid accepted body contract")
+	var drone: ServerDrone = ServerDrone.new()
+	drone.loadout = DroneTrainingLoadoutConfig.duplicate_loadout(loadout)
+	drone._refresh_model_body_interface()
+	var runtime_signature_before: String = drone.model_body_contract_signature()
+	var attachment_paths_before: Array[String] = drone.loadout.get_attachment_definition_paths()
+	var room: DroneTrainingRoom = DroneTrainingRoom.new()
+	var observer: Camera3D = room._install_training_camera_part(drone)
+	_expect(observer != null, "the training room mounts an observer camera on a runtime drone")
+	_expect(
+		drone.model_body_contract_signature() == runtime_signature_before
+		and (baseline_manifest == null or runtime_signature_before == baseline_manifest.contract_signature),
+		"training observer instrumentation does not change the accepted model-body signature"
+	)
+	_expect(
+		drone.loadout.get_attachment_definition_paths() == attachment_paths_before
+		and is_equal_approx(drone.loadout.get_total_mass(), mass_before),
+		"training observer instrumentation consumes no authored attachment slot and changes no body mass"
+	)
+	room.free()
+	drone.free()
 
 	var camera := Camera3D.new()
 	definition.configure_camera(camera)
@@ -325,6 +346,57 @@ func _test_camera_part_contract() -> void:
 	_expect(camera.position.is_equal_approx(definition.mount_position), "the runtime camera uses the part's core-relative mount")
 	camera.free()
 	visual.free()
+
+
+func _test_training_drone_scene_starts_with_instrumentation() -> void:
+	var air: AirEnvironment = AirEnvironment.new()
+	air.name = "TrainingSpawnRegressionAir"
+	test_root.add_child(air)
+	var scene: PackedScene = load("res://scenes/server/server_drone.tscn") as PackedScene
+	var drone: ServerDrone = null
+	if scene != null:
+		drone = scene.instantiate() as ServerDrone
+	_expect(drone != null, "training worker scene instantiates a ServerDrone")
+	if drone == null:
+		air.free()
+		return
+	var loadout: DroneLoadout = MLBodyPresetLibrary.drone_quad_loadout(false)
+	var accepted: MLBodyInterfaceManifest = DroneMLBodyInterfaceFactory.finalize_loadout(loadout)
+	drone.loadout = DroneTrainingLoadoutConfig.duplicate_loadout(loadout)
+	drone.starts_activated = false
+	drone.position = Vector3(0.0, 4.0, 0.0)
+	test_root.add_child(drone)
+	_expect(
+		drone.propeller_slots.size() == 4,
+		"the actual training drone scene discovers all four physical propeller slots"
+	)
+	var signature_before: String = drone.model_body_contract_signature()
+	var room: DroneTrainingRoom = DroneTrainingRoom.new()
+	var observer: Camera3D = room._install_training_camera_part(drone)
+	_expect(
+		observer != null
+		and accepted != null
+		and signature_before == accepted.contract_signature
+		and drone.model_body_contract_signature() == signature_before,
+		"the actual spawned worker keeps the accepted policy body after observer instrumentation"
+	)
+	DroneTrainingRoomPresentation.add_drone_visual(drone, Color("54e6b1"))
+	_expect(
+		drone.get_node_or_null("TrainingVisualCore") is MeshInstance3D,
+		"an accepted training worker receives the visible training-room body mesh"
+	)
+	var reset_ok: bool = drone.reset_ml_episode(
+		Transform3D(Basis.IDENTITY, Vector3(0.0, 4.0, 0.0)),
+		73491,
+		null
+	)
+	_expect(
+		reset_ok and drone.activated and drone.is_ml_control_enabled(),
+		"the actual spawned worker can enter an ML episode without any legacy AI chip"
+	)
+	room.free()
+	drone.free()
+	air.free()
 
 
 func _test_camera_finished_drone_fade() -> void:

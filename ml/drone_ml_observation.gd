@@ -242,7 +242,6 @@ static func _capture_parts(drone) -> Dictionary:
 	return {
 		"core": _core_stats(loadout.core),
 		"battery": _battery_stats(loadout.battery),
-		"ai_chips": _part_array(loadout.ai_chips),
 		"attachments": _part_array(loadout.attachments),
 	}
 

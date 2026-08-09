@@ -76,15 +76,6 @@ static func _drone_loadout(draft: MLBodyBuildDraft) -> DroneLoadout:
 					MLBodyPartContract.deep_duplicate_resource(part) as DronePropellerDefinition
 				):
 					return _fail("Could not install %s." % slot.display_name) as DroneLoadout
-			"ai_chip":
-				var chip_index: int = _slot_suffix_index(slot_id)
-				if part == null:
-					result.remove_ai_chip(chip_index)
-				elif not (part is DroneAIChipDefinition) or not result.install_ai_chip(
-					chip_index,
-					MLBodyPartContract.deep_duplicate_resource(part) as DroneAIChipDefinition
-				):
-					return _fail("Could not install %s." % slot.display_name) as DroneLoadout
 			"attachment":
 				var attachment_index: int = _slot_suffix_index(slot_id)
 				if part == null:

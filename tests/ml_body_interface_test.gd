@@ -308,12 +308,21 @@ func _test_creator_presets_are_editable_templates() -> void:
 		var slot_type: String = str(slot_record.get("slot_type", ""))
 		quad_slot_types[slot_type] = int(quad_slot_types.get(slot_type, 0)) + 1
 	_expect(
-		int(quad_snapshot.get("slot_count", -1)) == 9
+		int(quad_snapshot.get("slot_count", -1)) == 7
 		and int(quad_slot_types.get("battery", 0)) == 1
 		and int(quad_slot_types.get("propeller", 0)) == 4
-		and int(quad_slot_types.get("ai_chip", 0)) == 2
+		and int(quad_slot_types.get("ai_chip", 0)) == 0
 		and int(quad_slot_types.get("attachment", 0)) == 2,
-		"Quad Drone creator preview exposes every physical gameplay slot, including zero-channel battery and AI-chip slots"
+		"Quad Drone creator preview exposes physical model hardware without legacy AI-chip slots"
+	)
+	var catalog_has_legacy_ai_chip: bool = false
+	for catalog_part: Resource in MLBodyPartCatalog.all_parts():
+		if MLBodyPartContract.part_tags(catalog_part).has(&"ai_chip"):
+			catalog_has_legacy_ai_chip = true
+			break
+	_expect(
+		not catalog_has_legacy_ai_chip,
+		"model-body part catalogue excludes the removed legacy AI-chip definitions"
 	)
 	var turret_preset_manifest: MLBodyInterfaceManifest = MLBodyPresetLibrary.preset_by_id(
 		MLBodyPresetLibrary.STATIONARY_TURRET
