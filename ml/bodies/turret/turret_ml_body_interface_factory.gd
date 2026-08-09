@@ -9,23 +9,26 @@ extends RefCounted
 
 
 static func create_draft(loadout: TurretLoadout) -> MLBodyBuildDraft:
-	var draft = MLBodyBuildDraft.new()
+	var draft: MLBodyBuildDraft = MLBodyBuildDraft.new()
 	if loadout == null:
 		draft.last_error = "A turret model body requires a loadout."
 		return draft
-	if not loadout.ensure_contract():
+	var safe_loadout: TurretLoadout = (
+		MLBodyPartContract.deep_duplicate_resource(loadout) as TurretLoadout
+	)
+	if safe_loadout == null or not safe_loadout.ensure_contract():
 		draft.last_error = "A turret model body requires both a base Core and a gun attachment."
 		return draft
-	draft.set_core(loadout.base, {
+	draft.set_core(safe_loadout.base, {
 		"body_kind": "turret",
 		"body_profile_id": TurretPhysicalBody3D.BODY_PROFILE_ID,
 	})
-	var gun_slot = MLBodySlotDefinition.new()
+	var gun_slot: MLBodySlotDefinition = MLBodySlotDefinition.new()
 	gun_slot.slot_id = &"gun"
 	gun_slot.display_name = "Gun"
 	gun_slot.slot_type = &"gun"
 	gun_slot.accepted_part_tags.append(&"gun")
-	if not draft.add_slot(gun_slot, loadout.gun):
+	if not draft.add_slot(gun_slot, safe_loadout.gun):
 		return draft
 	return draft
 

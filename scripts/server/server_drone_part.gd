@@ -129,7 +129,7 @@ func to_state_dict() -> Dictionary:
 		"drone_part_id": drone_part_id,
 		"part_token_id": part_token_id,
 		"definition_path": (
-			definition.resource_path
+			DroneLoadout.definition_path(definition)
 			if definition != null
 			else ""
 		),

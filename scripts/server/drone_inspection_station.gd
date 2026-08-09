@@ -163,7 +163,7 @@ func _build_part_document(part: RigidBody3D) -> Dictionary:
 		"subtitle": "Unknown inspection interface",
 		"values": [
 			{"label": "Type", "value": "Unknown catalogued item"},
-			{"label": "Resource", "value": definition.resource_path},
+			{"label": "Resource", "value": MLBodyPartContract.resource_source_path(definition)},
 		],
 		"children": [],
 	}
@@ -315,7 +315,7 @@ func to_state_dict() -> Dictionary:
 			"get_inspectable_definition"
 		) as Resource
 		if definition != null:
-			definition_path = definition.resource_path
+			definition_path = MLBodyPartContract.resource_source_path(definition)
 
 	return {
 		"station_id": station_id,

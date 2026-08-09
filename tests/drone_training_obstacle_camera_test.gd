@@ -522,6 +522,50 @@ func _test_training_item_definition_resources() -> void:
 	)
 	fallback_item.queue_free()
 
+	var malformed_definition: TrainingItemDefinition = TrainingItemDefinition.new()
+	malformed_definition.mass_kg = -7.0
+	malformed_definition.reward_value = -3.0
+	malformed_definition.grip_surface_tags = PackedStringArray()
+	var malformed_item: TrainingItem3D = TrainingItem3D.new()
+	malformed_item.item_definition = malformed_definition
+	test_root.add_child(malformed_item)
+	_expect(
+		malformed_definition.mass_kg == -7.0
+		and malformed_definition.reward_value == -3.0
+		and malformed_definition.grip_surface_tags.is_empty()
+		and malformed_item.item_definition != malformed_definition
+		and malformed_item.item_definition.mass_kg >= 0.01
+		and malformed_item.item_definition.reward_value >= 0.0
+		and malformed_item.item_definition.grip_surface_tags.has("carryable"),
+		"training-item runtime initialization sanitizes an isolated definition copy without mutating authored source data"
+	)
+	malformed_item.queue_free()
+
+	var sanitized_definition_copy: TrainingItemDefinition = generic_definition.sanitized_copy()
+	_expect(
+		sanitized_definition_copy != null
+		and sanitized_definition_copy != generic_definition
+		and MLBodyPartContract.resource_source_path(sanitized_definition_copy) == generic_definition.resource_path
+		and str(sanitized_definition_copy.contract_dictionary().get("resource_path", "")) == generic_definition.resource_path,
+		"sanitized item copies remain tied to their authored .tres identity"
+	)
+
+	var copied_definition: TrainingItemDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(generic_definition) as TrainingItemDefinition
+	)
+	var copied_definition_item: TrainingItem3D = TrainingItem3D.new()
+	test_root.add_child(copied_definition_item)
+	_expect(
+		copied_definition != null
+		and copied_definition_item.configure_from_definition(
+			99,
+			copied_definition,
+			Transform3D.IDENTITY
+		)
+		and copied_definition_item.definition_resource_path == generic_definition.resource_path,
+		"training-item copies retain their originating .tres path when configured without an explicit path override"
+	)
+	copied_definition_item.queue_free()
 
 
 func _test_training_item_contract() -> void:

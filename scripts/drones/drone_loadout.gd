@@ -216,7 +216,7 @@ func get_propeller_definition_paths() -> Array[String]:
 
 	for slot_index in range(slot_count):
 		var propeller := get_propeller(slot_index)
-		result.append(propeller.resource_path if propeller != null else "")
+		result.append(definition_path(propeller))
 	return result
 
 
@@ -225,7 +225,7 @@ func get_ai_chip_definition_paths() -> Array[String]:
 	var slot_count = core.ai_chip_slot_count if core != null else 0
 	for slot_index in range(slot_count):
 		var chip := get_ai_chip(slot_index)
-		result.append(chip.resource_path if chip != null else "")
+		result.append(definition_path(chip))
 	return result
 
 
@@ -234,8 +234,14 @@ func get_attachment_definition_paths() -> Array[String]:
 	var slot_count = core.attachment_slot_count if core != null else 0
 	for slot_index in range(slot_count):
 		var attachment := get_attachment(slot_index)
-		result.append(attachment.resource_path if attachment != null else "")
+		result.append(definition_path(attachment))
 	return result
+
+
+static func definition_path(part: DronePartDefinition) -> String:
+	# Runtime/creator copies are detached Resources. The shared body-part helper preserves their
+	# authored .tres identity through deep copies and snapshot restore.
+	return MLBodyPartContract.resource_source_path(part)
 
 
 func _trim_unsupported_propellers() -> void:

@@ -364,14 +364,33 @@ func _test_body_factories_keep_resource_backing() -> void:
 	var drone_attachment: DroneAttachmentDefinition = (
 		drone_source.get_attachment(0) if drone_source != null else null
 	)
+	var drone_draft_attachment: Resource = (
+		drone_draft.equipped_part(&"attachment_0") if drone_draft != null else null
+	)
 	_expect(
 		drone_source != null
 		and drone_draft != null
 		and drone_draft.last_error.is_empty()
+		and drone_draft.core != drone_source.core
 		and drone_attachment != null
+		and drone_draft_attachment != drone_attachment
 		and MLBodyPartContract.resource_source_path(drone_attachment)
-		== "res://resources/drones/attachments/training_belly_grabber.tres",
-		"drone body factory adapts the saved articulated grabber resource instead of authoring one in code"
+		== "res://resources/drones/attachments/training_belly_grabber.tres"
+		and MLBodyPartContract.resource_source_path(drone_draft_attachment)
+		== MLBodyPartContract.resource_source_path(drone_attachment),
+		"drone body factory creates an isolated creator copy of saved articulated hardware while retaining .tres backing"
+	)
+	var runtime_drone_source: DroneLoadout = MLBodyPresetLibrary.drone_quad_loadout(false)
+	var runtime_drone_draft: MLBodyBuildDraft = DroneMLBodyInterfaceFactory.create_draft(
+		runtime_drone_source
+	)
+	_expect(
+		runtime_drone_source != null
+		and runtime_drone_draft != null
+		and runtime_drone_draft.core != runtime_drone_source.core
+		and not str(runtime_drone_draft.core_contract.get("core_resource_path", "")).is_empty()
+		and not str(runtime_drone_draft.core_contract.get("battery_resource_path", "")).is_empty(),
+		"runtime drone copies reopen as isolated creator drafts without losing saved Core/battery provenance"
 	)
 
 	var walker_source: FourLimbBodyDefinition = load(
@@ -390,10 +409,54 @@ func _test_body_factories_keep_resource_backing() -> void:
 		and walker_source.limbs.size() == 4
 		and walker_source.limbs[0] != null
 		and not MLBodyPartContract.resource_source_path(walker_source.limbs[0]).is_empty()
-		and walker_part != null
+		and walker_part is GenericLimbDefinition
 		and MLBodyPartContract.resource_source_path(walker_part)
-		== MLBodyPartContract.resource_source_path(walker_source.limbs[0]),
-		"four-limb compatibility factory derives each generic runtime limb from its saved Walker limb .tres"
+		== FourLimbGenericDefinitionFactory.LIMB_TEMPLATE_PATH,
+		"four-limb compatibility factory keeps the reconstructible generic-limb template as snapshot backing"
+	)
+	var walker_snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(walker_part)
+	var restored_walker_part: Resource = MLBodyResourceSnapshot.decode_resource(walker_snapshot)
+	_expect(
+		not walker_snapshot.is_empty()
+		and restored_walker_part is GenericLimbDefinition
+		and (restored_walker_part as GenericLimbDefinition).segments.size() == 2
+		and (restored_walker_part as GenericLimbDefinition).end_effector != null,
+		"saved four-limb creator hardware round-trips through the generic Resource snapshot"
+	)
+	var walker_draft_snapshot: Dictionary = MLBodyBuildSnapshot.encode_draft(walker_draft)
+	var restored_walker_draft: MLBodyBuildDraft = MLBodyBuildSnapshot.decode_draft(
+		walker_draft_snapshot
+	)
+	var walker_manifest: MLBodyInterfaceManifest = (
+		walker_draft.accept_build() if walker_draft != null else null
+	)
+	var restored_walker_manifest: MLBodyInterfaceManifest = (
+		restored_walker_draft.accept_build() if restored_walker_draft != null else null
+	)
+	_expect(
+		not walker_draft_snapshot.is_empty()
+		and restored_walker_draft != null
+		and walker_manifest != null
+		and restored_walker_manifest != null
+		and restored_walker_manifest.contract_signature == walker_manifest.contract_signature,
+		"the complete saved Four-Limb Walker creator draft round-trips and Accepts to the same neural topology"
+	)
+	var stale_backing_snapshot: Dictionary = walker_snapshot.duplicate(true)
+	if walker_source != null and not walker_source.limbs.is_empty():
+		stale_backing_snapshot["resource_path"] = MLBodyPartContract.resource_source_path(
+			walker_source.limbs[0]
+		)
+	var restored_from_stale_backing: Resource = MLBodyResourceSnapshot.decode_resource(
+		stale_backing_snapshot
+	)
+	var stale_reencoded: Dictionary = MLBodyResourceSnapshot.encode_resource(
+		restored_from_stale_backing
+	)
+	_expect(
+		restored_from_stale_backing is GenericLimbDefinition
+		and not stale_reencoded.is_empty()
+		and str(stale_reencoded.get("resource_path", "")).is_empty(),
+		"snapshot restore rejects a stale backing .tres and does not preserve the bad path on the repaired Resource"
 	)
 	var walker_copy: FourLimbBodyDefinition = (
 		MLBodyPartContract.deep_duplicate_resource(walker_source) as FourLimbBodyDefinition
@@ -407,6 +470,32 @@ func _test_body_factories_keep_resource_backing() -> void:
 		and MLBodyPartContract.resource_source_path(walker_copy.limbs[0].end_effector)
 		== MLBodyPartContract.resource_source_path(walker_source.limbs[0].end_effector),
 		"deep runtime copies retain nested .tres provenance for creator reopen/edit flows"
+	)
+	var malformed_walker: FourLimbBodyDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(walker_source) as FourLimbBodyDefinition
+	)
+	if malformed_walker != null and not malformed_walker.limbs.is_empty() and malformed_walker.limbs[0] != null:
+		malformed_walker.limbs[0].knee_limit_upper_degrees = 999.0
+	var malformed_walker_draft: MLBodyBuildDraft = (
+		FourLimbMLBodyInterfaceFactory.create_definition_draft(malformed_walker)
+	)
+	var sanitized_walker_part: GenericLimbDefinition = (
+		malformed_walker_draft.slots[0].get("part") as GenericLimbDefinition
+		if malformed_walker_draft != null and not malformed_walker_draft.slots.is_empty()
+		else null
+	)
+	_expect(
+		malformed_walker != null
+		and not malformed_walker.limbs.is_empty()
+		and malformed_walker.limbs[0] != null
+		and malformed_walker.limbs[0].knee_limit_upper_degrees == 999.0
+		and sanitized_walker_part != null
+		and sanitized_walker_part.segments.size() == 2
+		and is_equal_approx(
+			sanitized_walker_part.segments[1].joint.upper_limit_degrees.z,
+			120.0
+		),
+		"four-limb creator adaptation sanitizes a private preset copy instead of modifying the loaded source Resource"
 	)
 
 
@@ -423,7 +512,27 @@ func _test_body_factories_keep_resource_backing() -> void:
 		and not MLBodyPartContract.resource_source_path(turret_gun).is_empty(),
 		"turret body factory adapts the saved gun .tres and does not manufacture the attachment"
 	)
-
+	var malformed_turret: TurretLoadout = (
+		MLBodyPartContract.deep_duplicate_resource(turret_source) as TurretLoadout
+	)
+	if malformed_turret != null and malformed_turret.base != null:
+		malformed_turret.base.maximum_yaw_speed_degrees_per_second = -5.0
+	var malformed_turret_draft: MLBodyBuildDraft = TurretMLBodyInterfaceFactory.create_draft(
+		malformed_turret
+	)
+	var sanitized_turret_base: TurretBaseDefinition = (
+		malformed_turret_draft.core as TurretBaseDefinition
+		if malformed_turret_draft != null
+		else null
+	)
+	_expect(
+		malformed_turret != null
+		and malformed_turret.base != null
+		and malformed_turret.base.maximum_yaw_speed_degrees_per_second == -5.0
+		and sanitized_turret_base != null
+		and sanitized_turret_base.maximum_yaw_speed_degrees_per_second >= 1.0,
+		"turret creator adaptation sanitizes a private loadout copy instead of modifying the loaded source Resource"
+	)
 
 
 func _test_interface_signature_tracks_topology_not_tuning() -> void:

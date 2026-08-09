@@ -10,18 +10,24 @@ extends RefCounted
 
 
 static func create_definition_draft(definition: FourLimbBodyDefinition) -> MLBodyBuildDraft:
-	var draft = MLBodyBuildDraft.new()
+	var draft: MLBodyBuildDraft = MLBodyBuildDraft.new()
 	if definition == null:
 		draft.last_error = "A four-limb preset requires a body definition."
 		return draft
-	definition.ensure_contract()
-	var creator_core_part: MLRigidCorePartDefinition = _creator_core_part(definition)
+	var safe_definition: FourLimbBodyDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(definition) as FourLimbBodyDefinition
+	)
+	if safe_definition == null:
+		draft.last_error = "The four-limb preset could not be copied into an editable draft."
+		return draft
+	safe_definition.ensure_contract()
+	var creator_core_part: MLRigidCorePartDefinition = _creator_core_part(safe_definition)
 	draft.set_core(creator_core_part, {
 		"body_kind": "articulated_body",
 		"source_runtime_profile": FourLimbBodyDefinition.BODY_PROFILE_ID,
 	})
-	for slot_index in range(definition.limbs.size()):
-		var legacy_slot: FourLimbSlotDefinition = definition.limbs[slot_index]
+	for slot_index: int in range(safe_definition.limbs.size()):
+		var legacy_slot: FourLimbSlotDefinition = safe_definition.limbs[slot_index]
 		var slot = MLBodySlotDefinition.new()
 		slot.slot_id = StringName("limb_%d" % slot_index)
 		slot.display_name = (
@@ -34,12 +40,12 @@ static func create_definition_draft(definition: FourLimbBodyDefinition) -> MLBod
 		if legacy_slot != null:
 			slot.mount_transform = Transform3D(Basis.IDENTITY, legacy_slot.hip_offset)
 		var part: GenericLimbDefinition = FourLimbGenericDefinitionFactory.create_limb_definition(
-			definition, legacy_slot, slot_index, 0
+			safe_definition, legacy_slot, slot_index, 0
 		)
 		if not draft.add_slot(slot, part):
 			return draft
-	for slot_index in range(definition.attachment_slots.size()):
-		var legacy_attachment: FourLimbAttachmentSlotDefinition = definition.attachment_slots[slot_index]
+	for slot_index: int in range(safe_definition.attachment_slots.size()):
+		var legacy_attachment: FourLimbAttachmentSlotDefinition = safe_definition.attachment_slots[slot_index]
 		var slot = MLBodySlotDefinition.new()
 		slot.slot_id = StringName("attachment_%d" % slot_index)
 		slot.display_name = (

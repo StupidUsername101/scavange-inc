@@ -33,12 +33,19 @@ var simulation_active: bool = true
 
 
 func _ready() -> void:
-	var ready_definition: TrainingItemDefinition = (
+	var source_definition: TrainingItemDefinition = (
 		item_definition if item_definition != null else DEFAULT_DEFINITION
 	)
+	var ready_definition: TrainingItemDefinition = (
+		source_definition.sanitized_copy() if source_definition != null else null
+	)
+	if ready_definition == null and DEFAULT_DEFINITION != null:
+		source_definition = DEFAULT_DEFINITION
+		ready_definition = DEFAULT_DEFINITION.sanitized_copy()
+	item_definition = ready_definition
 	_apply_definition_state(ready_definition)
-	if definition_resource_path.is_empty() and ready_definition != null:
-		definition_resource_path = ready_definition.resource_path
+	if definition_resource_path.is_empty() and source_definition != null:
+		definition_resource_path = MLBodyPartContract.resource_source_path(source_definition)
 	collision_layer = 1
 	collision_mask = 1 | (1 << 1) | (1 << 2)
 	continuous_cd = true
@@ -68,7 +75,7 @@ func configure_from_definition(
 	definition_resource_path = (
 		definition_path_override.strip_edges()
 		if not definition_path_override.strip_edges().is_empty()
-		else source_definition.resource_path
+		else MLBodyPartContract.resource_source_path(source_definition)
 	)
 	_apply_definition_state(safe_definition)
 	var configured_type: String = safe_definition.item_type

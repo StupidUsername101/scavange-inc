@@ -126,10 +126,14 @@ static func _decode_resource(snapshot: Dictionary, depth: int) -> Resource:
 		return null
 	var resource_path: String = str(snapshot.get("resource_path", ""))
 	var script_path: String = str(snapshot.get("script_path", ""))
+	var accepted_resource_path: String = ""
 	var result: Resource = null
 	if not resource_path.is_empty() and ResourceLoader.exists(resource_path):
 		var source: Resource = load(resource_path) as Resource
-		result = MLBodyPartContract.deep_duplicate_resource(source)
+		if _resource_matches_script(source, script_path):
+			result = MLBodyPartContract.deep_duplicate_resource(source)
+			if result != null:
+				accepted_resource_path = resource_path
 	if result == null and not script_path.is_empty() and ResourceLoader.exists(script_path):
 		var script_resource: Script = load(script_path) as Script
 		if script_resource != null:
@@ -153,9 +157,21 @@ static func _decode_resource(snapshot: Dictionary, depth: int) -> Resource:
 		var template: Variant = result.get(property_name)
 		var decoded: Variant = _decode_variant(properties[property_name_value], template, depth + 1)
 		result.set(property_name, decoded)
-	if not resource_path.is_empty():
-		result.set_meta("ml_snapshot_source_path", resource_path)
+	if not accepted_resource_path.is_empty():
+		result.set_meta("ml_snapshot_source_path", accepted_resource_path)
 	return result
+
+
+static func _resource_matches_script(source: Resource, script_path: String) -> bool:
+	if source == null:
+		return false
+	if script_path.is_empty():
+		return true
+	var source_script_value: Variant = source.get_script()
+	if not (source_script_value is Script):
+		return false
+	var source_script: Script = source_script_value as Script
+	return str(source_script.resource_path) == script_path
 
 
 static func _encode_variant(value: Variant, seen: Dictionary, depth: int) -> Variant:

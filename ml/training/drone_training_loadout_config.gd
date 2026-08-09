@@ -258,13 +258,7 @@ static func part_stat(
 
 
 static func source_path(part: DronePartDefinition) -> String:
-	if part == null:
-		return ""
-	if part.has_meta("training_source_path"):
-		return str(part.get_meta("training_source_path"))
-	if part.has_meta("ml_snapshot_source_path"):
-		return str(part.get_meta("ml_snapshot_source_path"))
-	return part.resource_path
+	return DroneLoadout.definition_path(part)
 
 
 static func to_record(loadout: DroneLoadout) -> Dictionary:

@@ -31,7 +31,9 @@ extends Resource
 
 
 func sanitized_copy() -> TrainingItemDefinition:
-	var result: TrainingItemDefinition = duplicate(true) as TrainingItemDefinition
+	var result: TrainingItemDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(self) as TrainingItemDefinition
+	)
 	if result == null:
 		return null
 	result.sanitize()
@@ -66,7 +68,7 @@ func sanitize() -> void:
 
 func contract_dictionary() -> Dictionary:
 	return {
-		"resource_path": resource_path,
+		"resource_path": MLBodyPartContract.resource_source_path(self),
 		"display_name": display_name,
 		"item_type": normalized_item_type(item_type),
 		"shape_kind": clampi(shape_kind, 0, DroneTrainingObstacleShape.DISPLAY_NAMES.size() - 1),

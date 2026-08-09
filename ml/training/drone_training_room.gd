@@ -6030,7 +6030,7 @@ func _apply_training_item_values_to_selected() -> void:
 		_training_item_editor_transform(),
 		true,
 		training_item_type,
-		base_definition.resource_path if base_definition != null else ""
+		MLBodyPartContract.resource_source_path(base_definition) if base_definition != null else ""
 	):
 		status_label.text = "Training item definition could not be applied."
 		_refresh_training_item_status()
@@ -6232,7 +6232,7 @@ func _replace_training_items_from_records(records: Array) -> void:
 			Transform3D(Basis.from_euler(Vector3(deg_to_rad(rotation.x), deg_to_rad(rotation.y), deg_to_rad(rotation.z))), position),
 			true,
 			restored_definition.item_type,
-			base_definition.resource_path
+			MLBodyPartContract.resource_source_path(base_definition)
 		):
 			item.queue_free()
 			continue

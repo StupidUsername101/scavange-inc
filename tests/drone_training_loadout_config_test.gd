@@ -32,6 +32,28 @@ func _init() -> void:
 			private_copy.get_propeller(slot_index) != baseline.get_propeller(slot_index),
 			"propeller resource %d is copied" % slot_index
 		)
+	_expect(
+		DroneLoadout.definition_path(private_copy.core) == DroneLoadout.definition_path(baseline.core)
+		and DroneLoadout.definition_path(private_copy.battery) == DroneLoadout.definition_path(baseline.battery)
+		and private_copy.get_propeller_definition_paths() == baseline.get_propeller_definition_paths()
+		and private_copy.get_ai_chip_definition_paths() == baseline.get_ai_chip_definition_paths(),
+		"deep-copied drone hardware keeps stable .tres definition paths for UI/network replication"
+	)
+	var loose_part_scene: PackedScene = load("res://scenes/server/server_drone_part.tscn") as PackedScene
+	var loose_part: RigidBody3D = null
+	if loose_part_scene != null:
+		loose_part = loose_part_scene.instantiate() as RigidBody3D
+	var loose_part_state: Dictionary = {}
+	if loose_part != null:
+		loose_part.call("configure", private_copy.core)
+		loose_part_state = loose_part.call("to_state_dict") as Dictionary
+	_expect(
+		loose_part != null
+		and str(loose_part_state.get("definition_path", "")) == DroneLoadout.definition_path(baseline.core),
+		"loose copied drone parts replicate the original .tres definition path"
+	)
+	if loose_part != null:
+		loose_part.free()
 
 	var original_power = baseline.get_propeller(0).max_power_draw
 	_expect(

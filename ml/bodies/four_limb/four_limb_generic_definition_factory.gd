@@ -1,6 +1,9 @@
 class_name FourLimbGenericDefinitionFactory
 extends RefCounted
 
+const LIMB_TEMPLATE_PATH: String = (
+	"res://resources/ml_body_presets/four_limb_walker/generic_limb_template/generic_limb.tres"
+)
 const LIMB_TEMPLATE: GenericLimbDefinition = preload(
 	"res://resources/ml_body_presets/four_limb_walker/generic_limb_template/generic_limb.tres"
 )
@@ -52,9 +55,9 @@ static func create_limb_definition_from_points(
 	)
 	if result == null or result.segments.size() != 2:
 		return null
-	var source_path: String = MLBodyPartContract.resource_source_path(slot)
-	if not source_path.is_empty():
-		result.set_meta(MLBodyPartContract.SOURCE_RESOURCE_PATH_META, source_path)
+	# Keep the snapshot backing path inherited from LIMB_TEMPLATE. The FourLimbSlotDefinition is
+	# authoring input, not a reconstructible GenericLimbDefinition resource. Pointing at the slot
+	# .tres makes snapshot restore load the wrong script/class.
 	result.limb_name = "limb_%02d" % limb_index
 	result.installed = slot.installed
 	result.mount_offset_local = slot.hip_offset

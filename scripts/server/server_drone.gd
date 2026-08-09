@@ -2264,7 +2264,7 @@ func to_state_dict() -> Dictionary:
 			loadout != null and loadout.core != null
 		),
 		"core_definition_path": (
-			loadout.core.resource_path
+			DroneLoadout.definition_path(loadout.core)
 			if loadout != null and loadout.core != null
 			else ""
 		),
@@ -2272,7 +2272,7 @@ func to_state_dict() -> Dictionary:
 			loadout != null and loadout.battery != null
 		),
 		"battery_definition_path": (
-			loadout.battery.resource_path
+			DroneLoadout.definition_path(loadout.battery)
 			if loadout != null and loadout.battery != null
 			else ""
 		),

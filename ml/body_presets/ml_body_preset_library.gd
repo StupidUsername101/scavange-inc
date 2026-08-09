@@ -131,7 +131,7 @@ static func _four_limb_preset() -> MLBodyPreset:
 
 static func _turret_preset() -> MLBodyPreset:
 	var source: TurretLoadout = load(STATIONARY_TURRET_LOADOUT_PATH) as TurretLoadout
-	if source == null or not source.ensure_contract():
+	if source == null or source.base == null or source.gun == null:
 		return null
 	var draft: MLBodyBuildDraft = TurretMLBodyInterfaceFactory.create_draft(source)
 	var loadout: TurretLoadout = MLBodyPartContract.deep_duplicate_resource(source) as TurretLoadout
