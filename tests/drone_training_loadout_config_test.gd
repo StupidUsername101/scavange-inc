@@ -138,6 +138,25 @@ func _init() -> void:
 	_expect(parsed is Dictionary, "checkpoint hardware record survives JSON parsing")
 	var restored = DroneTrainingLoadoutConfig.from_record(parsed as Dictionary)
 	_expect(restored != null, "checkpoint hardware record reconstructs a loadout")
+	var evaluation_contract: Dictionary = RLEvaluationContract.create(
+		"drone",
+		{"hardware": record}
+	)
+	var frozen_environment: Dictionary = evaluation_contract.get("environment", {})
+	var frozen_hardware: Dictionary = frozen_environment.get("hardware", {})
+	var frozen_live_copy: DroneLoadout = DroneTrainingLoadoutConfig.frozen_loadout(
+		frozen_hardware,
+		private_copy
+	)
+	_expect(
+		frozen_live_copy != null
+		and frozen_live_copy != private_copy
+		and DroneTrainingLoadoutConfig.records_match(
+			frozen_hardware,
+			DroneTrainingLoadoutConfig.to_record(frozen_live_copy)
+		),
+		"fixed-seed evaluation clones an unchanged live drone body when it exactly matches the frozen candidate hardware"
+	)
 	_expect(
 		DroneTrainingLoadoutConfig.from_record({}) == null
 		and DroneTrainingLoadoutConfig.from_record({"core": {}, "battery": {}, "propellers": []}) == null,

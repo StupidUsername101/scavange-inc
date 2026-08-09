@@ -2301,9 +2301,15 @@ func _evaluation_contract_for_group_id(
 			environment["reward_schema_version"] = DroneTrainingReward.SCHEMA_VERSION
 			environment["reward_cards"] = _ensure_drone_reward_deck(group).configuration_dictionary()
 			environment["unlimited_episode_battery"] = unlimited_episode_battery
-			environment["hardware"] = LOADOUT_CONFIG.to_record(
+			var hardware_record: Dictionary = LOADOUT_CONFIG.to_record(
 				group.get("drone_loadout") as DroneLoadout
 			)
+			# A deterministic candidate without frozen hardware is not a deterministic candidate.
+			# Fail closed here so PPO/SAC never nominate a policy whose evaluator can only discover
+			# the missing body several seconds later.
+			if hardware_record.is_empty():
+				return {}
+			environment["hardware"] = hardware_record
 		"four_limb":
 			var group: Dictionary = limb_training.group_by_id(group_id)
 			if group.is_empty():

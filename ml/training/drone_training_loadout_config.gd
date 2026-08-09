@@ -283,6 +283,34 @@ static func to_record(loadout: DroneLoadout) -> Dictionary:
 	}
 
 
+static func records_match(first: Dictionary, second: Dictionary) -> bool:
+	if first.is_empty() or second.is_empty():
+		return false
+	# Hardware records are deliberately JSON-safe. Canonical sorted JSON gives us a stable,
+	# type-preserving-enough equality check for the exact frozen candidate payload without
+	# depending on Dictionary insertion order.
+	return (
+		JSON.stringify(first, "", true, true)
+		== JSON.stringify(second, "", true, true)
+	)
+
+
+static func frozen_loadout(record: Dictionary, live_loadout: DroneLoadout) -> DroneLoadout:
+	# The common in-session path should not deserialize hardware that is already present as an
+	# isolated runtime Resource tree. If the candidate's frozen record is byte-for-byte/canonically
+	# equivalent to the current group's serialized body, cloning that body preserves the exact
+	# candidate hardware while avoiding a second Resource snapshot decode. This is especially
+	# important for creator-authored nested attachment resources.
+	if live_loadout != null:
+		var live_record: Dictionary = to_record(live_loadout)
+		if records_match(record, live_record):
+			return duplicate_loadout(live_loadout)
+	# If hardware changed after nomination (or this candidate was restored from disk), the live
+	# body is not authoritative. Reconstruct only the frozen record; never silently evaluate the
+	# candidate on different hardware.
+	return from_record(record)
+
+
 static func from_record(record: Dictionary) -> DroneLoadout:
 	# Serialized hardware is either complete or invalid. Stock hardware is selected explicitly via
 	# MLBodyPresetLibrary; malformed checkpoint data must never turn into an implicit preset.

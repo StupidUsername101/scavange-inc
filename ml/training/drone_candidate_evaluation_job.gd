@@ -106,7 +106,14 @@ func configure(
 	target_handler_configuration = (environment.get("target_handler", target_configuration) as Dictionary).duplicate(true)
 	reward_cards = (environment.get("reward_cards", candidate_reward_cards) as Dictionary).duplicate(true)
 	var hardware_record: Dictionary = environment.get("hardware", {})
-	base_loadout = LOADOUT_CONFIG.from_record(hardware_record) if not hardware_record.is_empty() else LOADOUT_CONFIG.duplicate_loadout(loadout)
+	# The frozen contract is authoritative. For the normal in-session case, use the group's
+	# already-instantiated body only when its canonical serialized hardware is exactly identical
+	# to that frozen record; otherwise reconstruct the frozen body from the record.
+	base_loadout = (
+		LOADOUT_CONFIG.frozen_loadout(hardware_record, loadout)
+		if not hardware_record.is_empty()
+		else null
+	)
 	spawn_position = _vector3_from_record(environment.get("spawn_position_m", []), spawn_position_world)
 	arena_size = _vector3_from_record(environment.get("arena_size_m", []), arena_size_world)
 	collision_layer_value = collision_layer
@@ -128,7 +135,7 @@ func configure(
 		last_error = "candidate checkpoint is empty"
 		return false
 	if base_loadout == null:
-		last_error = "candidate group has no drone loadout"
+		last_error = "candidate frozen drone hardware could not be reconstructed"
 		return false
 	# Load the immutable runtime policy, then let the large checkpoint dictionary fall out of
 	# scope. The evaluator only needs the runtime weights and must not retain a second network.

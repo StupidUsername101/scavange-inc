@@ -12,6 +12,7 @@ var assertion_count: int = 0
 func _init() -> void:
 	_test_drone_runtime_models_declare_compact_observation_contract()
 	_test_drone_action_schema_has_one_authoritative_version()
+	_test_drone_frozen_hardware_uses_identical_live_body_without_decode()
 	_test_contract_hash_detects_environment_changes()
 	_test_every_default_scenario_has_an_executor()
 	_test_routed_target_plan_is_deterministic()
@@ -50,6 +51,27 @@ func _test_drone_action_schema_has_one_authoritative_version() -> void:
 	_expect(
 		adapter.action_schema_version() == DroneMLAction.SCHEMA_VERSION,
 		"drone body adapter and evaluation contract share the authoritative action schema version"
+	)
+
+
+func _test_drone_frozen_hardware_uses_identical_live_body_without_decode() -> void:
+	var loadout: DroneLoadout = MLBodyPresetLibrary.drone_quad_loadout(false)
+	var hardware: Dictionary = DroneTrainingLoadoutConfig.to_record(loadout)
+	var contract: Dictionary = RLEvaluationContract.create("drone", {"hardware": hardware})
+	var environment: Dictionary = contract.get("environment", {})
+	var frozen_hardware: Dictionary = environment.get("hardware", {})
+	var resolved: DroneLoadout = DroneTrainingLoadoutConfig.frozen_loadout(
+		frozen_hardware,
+		loadout
+	)
+	_expect(
+		resolved != null
+		and resolved != loadout
+		and DroneTrainingLoadoutConfig.records_match(
+			frozen_hardware,
+			DroneTrainingLoadoutConfig.to_record(resolved)
+		),
+		"a fresh drone candidate can recover its exact frozen hardware from the unchanged live group without Resource snapshot decode"
 	)
 
 
