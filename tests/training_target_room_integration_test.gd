@@ -17,6 +17,10 @@ func _init() -> void:
 	_test_limb_target_marker_is_support_surface()
 	_test_turret_group_publishes_live_runtime_members()
 	_test_fresh_drone_model_architecture_reaches_constructor()
+	_test_model_body_creator_carries_training_setup()
+	_test_paused_drone_candidate_keeps_frozen_hardware()
+	_test_room_episode_status_is_one_shared_line()
+	_test_room_ready_does_not_create_default_worker_group()
 	_test_library_windows_start_hidden()
 
 	if failure_count == 0:
@@ -50,6 +54,144 @@ func _test_library_windows_start_hidden() -> void:
 	_expect(not room.turret_ui.model_browser.visible, "turret model library starts hidden")
 	_expect(not room.map_browser.visible, "training map library starts hidden")
 	room.free()
+
+
+func _test_model_body_creator_carries_training_setup() -> void:
+	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
+	get_root().add_child(panel)
+	panel._load_preset_at(0)
+	_expect(panel.current_body_kind == "drone", "model creator opens on the authored quad-drone preset")
+	panel.hidden_width_input.value = 96.0
+	panel.hidden_depth_input.value = 3.0
+	panel.worker_count_input.value = 6.0
+	panel.control_rate_input.value = 30.0
+	panel.exploration_input.value = 0.035
+	panel.start_training_checkbox.button_pressed = false
+	var request: Dictionary = panel._training_request()
+	_expect(
+		int(request.get("hidden_layer_width", -1)) == 96
+		and int(request.get("hidden_layer_depth", -1)) == 3,
+		"model creator preserves the requested neural-network width/depth"
+	)
+	_expect(
+		int(request.get("worker_count", -1)) == 6
+		and is_equal_approx(float(request.get("control_rate_hz", 0.0)), 30.0),
+		"model creator preserves starting worker count and policy control rate"
+	)
+	_expect(
+		is_equal_approx(float(request.get("exploration_strength", -1.0)), 0.035)
+		and not bool(request.get("start_active", true)),
+		"model creator can create a tuned group without starting training immediately"
+	)
+	_expect(
+		str(request.get("reward_cardset_id", "")) == "builtin:drone_balanced"
+		and not (request.get("reward_cards", {}) as Dictionary).is_empty(),
+		"model creator sends the selected reward-card preset with the fresh worker group"
+	)
+	panel.free()
+
+
+func _test_paused_drone_candidate_keeps_frozen_hardware() -> void:
+	var room: DroneTrainingRoom = DroneTrainingRoom.new()
+	var live_loadout: DroneLoadout = MLBodyPresetLibrary.drone_quad_loadout(false)
+	var frozen_record: Dictionary = DroneTrainingLoadoutConfig.to_record(live_loadout)
+	var contract: Dictionary = RLEvaluationContract.create("drone", {
+		"hardware": frozen_record,
+	})
+	var candidate: Dictionary = {
+		"candidate_id": 81,
+		"evaluation_contract": contract,
+		"evaluation_contract_hash": str(contract.get("contract_hash", "")),
+	}
+	var trainer: DroneTrainingAlgorithm = DroneTrainingAlgorithmCatalog.create("ppo_clip")
+	trainer.set_evaluation_contract(contract)
+	var group: Dictionary = {
+		"group_id": 81,
+		"active": false,
+		"trainer": trainer,
+		"drone_loadout": live_loadout,
+		"candidate_drone_loadout_cache": {},
+	}
+	room._cache_drone_evaluation_loadout(group, contract, live_loadout)
+	# The optimizer may still be running when the user pauses. Fill the bounded cache with newer
+	# pause-time hardware contracts before a pending candidate formally exists; the trainer's frozen
+	# pre-nomination contract must remain protected from eviction.
+	for edit_index in range(8):
+		var edited: DroneLoadout = DroneTrainingLoadoutConfig.duplicate_loadout(live_loadout)
+		edited.battery.energy_capacity_wh += float(edit_index + 1)
+		var edited_contract: Dictionary = RLEvaluationContract.create("drone", {
+			"hardware": DroneTrainingLoadoutConfig.to_record(edited),
+		})
+		room._cache_drone_evaluation_loadout(group, edited_contract, edited)
+	_expect(
+		(group.get("candidate_drone_loadout_cache", {}) as Dictionary).has(
+			str(contract.get("contract_hash", ""))
+		),
+		"paused drone cache retains the trainer contract while a background update can still nominate it"
+	)
+	# Paused hardware editing is intentionally allowed. The pending candidate must keep the exact
+	# body it was nominated with instead of inheriting this later live edit or failing reconstruction.
+	live_loadout.battery.energy_capacity_wh += 0.75
+	_expect(
+		not DroneTrainingLoadoutConfig.records_match(
+			frozen_record,
+			DroneTrainingLoadoutConfig.to_record(live_loadout)
+		),
+		"test mutation changes the paused group's live drone hardware record"
+	)
+	var frozen_loadout: DroneLoadout = room._candidate_drone_loadout(group, candidate)
+	_expect(
+		frozen_loadout != null
+		and DroneTrainingLoadoutConfig.records_match(
+			frozen_record,
+			DroneTrainingLoadoutConfig.to_record(frozen_loadout)
+		),
+		"paused drone fixed-seed evaluation resolves the candidate's frozen body independently of later live edits"
+	)
+	room.free()
+
+
+func _test_room_episode_status_is_one_shared_line() -> void:
+	var room: DroneTrainingRoom = DroneTrainingRoom.new()
+	room.episode_status_label = Label.new()
+	room.add_child(room.episode_status_label)
+	room.worker_groups.append({
+		"group_id": 91,
+		"active": false,
+	})
+	room.limb_training.groups.append({
+		"group_id": 92,
+		"name": "Walker",
+		"active": true,
+		"episode": 7,
+		"workers": [],
+		"awaiting_respawn": false,
+	})
+	room._refresh_episode_status()
+	_expect(
+		not room.episode_status_label.text.contains("\n")
+		and room.episode_status_label.text.contains("Episode length 20.0 s")
+		and room.episode_status_label.text.contains("1 active model")
+		and room.episode_status_label.text.contains("1 paused model")
+		and not room.episode_status_label.text.contains("Drones ·")
+		and not room.episode_status_label.text.contains("Walker ·"),
+		"room episode status uses one shared-duration line instead of one timer row per worker family"
+	)
+	room.free()
+
+
+func _test_room_ready_does_not_create_default_worker_group() -> void:
+	var source: String = FileAccess.get_file_as_string("res://ml/training/drone_training_room.gd")
+	var ready_start: int = source.find("func _ready() -> void:")
+	var next_function: int = source.find("\nfunc ", ready_start + 1)
+	var ready_source: String = source.substr(
+		ready_start,
+		(next_function - ready_start) if next_function > ready_start else source.length() - ready_start
+	)
+	_expect(
+		ready_start >= 0 and not ready_source.contains("_create_worker_group("),
+		"training-room startup does not silently create the old default drone worker group"
+	)
 
 func _test_default_target_visual_only_tracks_evaluators() -> void:
 	var room: DroneTrainingRoom = _new_room_with_target_visuals()

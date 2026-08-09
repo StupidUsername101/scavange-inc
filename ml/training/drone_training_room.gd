@@ -627,11 +627,7 @@ func _ready() -> void:
 		DroneTrainingPolicy.DEFAULT_WEIGHTS
 	)
 	_refresh_model_versions(str(initial_version.get("version_id", "")))
-	var group = _create_worker_group(false)
-	if group.is_empty():
-		status_label.text = "Could not create the initial learning worker group."
-		return
-	_set_group_active(int(group["group_id"]), true)
+	status_label.text = "No worker groups yet. Press + above Worker Groups to build one."
 
 
 func _on_limb_training_metrics_changed(_group_id: int) -> void:
@@ -2336,7 +2332,104 @@ func _evaluation_contract_for_group_id(
 			environment["hardware"] = loadout.to_dictionary()
 		_:
 			return {}
-	return RLEvaluationContract.create(resolved_kind, environment)
+	var contract: Dictionary = RLEvaluationContract.create(resolved_kind, environment)
+	if resolved_kind == "drone" and not contract.is_empty():
+		var drone_group: Dictionary = _group_by_id(group_id)
+		_cache_drone_evaluation_loadout(
+			drone_group,
+			contract,
+			drone_group.get("drone_loadout") as DroneLoadout
+		)
+	return contract
+
+
+func _cache_drone_evaluation_loadout(
+	group: Dictionary,
+	contract: Dictionary,
+	loadout: DroneLoadout
+) -> void:
+	if group.is_empty() or contract.is_empty() or loadout == null:
+		return
+	var contract_hash: String = str(contract.get("contract_hash", ""))
+	var environment_value: Variant = contract.get("environment", {})
+	if contract_hash.is_empty() or not (environment_value is Dictionary):
+		return
+	var hardware_value: Variant = (environment_value as Dictionary).get("hardware", {})
+	if not (hardware_value is Dictionary):
+		return
+	var hardware_record: Dictionary = hardware_value as Dictionary
+	if not LOADOUT_CONFIG.records_match(hardware_record, LOADOUT_CONFIG.to_record(loadout)):
+		return
+	var cache_value: Variant = group.get("candidate_drone_loadout_cache", {})
+	var cache: Dictionary = cache_value as Dictionary if cache_value is Dictionary else {}
+	cache[contract_hash] = LOADOUT_CONFIG.duplicate_loadout(loadout)
+	# Keep a handful of recent frozen bodies so a pending evaluator remains independent from pause-
+	# time edits without letting long sessions retain an unbounded number of Resource trees.
+	var pending_hash: String = str(_pending_candidate_for_group(group).get(
+		"evaluation_contract_hash",
+		""
+	))
+	# A background optimizer can finish *after* the user pauses the group. Until it nominates its
+	# candidate there is no pending-candidate hash yet, but the trainer's current evaluation
+	# contract is already the exact contract that candidate will inherit. Protect that cache entry
+	# too, so repeated pause-time hardware edits/saves cannot evict the body out from under a
+	# still-running update.
+	var trainer_contract_hash: String = ""
+	var trainer: DroneTrainingAlgorithm = group.get("trainer") as DroneTrainingAlgorithm
+	if trainer != null:
+		var trainer_contract: Dictionary = trainer.evaluation_contract()
+		trainer_contract_hash = str(trainer_contract.get("contract_hash", ""))
+	while cache.size() > 6:
+		var removable_key: Variant = null
+		for candidate_key: Variant in cache.keys():
+			var key_text: String = str(candidate_key)
+			if (
+				key_text != contract_hash
+				and key_text != pending_hash
+				and key_text != trainer_contract_hash
+			):
+				removable_key = candidate_key
+				break
+		if removable_key == null:
+			break
+		cache.erase(removable_key)
+	group["candidate_drone_loadout_cache"] = cache
+
+
+func _candidate_drone_loadout(
+	group: Dictionary,
+	candidate: Dictionary
+) -> DroneLoadout:
+	if group.is_empty() or candidate.is_empty():
+		return null
+	var contract_value: Variant = candidate.get("evaluation_contract", {})
+	if not (contract_value is Dictionary):
+		return null
+	var contract: Dictionary = contract_value as Dictionary
+	var contract_hash: String = str(candidate.get(
+		"evaluation_contract_hash",
+		contract.get("contract_hash", "")
+	))
+	var environment_value: Variant = contract.get("environment", {})
+	if contract_hash.is_empty() or not (environment_value is Dictionary):
+		return null
+	var hardware_value: Variant = (environment_value as Dictionary).get("hardware", {})
+	if not (hardware_value is Dictionary):
+		return null
+	var hardware_record: Dictionary = hardware_value as Dictionary
+	var cache_value: Variant = group.get("candidate_drone_loadout_cache", {})
+	if cache_value is Dictionary:
+		var cached: DroneLoadout = (cache_value as Dictionary).get(contract_hash) as DroneLoadout
+		if cached != null and LOADOUT_CONFIG.records_match(
+			hardware_record,
+			LOADOUT_CONFIG.to_record(cached)
+		):
+			return LOADOUT_CONFIG.duplicate_loadout(cached)
+	var live_loadout: DroneLoadout = group.get("drone_loadout") as DroneLoadout
+	var frozen: DroneLoadout = LOADOUT_CONFIG.frozen_loadout(hardware_record, live_loadout)
+	if frozen != null:
+		_cache_drone_evaluation_loadout(group, contract, frozen)
+	return frozen
 
 
 func register_group_target_candidate(
@@ -6473,6 +6566,25 @@ func _begin_turret_placement(
 	]
 
 
+func _next_unconfigured_turret_worker_index(group: Dictionary) -> int:
+	var placements_value: Variant = group.get("worker_placements", [])
+	if not (placements_value is Array):
+		return -1
+	var placements: Array = placements_value as Array
+	var worker_count: int = clampi(
+		int(group.get("worker_count", placements.size())),
+		1,
+		TurretTrainingCoordinator.MAXIMUM_WORKER_COUNT
+	)
+	for worker_index in range(mini(worker_count, placements.size())):
+		var placement_value: Variant = placements[worker_index]
+		if not (placement_value is Dictionary):
+			return worker_index
+		if not bool((placement_value as Dictionary).get("configured", false)):
+			return worker_index
+	return -1
+
+
 func _begin_add_turret_worker(group_id: int) -> void:
 	_begin_turret_placement(group_id, null, turret_training.group_worker_count(group_id), true)
 
@@ -6652,28 +6764,28 @@ func _confirm_turret_placement() -> void:
 		)
 		return
 	var activate_after_placement: bool = turret_placement_activate_on_confirm
+	var next_worker_index: int = _next_unconfigured_turret_worker_index(group)
 	_cancel_turret_placement("", false)
+	if next_worker_index >= 0:
+		call_deferred(
+			"_begin_turret_placement",
+			group_id,
+			activate_after_placement,
+			next_worker_index,
+			false
+		)
+		status_label.text = "%s turret %d placed. Place turret %d next." % [
+			str(group.get("name", "Turret group")),
+			worker_index + 1,
+			next_worker_index + 1,
+		]
+		return
 	if activate_after_placement:
 		turret_ui.set_group_active(group_id, true)
-	else:
-		# Placement itself is a configuration boundary, but pause should not mean "no body".
-		# Materialize the newly authored population synchronously, then freeze it before another
-		# physics tick can run. This also makes a newly added turret visible immediately when the
-		# group was already paused, matching the retained-body limb pause behavior.
-		if turret_training.set_group_active(
-			group_id,
-			true,
-			_target_objective_position(group_id),
-			episode_duration,
-			ARENA_SIZE
-		):
-			turret_training.set_group_active(
-				group_id,
-				false,
-				_target_objective_position(group_id),
-				episode_duration,
-				ARENA_SIZE
-			)
+	# A creator group configured to start paused must stay genuinely untouched: do not briefly
+	# activate it just to materialize bodies, because that would create episode 1 and sample the
+	# policy before the user ever presses Start. Its authored placements are retained and the real
+	# turret population is instantiated on the first explicit resume.
 	_rebuild_group_cards()
 	_refresh_target_controls_for_selection()
 	status_label.text = "%s turret %d placed at (%.2f, %.2f, %.2f)." % [
@@ -7361,7 +7473,7 @@ func _build_episode_controls(content: VBoxContainer) -> void:
 	content.add_child(simulation_speed_picker)
 	episode_status_label = Label.new()
 	episode_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	episode_status_label.tooltip_text = "Episode progress\n\nAlways shows current drone, four-limb, and turret episode progress, active model count, physical instance count, and simulation speed."
+	episode_status_label.tooltip_text = "Shared episode setup\n\nAll worker families use the room's same episode-duration setting. Per-group episode counters remain available on their own cards; this room label shows the shared duration and aggregate runtime population only."
 	content.add_child(episode_status_label)
 	_add_slider(
 		content,
@@ -11194,6 +11306,7 @@ func _create_worker_group(
 		"candidate_evaluation_started_usec": 0,
 		"candidate_evaluation_subject": "",
 		"candidate_evaluation_last_result": {},
+		"candidate_drone_loadout_cache": {},
 		"card": null,
 		"card_button": null,
 		"pause_button": null,
@@ -12337,43 +12450,149 @@ func _on_model_body_creator_requested(request: Dictionary) -> void:
 	if runtime_body == null:
 		status_label.text = "The creator returned no runtime body."
 		return
+	var training_value: Variant = request.get("training", {})
+	var training: Dictionary = training_value as Dictionary if training_value is Dictionary else {}
+	var requested_worker_count: int = int(training.get("worker_count", -1))
+	var start_active: bool = bool(training.get("start_active", true))
+	var reward_cards_value: Variant = training.get("reward_cards", {})
+	var reward_cards: Dictionary = (
+		(reward_cards_value as Dictionary).duplicate(true)
+		if reward_cards_value is Dictionary
+		else {}
+	)
+	var reward_cardset_id: String = str(training.get("reward_cardset_id", "")).strip_edges()
+	var reward_cardset_name: String = str(training.get("reward_cardset_name", "")).strip_edges()
+	var reward_setup: Dictionary = {}
+	if not reward_cards.is_empty() or not reward_cardset_id.is_empty() or not reward_cardset_name.is_empty():
+		reward_setup = {
+			"cards": reward_cards,
+			"id": reward_cardset_id,
+			"name": reward_cardset_name,
+		}
+	var network_config: Dictionary = {}
+	if training.has("hidden_layer_width"):
+		network_config["hidden_layer_width"] = clampi(
+			int(training.get("hidden_layer_width", DronePPOActorCritic.HIDDEN_SIZE)),
+			DronePPOMLP.MINIMUM_HIDDEN_WIDTH,
+			DronePPOMLP.MAXIMUM_HIDDEN_WIDTH
+		)
+	if training.has("hidden_layer_depth"):
+		network_config["hidden_layer_depth"] = clampi(
+			int(training.get("hidden_layer_depth", DronePPOActorCritic.HIDDEN_LAYER_COUNT)),
+			DronePPOMLP.MINIMUM_HIDDEN_DEPTH,
+			DronePPOMLP.MAXIMUM_HIDDEN_DEPTH
+		)
+	if training.has("control_rate_hz"):
+		var control_rate_hz: float = clampf(float(training.get("control_rate_hz", 20.0)), 2.0, 60.0)
+		network_config["control_interval_seconds"] = 1.0 / control_rate_hz
 	match body_kind:
 		"drone":
 			var drone_loadout: DroneLoadout = runtime_body as DroneLoadout
 			if drone_loadout == null:
 				status_label.text = "The accepted creator body is not a drone loadout."
 				return
+			var algorithm_id: String = str(training.get(
+				"algorithm_id",
+				DroneTrainingAlgorithmCatalog.DEFAULT_ALGORITHM_ID
+			))
+			var exploration_key: String = _branch_exploration_config_key(algorithm_id)
+			if training.has("exploration_strength") and not exploration_key.is_empty():
+				network_config[exploration_key] = maxf(
+					float(training.get("exploration_strength", 0.01)),
+					0.0
+				)
+			var initial_setup: Dictionary = {
+				"drone_loadout": drone_loadout,
+			}
+			if requested_worker_count > 0:
+				initial_setup["worker_count"] = requested_worker_count
+			if not network_config.is_empty():
+				initial_setup["config"] = network_config
+			if not reward_setup.is_empty():
+				initial_setup["reward_cards"] = reward_cards
+				if not reward_cardset_id.is_empty():
+					initial_setup["reward_cardset_id"] = reward_cardset_id
+				if not reward_cardset_name.is_empty():
+					initial_setup["reward_cardset_name"] = reward_cardset_name
 			var group: Dictionary = _create_worker_group(
 				false,
 				{},
 				requested_name,
 				-1,
 				0.0,
-				"ppo_clip",
-				{"drone_loadout": drone_loadout}
+				algorithm_id,
+				initial_setup
 			)
 			if not group.is_empty():
-				_set_group_active(int(group["group_id"]), true)
-				status_label.text = "%s created from the Model Body Creator." % str(group["name"])
+				if start_active:
+					_set_group_active(int(group["group_id"]), true)
+				status_label.text = "%s created from the Model Body Creator%s." % [
+					str(group["name"]),
+					" and started" if start_active else " paused",
+				]
 		"articulated_body":
 			var definition: FourLimbBodyDefinition = runtime_body as FourLimbBodyDefinition
 			if definition == null:
 				status_label.text = "The accepted creator body is not a four-limb definition."
 				return
-			_create_four_limb_worker_group(definition, requested_name)
+			var limb_worker_count: int = (
+				requested_worker_count
+				if requested_worker_count > 0
+				else FourLimbTrainingCoordinator.DEFAULT_WORKER_COUNT
+			)
+			_create_four_limb_worker_group(
+				definition,
+				requested_name,
+				limb_worker_count,
+				network_config,
+				start_active,
+				reward_setup
+			)
 		"turret":
 			var turret_loadout: TurretLoadout = runtime_body as TurretLoadout
 			if turret_loadout == null:
 				status_label.text = "The accepted creator body is not a turret loadout."
 				return
-			_create_turret_worker_group(turret_loadout, requested_name)
+			var turret_worker_count: int = (
+				requested_worker_count
+				if requested_worker_count > 0
+				else TurretTrainingCoordinator.DEFAULT_WORKER_COUNT
+			)
+			_create_turret_worker_group(
+				turret_loadout,
+				requested_name,
+				turret_worker_count,
+				network_config,
+				start_active,
+				reward_setup
+			)
 		_:
 			status_label.text = "Body kind '%s' is not connected to a worker trainer yet." % body_kind
 
 
+func _apply_creator_reward_setup(group: Dictionary, reward_setup: Dictionary) -> void:
+	if group.is_empty() or reward_setup.is_empty():
+		return
+	var cards_value: Variant = reward_setup.get("cards", {})
+	var deck: Object = group.get("reward_deck") as Object
+	if cards_value is Dictionary and deck != null and deck.has_method("load_configuration"):
+		deck.call("load_configuration", (cards_value as Dictionary).duplicate(true))
+	var cardset_id: String = str(reward_setup.get("id", "custom")).strip_edges()
+	var cardset_name: String = str(reward_setup.get("name", "Custom")).strip_edges()
+	group["reward_cardset_id"] = cardset_id if not cardset_id.is_empty() else "custom"
+	group["reward_cardset_name"] = cardset_name if not cardset_name.is_empty() else "Custom"
+	# Any pending edit belongs to the previous/default deck. Creator-selected rewards are the
+	# group's initial accepted state and must reach its first episode/evaluation contract directly.
+	group["pending_reward_config"] = {}
+
+
 func _create_four_limb_worker_group(
 	initial_body_definition: FourLimbBodyDefinition = null,
-	requested_name: String = ""
+	requested_name: String = "",
+	worker_count: int = FourLimbTrainingCoordinator.DEFAULT_WORKER_COUNT,
+	network_config: Dictionary = {},
+	start_active: bool = true,
+	reward_setup: Dictionary = {}
 ) -> void:
 	group_counter += 1
 	var hue = float(posmod(group_counter * 2371, 10000)) / 10000.0
@@ -12383,32 +12602,49 @@ func _create_four_limb_worker_group(
 		group_counter,
 		_unique_group_name(group_name, -1),
 		Color.from_hsv(hue, 0.68, 0.95),
-		FourLimbTrainingCoordinator.DEFAULT_WORKER_COUNT,
-		initial_body_definition
+		clampi(worker_count, 1, FourLimbTrainingCoordinator.MAXIMUM_WORKER_COUNT),
+		initial_body_definition,
+		network_config
 	)
 	if group.is_empty():
 		status_label.text = limb_training.last_error
 		return
+	_apply_creator_reward_setup(group, reward_setup)
 	var group_id: int = int(group["group_id"])
+	limb_training.set_control_interval(
+		group_id,
+		float(network_config.get(
+			"control_interval_seconds",
+			FourLimbTrainingCoordinator.DECISION_INTERVAL_SECONDS
+		))
+	)
 	_ensure_group_target_handler(group_id, group["color"])
 	_select_limb_group(group_id)
-	limb_training.set_group_active(
-		group_id,
-		true,
-		drone_spawn_position,
-		_target_objective_position(group_id),
-		_target_velocity_for_group_id(group_id),
-		_target_radius_for_group_id(group_id),
-		episode_duration,
-		ARENA_SIZE
-	)
+	if start_active:
+		limb_training.set_group_active(
+			group_id,
+			true,
+			drone_spawn_position,
+			_target_objective_position(group_id),
+			_target_velocity_for_group_id(group_id),
+			_target_radius_for_group_id(group_id),
+			episode_duration,
+			ARENA_SIZE
+		)
 	_rebuild_group_cards()
-	status_label.text = "%s created in the shared arena." % str(group["name"])
+	status_label.text = "%s created %s in the shared arena." % [
+		str(group["name"]),
+		"running" if start_active else "paused",
+	]
 
 
 func _create_turret_worker_group(
 	initial_loadout: TurretLoadout = null,
-	requested_name: String = ""
+	requested_name: String = "",
+	worker_count: int = TurretTrainingCoordinator.DEFAULT_WORKER_COUNT,
+	network_config: Dictionary = {},
+	start_active: bool = true,
+	reward_setup: Dictionary = {}
 ) -> void:
 	group_counter += 1
 	var hue = float(posmod(group_counter * 2371, 10000)) / 10000.0
@@ -12418,17 +12654,28 @@ func _create_turret_worker_group(
 		group_counter,
 		_unique_group_name(group_name, -1),
 		Color.from_hsv(hue, 0.68, 0.95),
-		1,
-		initial_loadout
+		clampi(worker_count, 1, TurretTrainingCoordinator.MAXIMUM_WORKER_COUNT),
+		initial_loadout,
+		network_config
 	)
 	if group.is_empty():
 		status_label.text = turret_training.last_error
 		return
+	_apply_creator_reward_setup(group, reward_setup)
 	var group_id: int = int(group["group_id"])
+	turret_training.set_control_interval(
+		group_id,
+		float(network_config.get(
+			"control_interval_seconds",
+			TurretTrainingCoordinator.DECISION_INTERVAL_SECONDS
+		))
+	)
 	_ensure_group_target_handler(group_id, group["color"])
 	_select_turret_group(group_id)
 	_rebuild_group_cards()
-	_begin_turret_placement(group_id)
+	# Turrets still need authored positions. For multi-worker groups, placement proceeds one body at
+	# a time; the final confirmation starts the group only when requested by the creator.
+	_begin_turret_placement(group_id, start_active, 0, false)
 
 
 func _open_model_browser_for_evaluator() -> void:
@@ -14609,9 +14856,15 @@ func _start_candidate_evaluation(group: Dictionary) -> bool:
 	var configured: bool = false
 	match _candidate_group_body_kind(group):
 		"drone":
-			var loadout = group.get("drone_loadout") as DroneLoadout
+			# The candidate owns a frozen body snapshot. Pausing a group, editing its live hardware, or
+			# simply retaining paused worker instances must not redefine or invalidate that evaluator.
+			var loadout: DroneLoadout = _candidate_drone_loadout(group, subject_candidate)
 			if loadout == null:
-				_candidate_evaluation_start_failed(group, candidate_id, "candidate drone loadout is missing")
+				_candidate_evaluation_start_failed(
+					group,
+					candidate_id,
+					"candidate frozen drone hardware is unavailable"
+				)
 				return false
 			job = CANDIDATE_EVALUATION_JOB_SCRIPT.new() as Node
 			var reward_deck: DroneTrainingRewardDeck = _ensure_drone_reward_deck(group)
@@ -16934,104 +17187,77 @@ func _refresh_selected_group_status() -> void:
 func _refresh_episode_status() -> void:
 	if episode_status_label == null:
 		return
-	var limb_summaries = limb_training.episode_progress_summaries()
-	var turret_summaries = turret_training.episode_progress_summaries()
-	var active_limb_instances = 0
-	var active_limb_groups = 0
+	var limb_summaries: Array[Dictionary] = limb_training.episode_progress_summaries()
+	var turret_summaries: Array[Dictionary] = turret_training.episode_progress_summaries()
+	var active_drone_groups: int = 0
+	var paused_drone_groups: int = 0
+	for group: Dictionary in worker_groups:
+		if bool(group.get("active", false)):
+			active_drone_groups += 1
+		else:
+			paused_drone_groups += 1
+	var active_limb_groups: int = 0
+	var paused_limb_groups: int = 0
+	var active_limb_instances: int = 0
+	var retained_limb_instances: int = 0
 	for summary: Dictionary in limb_summaries:
+		retained_limb_instances += int(summary.get("instance_count", 0))
 		if bool(summary.get("active", false)):
 			active_limb_groups += 1
 			active_limb_instances += int(summary.get("instance_count", 0))
-	var active_turret_instances = 0
-	var active_turret_groups = 0
+		else:
+			paused_limb_groups += 1
+	var active_turret_groups: int = 0
+	var paused_turret_groups: int = 0
+	var active_turret_instances: int = 0
+	var retained_turret_instances: int = 0
 	for summary: Dictionary in turret_summaries:
+		retained_turret_instances += int(summary.get("instance_count", 0))
 		if bool(summary.get("active", false)):
 			active_turret_groups += 1
 			active_turret_instances += int(summary.get("instance_count", 0))
-	var active_drone_groups = 0
-	for group in worker_groups:
-		if bool(group.get("active", false)):
-			active_drone_groups += 1
-	var active_drone_instances = 0
+		else:
+			paused_turret_groups += 1
+	var active_drone_instances: int = 0
+	var retained_drone_instances: int = 0
 	for trial: Dictionary in trials:
+		if str(trial.get("mode", "evaluation")) != "algorithm_training":
+			continue
+		retained_drone_instances += 1
 		if _trial_runtime_is_active(trial):
 			active_drone_instances += 1
-	var total_instances = active_drone_instances + active_limb_instances + active_turret_instances
-	var total_active_models = active_drone_groups + active_limb_groups + active_turret_groups
-	var status_lines: Array[String] = []
-	if not trials.is_empty() or active_drone_groups > 0:
-		var drone_status = ""
-		if not trials.is_empty():
-			if episode_running and active_drone_instances <= 0:
-				drone_status = "Paused · episode %d · %.1f / %.1f s · %d retained instances" % [
-					episode_number,
-					episode_elapsed,
-					episode_duration,
-					trials.size(),
-				]
-			else:
-				drone_status = DroneTrainingRoomPresentation.episode_status_text(
-					active_drone_instances, episode_running, episode_number, episode_elapsed,
-					episode_duration, episode_seed, intermission_remaining
-				)
-		elif intermission_remaining > 0.0:
-			drone_status = "Episode %d complete · next run in %.1f s" % [episode_number, intermission_remaining]
-		else:
-			drone_status = "Episode %d · %.1f / %.1f s · preparing instances" % [episode_number, episode_elapsed, episode_duration]
-		if not episode_running:
-			drone_status += " · %.1f / %.1f s" % [episode_elapsed, episode_duration]
-			var termination_summary = _episode_termination_summary()
-			if not termination_summary.is_empty():
-				drone_status += " · %s" % termination_summary
-		status_lines.append("Drones · %s" % drone_status)
-	var limb_summary = _preferred_episode_summary(limb_summaries, selected_limb_group_id)
-	if not limb_summary.is_empty():
-		status_lines.append(_physical_group_episode_status(limb_summary, "Limb model"))
-	var turret_summary = _preferred_episode_summary(turret_summaries, selected_turret_group_id)
-	if not turret_summary.is_empty():
-		status_lines.append(_physical_group_episode_status(turret_summary, "Turret model"))
-	if total_instances <= 0 and status_lines.is_empty():
-		status_lines.append("No active model instances.")
-	else:
-		status_lines.append("%d active models · %d instances · %s simulation" % [
-			total_active_models,
-			total_instances,
+	var active_models: int = active_drone_groups + active_limb_groups + active_turret_groups
+	var paused_models: int = paused_drone_groups + paused_limb_groups + paused_turret_groups
+	var active_instances: int = active_drone_instances + active_limb_instances + active_turret_instances
+	var retained_instances: int = (
+		retained_drone_instances + retained_limb_instances + retained_turret_instances
+	)
+	if worker_groups.is_empty() and limb_summaries.is_empty() and turret_summaries.is_empty():
+		episode_status_label.text = "Episode length %.1f s · no worker groups · %s simulation" % [
+			episode_duration,
 			_simulation_speed_text(simulation_speed),
-		])
-	var episode_status = "\n".join(PackedStringArray(status_lines))
+		]
+		return
+	var episode_status: String = "Episode length %.1f s · %d active model%s · %d active instance%s" % [
+		episode_duration,
+		active_models,
+		"" if active_models == 1 else "s",
+		active_instances,
+		"" if active_instances == 1 else "s",
+	]
+	if paused_models > 0:
+		episode_status += " · %d paused model%s" % [
+			paused_models,
+			"" if paused_models == 1 else "s",
+		]
+	if retained_instances > active_instances:
+		episode_status += " · %d retained instance%s" % [
+			retained_instances - active_instances,
+			"" if retained_instances - active_instances == 1 else "s",
+		]
+	episode_status += " · %s simulation" % _simulation_speed_text(simulation_speed)
 	if episode_status_label.text != episode_status:
 		episode_status_label.text = episode_status
-
-
-func _preferred_episode_summary(
-	summaries: Array[Dictionary],
-	selected_group_id_value: int
-) -> Dictionary:
-	for summary: Dictionary in summaries:
-		if int(summary.get("group_id", -1)) == selected_group_id_value:
-			return summary
-	for summary: Dictionary in summaries:
-		if bool(summary.get("active", false)):
-			return summary
-	return {}
-
-
-func _physical_group_episode_status(summary: Dictionary, fallback_name: String) -> String:
-	var elapsed = float(summary.get("elapsed", 0.0))
-	var duration = float(summary.get("duration", episode_duration))
-	if duration <= 0.0:
-		duration = episode_duration
-	var state = "running" if bool(summary.get("active", false)) else "paused"
-	if bool(summary.get("awaiting_respawn", false)):
-		state = "resetting"
-	return "%s · episode %d · %.1f / %.1f s · %d instances · %s" % [
-		str(summary.get("name", fallback_name)),
-		int(summary.get("episode", 0)),
-		elapsed,
-		duration,
-		int(summary.get("instance_count", 0)),
-		state,
-	]
 
 
 func _reset_action_trace_for_episode() -> void:

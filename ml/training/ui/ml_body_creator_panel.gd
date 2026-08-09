@@ -18,6 +18,15 @@ var slots_content: VBoxContainer
 var summary_label: Label
 var status_label: Label
 var create_button: Button
+var training_settings_panel: PanelContainer
+var algorithm_picker: OptionButton
+var hidden_width_input: SpinBox
+var hidden_depth_input: SpinBox
+var worker_count_input: SpinBox
+var control_rate_input: SpinBox
+var exploration_input: SpinBox
+var reward_cardset_picker: OptionButton
+var start_training_checkbox: CheckBox
 
 var current_preset_id: StringName = &""
 var current_draft: MLBodyBuildDraft
@@ -27,12 +36,15 @@ var slot_parts: Dictionary = {}
 var initial_slot_keys: Dictionary = {}
 var changed_slot_ids: Dictionary = {}
 var core_parts: Dictionary = {}
+var reward_cardsets: Dictionary = {}
+var reward_cardset_library: TrainingRewardCardsetLibrary = TrainingRewardCardsetLibrary.new()
+var suppress_training_ui_callbacks: bool = false
 
 
 func _ready() -> void:
 	title = "Model Body Creator"
-	size = Vector2i(820, 720)
-	min_size = Vector2i(620, 520)
+	size = Vector2i(860, 820)
+	min_size = Vector2i(640, 600)
 	unresizable = false
 	transient = true
 	exclusive = false
@@ -49,7 +61,7 @@ func open_creator() -> void:
 		_load_preset_at(0)
 	# Match the room's other authored windows: restore intended bounds before centering instead of
 	# passing them as popup_centered()'s minimum-size argument.
-	size = Vector2i(820, 720)
+	size = Vector2i(860, 820)
 	popup_centered()
 	call_deferred("_focus_group_name")
 
@@ -141,6 +153,8 @@ func _build_ui() -> void:
 	core_label.add_theme_color_override("font_color", GREEN)
 	identity.add_child(core_label)
 
+	_build_training_settings(root)
+
 	var parts_heading: Label = Label.new()
 	parts_heading.text = "ATTACHED PARTS"
 	parts_heading.add_theme_font_size_override("font_size", 17)
@@ -185,6 +199,340 @@ func _build_ui() -> void:
 	actions.add_child(create_button)
 
 
+func _build_training_settings(root: VBoxContainer) -> void:
+	var heading: Label = Label.new()
+	heading.text = "TRAINING SETUP"
+	heading.add_theme_font_size_override("font_size", 17)
+	heading.add_theme_color_override("font_color", ORANGE)
+	root.add_child(heading)
+
+	training_settings_panel = PanelContainer.new()
+	training_settings_panel.add_theme_stylebox_override(
+		"panel",
+		DroneTrainingRoomPresentation.creator_panel_style(true)
+	)
+	root.add_child(training_settings_panel)
+	var body: VBoxContainer = VBoxContainer.new()
+	body.add_theme_constant_override("separation", 7)
+	training_settings_panel.add_child(body)
+
+	var algorithm_row: HBoxContainer = HBoxContainer.new()
+	algorithm_row.add_theme_constant_override("separation", 8)
+	body.add_child(algorithm_row)
+	var algorithm_label: Label = Label.new()
+	algorithm_label.text = "Learning algorithm"
+	algorithm_label.custom_minimum_size.x = 170.0
+	algorithm_row.add_child(algorithm_label)
+	algorithm_picker = OptionButton.new()
+	algorithm_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	algorithm_picker.item_selected.connect(_on_algorithm_selected)
+	algorithm_row.add_child(algorithm_picker)
+
+	hidden_width_input = _add_numeric_setting(
+		body,
+		"Hidden layer width",
+		float(DronePPOMLP.MINIMUM_HIDDEN_WIDTH),
+		float(DronePPOMLP.MAXIMUM_HIDDEN_WIDTH),
+		8.0,
+		float(DronePPOActorCritic.HIDDEN_SIZE),
+		"Neurons in each hidden layer. Wider networks can represent more complicated control relationships but cost more inference and optimizer work."
+	)
+	hidden_depth_input = _add_numeric_setting(
+		body,
+		"Hidden layer depth",
+		float(DronePPOMLP.MINIMUM_HIDDEN_DEPTH),
+		float(DronePPOMLP.MAXIMUM_HIDDEN_DEPTH),
+		1.0,
+		float(DronePPOActorCritic.HIDDEN_LAYER_COUNT),
+		"Number of hidden layers. This topology is fixed when the worker group is created."
+	)
+	worker_count_input = _add_numeric_setting(
+		body,
+		"Starting workers",
+		1.0,
+		48.0,
+		1.0,
+		8.0,
+		"Number of physical workers that initially collect experience for this model."
+	)
+	control_rate_input = _add_numeric_setting(
+		body,
+		"Control rate (Hz)",
+		2.0,
+		60.0,
+		1.0,
+		20.0,
+		"How often the model chooses new actuator commands per simulated second."
+	)
+	exploration_input = _add_numeric_setting(
+		body,
+		"Exploration strength",
+		0.0,
+		2.0,
+		0.005,
+		0.01,
+		"Initial PPO entropy coefficient or SAC entropy temperature. This is available only for drone algorithms in this first creator pass."
+	)
+	exploration_input.allow_greater = false
+
+	var reward_row: HBoxContainer = HBoxContainer.new()
+	reward_row.add_theme_constant_override("separation", 8)
+	body.add_child(reward_row)
+	var reward_label: Label = Label.new()
+	reward_label.text = "Reward preset"
+	reward_label.custom_minimum_size.x = 170.0
+	reward_label.tooltip_text = "Starting reward-card preset. This uses the same reward-card library as the worker-group tuning UI and can be changed later while the group is paused."
+	reward_row.add_child(reward_label)
+	reward_cardset_picker = OptionButton.new()
+	reward_cardset_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	reward_cardset_picker.tooltip_text = reward_label.tooltip_text
+	reward_cardset_picker.item_selected.connect(func(_index: int) -> void:
+		if current_draft != null and not suppress_training_ui_callbacks:
+			_refresh_summary()
+	)
+	reward_row.add_child(reward_cardset_picker)
+
+	start_training_checkbox = CheckBox.new()
+	start_training_checkbox.text = "Start training immediately"
+	start_training_checkbox.button_pressed = true
+	start_training_checkbox.tooltip_text = "Off creates the worker group paused so you can inspect or tune it before any episode starts."
+	body.add_child(start_training_checkbox)
+	var branch_note: Label = Label.new()
+	branch_note.text = "Fresh bodies start with random weights. Saved-model sources and weight variation stay under BRANCH VARIANT so incompatible body contracts cannot be mixed accidentally."
+	branch_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	branch_note.add_theme_color_override("font_color", MUTED)
+	body.add_child(branch_note)
+	for input: SpinBox in [hidden_width_input, hidden_depth_input, worker_count_input, control_rate_input, exploration_input]:
+		input.value_changed.connect(func(_value: float) -> void:
+			if current_draft != null and not suppress_training_ui_callbacks:
+				_refresh_summary()
+		)
+	start_training_checkbox.toggled.connect(func(_pressed: bool) -> void:
+		if current_draft != null and not suppress_training_ui_callbacks:
+			_refresh_summary()
+	)
+
+
+func _add_numeric_setting(
+	parent: VBoxContainer,
+	label_text: String,
+	minimum: float,
+	maximum: float,
+	step: float,
+	initial_value: float,
+	tooltip: String
+) -> SpinBox:
+	var row: HBoxContainer = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+	var label: Label = Label.new()
+	label.text = label_text
+	label.custom_minimum_size.x = 170.0
+	label.tooltip_text = tooltip
+	row.add_child(label)
+	var input: SpinBox = SpinBox.new()
+	input.min_value = minimum
+	input.max_value = maximum
+	input.step = step
+	input.value = initial_value
+	input.allow_lesser = false
+	input.allow_greater = false
+	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	input.tooltip_text = tooltip
+	row.add_child(input)
+	return input
+
+
+func _on_algorithm_selected(_index: int) -> void:
+	if suppress_training_ui_callbacks:
+		return
+	_refresh_training_settings_for_body(true)
+	_refresh_summary()
+
+
+func _selected_algorithm_id() -> String:
+	if algorithm_picker == null or algorithm_picker.selected < 0:
+		return "ppo_clip"
+	return str(algorithm_picker.get_item_metadata(algorithm_picker.selected))
+
+
+func _create_algorithm_preview(algorithm_id: String) -> DroneTrainingAlgorithm:
+	var config: Dictionary = {}
+	if algorithm_id == "ppo_clip" and current_draft != null:
+		var preview_draft: MLBodyBuildDraft = current_draft.duplicate_editable()
+		var manifest: MLBodyInterfaceManifest = preview_draft.accept_build()
+		if manifest != null:
+			config["body_interface"] = manifest.to_dictionary()
+			config["action_count"] = manifest.control_count()
+	return DroneTrainingAlgorithmCatalog.create(algorithm_id, config)
+
+
+func _algorithm_configuration_control(
+	algorithm: DroneTrainingAlgorithm,
+	key: String
+) -> Dictionary:
+	if algorithm == null:
+		return {}
+	for control: Dictionary in algorithm.configuration_controls():
+		if str(control.get("key", "")) == key:
+			return control.duplicate(true)
+	return {}
+
+
+func _refresh_training_settings_for_body(reset_values: bool = false) -> void:
+	if algorithm_picker == null:
+		return
+	suppress_training_ui_callbacks = true
+	var previous_algorithm: String = _selected_algorithm_id()
+	algorithm_picker.clear()
+	if current_body_kind == "drone":
+		var control_count: int = int(current_draft.ui_snapshot().get("preview_control_count", 0)) if current_draft != null else 0
+		var selected_valid_index: int = -1
+		var ppo_index: int = -1
+		for descriptor: Dictionary in DroneTrainingAlgorithmCatalog.descriptors():
+			var index: int = algorithm_picker.item_count
+			var descriptor_id: String = str(descriptor.get("id", "ppo_clip"))
+			algorithm_picker.add_item(str(descriptor.get("display_name", "Learning algorithm")))
+			algorithm_picker.set_item_metadata(index, descriptor_id)
+			algorithm_picker.set_item_tooltip(index, str(descriptor.get("description", "")))
+			var supported: bool = descriptor_id == "ppo_clip" or control_count == 4
+			algorithm_picker.set_item_disabled(index, not supported)
+			if descriptor_id == "ppo_clip":
+				ppo_index = index
+			if descriptor_id == previous_algorithm and supported:
+				selected_valid_index = index
+		if selected_valid_index >= 0:
+			algorithm_picker.select(selected_valid_index)
+		elif ppo_index >= 0:
+			algorithm_picker.select(ppo_index)
+		algorithm_picker.disabled = false
+		var algorithm_id: String = _selected_algorithm_id()
+		var algorithm_changed: bool = algorithm_id != previous_algorithm
+		var preview: DroneTrainingAlgorithm = _create_algorithm_preview(algorithm_id)
+		if preview != null:
+			var architecture: Dictionary = preview.network_architecture()
+			var exploration_key: String = "entropy_coefficient" if algorithm_id == "ppo_clip" else "entropy_temperature"
+			var exploration_control: Dictionary = _algorithm_configuration_control(preview, exploration_key)
+			if not exploration_control.is_empty():
+				exploration_input.min_value = float(exploration_control.get("minimum", 0.0))
+				exploration_input.max_value = float(exploration_control.get("maximum", 2.0))
+				exploration_input.step = maxf(float(exploration_control.get("step", 0.005)), 0.000001)
+				exploration_input.tooltip_text = str(exploration_control.get(
+					"tooltip",
+					"Initial exploration strength for the selected learning algorithm."
+				))
+			if reset_values or algorithm_changed:
+				hidden_width_input.value = float(architecture.get("hidden_layer_width", DronePPOActorCritic.HIDDEN_SIZE))
+				hidden_depth_input.value = float(architecture.get("hidden_layer_depth", DronePPOActorCritic.HIDDEN_LAYER_COUNT))
+				worker_count_input.value = float(preview.default_worker_count())
+				control_rate_input.value = 1.0 / maxf(float(preview.config_values().get("control_interval_seconds", 0.05)), 0.001)
+				exploration_input.value = float(preview.config_values().get(exploration_key, 0.01))
+			worker_count_input.max_value = float(preview.maximum_worker_count())
+		exploration_input.editable = true
+	else:
+		algorithm_picker.add_item("Clipped PPO + GAE")
+		algorithm_picker.set_item_metadata(0, "ppo_clip")
+		algorithm_picker.select(0)
+		algorithm_picker.disabled = true
+		exploration_input.editable = false
+		exploration_input.value = 0.0
+		if current_body_kind == "articulated_body":
+			worker_count_input.max_value = float(FourLimbTrainingCoordinator.MAXIMUM_WORKER_COUNT)
+			if reset_values:
+				hidden_width_input.value = float(FourLimbPPOActorCritic.HIDDEN_SIZE)
+				hidden_depth_input.value = float(FourLimbPPOActorCritic.HIDDEN_LAYER_COUNT)
+				worker_count_input.value = float(FourLimbTrainingCoordinator.DEFAULT_WORKER_COUNT)
+				control_rate_input.value = 1.0 / FourLimbTrainingCoordinator.DECISION_INTERVAL_SECONDS
+		elif current_body_kind == "turret":
+			worker_count_input.max_value = float(TurretTrainingCoordinator.MAXIMUM_WORKER_COUNT)
+			if reset_values:
+				hidden_width_input.value = float(TurretPPOActorCritic.HIDDEN_SIZE)
+				hidden_depth_input.value = float(TurretPPOActorCritic.HIDDEN_LAYER_COUNT)
+				worker_count_input.value = float(TurretTrainingCoordinator.DEFAULT_WORKER_COUNT)
+				control_rate_input.value = 1.0 / TurretTrainingCoordinator.DECISION_INTERVAL_SECONDS
+	_refresh_reward_cardsets(false)
+	suppress_training_ui_callbacks = false
+
+
+func _reward_body_type() -> String:
+	match current_body_kind:
+		"drone":
+			return TrainingRewardCardsetLibrary.BODY_TYPE_DRONE
+		"articulated_body":
+			return TrainingRewardCardsetLibrary.BODY_TYPE_FOUR_LIMB
+		"turret":
+			return TrainingRewardCardsetLibrary.BODY_TYPE_TURRET
+	return TrainingRewardCardsetLibrary.BODY_TYPE_DRONE
+
+
+func _default_reward_cardset_id() -> String:
+	match _reward_body_type():
+		TrainingRewardCardsetLibrary.BODY_TYPE_FOUR_LIMB:
+			return "builtin:limb_ground"
+		TrainingRewardCardsetLibrary.BODY_TYPE_TURRET:
+			return "builtin:turret_precision"
+	return "builtin:drone_balanced"
+
+
+func _refresh_reward_cardsets(reset_selection: bool) -> void:
+	if reward_cardset_picker == null:
+		return
+	var previous_id: String = _selected_reward_cardset().get("id", "") if not reset_selection else ""
+	reward_cardset_picker.clear()
+	reward_cardsets.clear()
+	var selected_index: int = -1
+	var fallback_index: int = -1
+	var default_id: String = _default_reward_cardset_id()
+	for record: Dictionary in reward_cardset_library.cardsets_for_body_type(_reward_body_type()):
+		var cardset_id: String = str(record.get("id", ""))
+		if cardset_id.is_empty():
+			continue
+		var index: int = reward_cardset_picker.item_count
+		reward_cardsets[cardset_id] = record.duplicate(true)
+		reward_cardset_picker.add_item(str(record.get("display_name", "Reward preset")))
+		reward_cardset_picker.set_item_metadata(index, cardset_id)
+		if cardset_id == previous_id:
+			selected_index = index
+		if cardset_id == default_id:
+			fallback_index = index
+	if selected_index < 0:
+		selected_index = fallback_index if fallback_index >= 0 else (0 if reward_cardset_picker.item_count > 0 else -1)
+	if selected_index >= 0:
+		reward_cardset_picker.select(selected_index)
+	reward_cardset_picker.disabled = reward_cardset_picker.item_count <= 1
+
+
+func _selected_reward_cardset() -> Dictionary:
+	if reward_cardset_picker == null or reward_cardset_picker.selected < 0:
+		return {}
+	var cardset_id: String = str(reward_cardset_picker.get_item_metadata(reward_cardset_picker.selected))
+	var value: Variant = reward_cardsets.get(cardset_id, {})
+	return (value as Dictionary).duplicate(true) if value is Dictionary else {}
+
+
+func _training_request() -> Dictionary:
+	var algorithm_id: String = _selected_algorithm_id()
+	var reward_cardset: Dictionary = _selected_reward_cardset()
+	var reward_cards_value: Variant = reward_cardset.get("cards", {})
+	var reward_cards: Dictionary = (
+		(reward_cards_value as Dictionary).duplicate(true)
+		if reward_cards_value is Dictionary
+		else {}
+	)
+	return {
+		"algorithm_id": algorithm_id,
+		"hidden_layer_width": int(round(hidden_width_input.value)),
+		"hidden_layer_depth": int(round(hidden_depth_input.value)),
+		"worker_count": int(round(worker_count_input.value)),
+		"control_rate_hz": maxf(control_rate_input.value, 1.0),
+		"exploration_strength": maxf(exploration_input.value, 0.0),
+		"reward_cardset_id": str(reward_cardset.get("id", "custom")),
+		"reward_cardset_name": str(reward_cardset.get("display_name", "Custom")),
+		"reward_cards": reward_cards,
+		"start_active": start_training_checkbox.button_pressed,
+	}
+
+
 func _populate_presets() -> void:
 	preset_picker.clear()
 	var presets: Array[MLBodyPreset] = MLBodyPresetLibrary.built_in_presets()
@@ -227,6 +575,7 @@ func _load_preset_at(index: int) -> void:
 		current_body_kind.replace("_", " ").capitalize(),
 	]
 	group_name_input.text = "%s group" % preset.display_name
+	_refresh_training_settings_for_body(true)
 	_populate_core_picker()
 	_rebuild_slot_rows()
 	_refresh_summary()
@@ -319,6 +668,7 @@ func _on_core_selected(index: int) -> void:
 	]
 	_populate_core_picker()
 	_rebuild_slot_rows()
+	_refresh_training_settings_for_body(false)
 	_refresh_summary()
 
 
@@ -466,6 +816,7 @@ func _on_slot_part_selected(index: int, slot_id: String) -> void:
 			return
 	status_label.text = ""
 	status_label.add_theme_color_override("font_color", MUTED)
+	_refresh_training_settings_for_body(false)
 	_refresh_summary()
 
 
@@ -474,10 +825,23 @@ func _refresh_summary() -> void:
 		summary_label.text = "No body selected."
 		return
 	var snapshot: Dictionary = current_draft.ui_snapshot()
-	summary_label.text = "Neural body contract preview: %d controls   •   %d body observations   •   %d slots" % [
+	var algorithm_name: String = (
+		algorithm_picker.get_item_text(algorithm_picker.selected)
+		if algorithm_picker != null and algorithm_picker.selected >= 0
+		else "PPO"
+	)
+	var reward_name: String = str(_selected_reward_cardset().get("display_name", "Custom rewards"))
+	summary_label.text = "Neural body contract: %d controls   •   %d observations   •   %d slots\nTraining: %s   •   hidden %d × %d   •   %d workers   •   %s Hz\nRewards: %s   •   %s" % [
 		int(snapshot.get("preview_control_count", 0)),
 		int(snapshot.get("preview_observation_count", 0)),
 		int(snapshot.get("slot_count", 0)),
+		algorithm_name,
+		int(round(hidden_width_input.value)),
+		int(round(hidden_depth_input.value)),
+		int(round(worker_count_input.value)),
+		String.num(control_rate_input.value, 0),
+		reward_name,
+		"starts immediately" if start_training_checkbox.button_pressed else "starts paused",
 	]
 
 
@@ -515,6 +879,7 @@ func _accept_current_build() -> void:
 		"runtime_body": runtime_body,
 		"body_interface": manifest.to_dictionary(),
 		"body_interface_signature": manifest.contract_signature,
+		"training": _training_request(),
 	})
 	hide()
 
