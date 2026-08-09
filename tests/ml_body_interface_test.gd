@@ -12,6 +12,7 @@ var assertion_count: int = 0
 func _init() -> void:
 	_test_generic_core_and_accept_boundary()
 	_test_creator_presets_are_editable_templates()
+	_test_creator_runtime_bridge()
 	_test_body_factories_keep_resource_backing()
 	_test_interface_signature_tracks_topology_not_tuning()
 	_test_regular_articulated_drone_limb()
@@ -353,6 +354,89 @@ func _test_creator_presets_are_editable_templates() -> void:
 		_expect(
 			limb_slot_count == 4 and generic_limb_count == 4,
 			"Four-Limb Walker preset expresses every leg only as an ordinary equipped GenericLimbDefinition"
+		)
+
+
+func _test_creator_runtime_bridge() -> void:
+	for preset_id: StringName in [
+		MLBodyPresetLibrary.DRONE_QUAD,
+		MLBodyPresetLibrary.DRONE_QUAD_GRABBER,
+		MLBodyPresetLibrary.FOUR_LIMB_WALKER,
+		MLBodyPresetLibrary.STATIONARY_TURRET,
+	]:
+		var draft: MLBodyBuildDraft = MLBodyPresetLibrary.instantiate_draft(preset_id)
+		var accepted_draft: MLBodyBuildDraft = draft.duplicate_editable() if draft != null else null
+		var creator_manifest: MLBodyInterfaceManifest = (
+			accepted_draft.accept_build() if accepted_draft != null else null
+		)
+		var runtime_body: Resource = MLBodyCreatorRuntimeFactory.runtime_from_draft(
+			preset_id,
+			draft
+		)
+		var runtime_manifest: MLBodyInterfaceManifest = (
+			MLBodyCreatorRuntimeFactory.runtime_manifest(runtime_body)
+			if runtime_body != null
+			else null
+		)
+		_expect(
+			draft != null
+			and creator_manifest != null
+			and runtime_body != null
+			and runtime_manifest != null
+			and creator_manifest.contract_signature == runtime_manifest.contract_signature,
+			"creator preset %s round-trips into the trainer runtime without changing its neural contract" % str(preset_id)
+		)
+
+	var drone_draft: MLBodyBuildDraft = MLBodyPresetLibrary.instantiate_draft(
+		MLBodyPresetLibrary.DRONE_QUAD
+	)
+	var battery_slot: MLBodySlotDefinition = null
+	if drone_draft != null:
+		for entry: Dictionary in drone_draft.slots:
+			var slot: MLBodySlotDefinition = entry.get("definition") as MLBodySlotDefinition
+			if slot != null and slot.slot_id == &"battery":
+				battery_slot = slot
+				break
+	var batteries: Array[Resource] = MLBodyPartCatalog.compatible_parts(battery_slot)
+	var industrial_battery_path: String = "res://resources/drones/batteries/industrial_battery.tres"
+	var industrial_battery: DroneBatteryDefinition = load(industrial_battery_path) as DroneBatteryDefinition
+	var catalogue_has_industrial_battery: bool = false
+	for battery_part: Resource in batteries:
+		if MLBodyPartContract.resource_source_path(battery_part) == industrial_battery_path:
+			catalogue_has_industrial_battery = true
+			break
+	_expect(
+		battery_slot != null
+		and batteries.size() > 1
+		and industrial_battery != null
+		and catalogue_has_industrial_battery,
+		"creator catalogue discovers multiple authored compatible battery resources instead of a hardcoded UI list"
+	)
+	if drone_draft != null and industrial_battery != null:
+		var equipped: bool = drone_draft.equip(&"battery", industrial_battery)
+		var changed_slots: Dictionary = {"battery": true}
+		var customized_runtime: DroneLoadout = MLBodyCreatorRuntimeFactory.runtime_from_draft(
+			MLBodyPresetLibrary.DRONE_QUAD,
+			drone_draft,
+			changed_slots
+		) as DroneLoadout
+		var accepted_custom_draft: MLBodyBuildDraft = drone_draft.duplicate_editable()
+		var custom_creator_manifest: MLBodyInterfaceManifest = accepted_custom_draft.accept_build()
+		var custom_runtime_manifest: MLBodyInterfaceManifest = (
+			MLBodyCreatorRuntimeFactory.runtime_manifest(customized_runtime)
+			if customized_runtime != null
+			else null
+		)
+		_expect(
+			equipped
+			and customized_runtime != null
+			and customized_runtime.battery != null
+			and MLBodyPartContract.resource_source_path(customized_runtime.battery)
+				== industrial_battery_path
+			and custom_creator_manifest != null
+			and custom_runtime_manifest != null
+			and custom_creator_manifest.contract_signature == custom_runtime_manifest.contract_signature,
+			"a creator part swap reaches the runtime loadout while preserving the accepted neural topology"
 		)
 
 

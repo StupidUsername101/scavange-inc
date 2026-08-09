@@ -109,10 +109,6 @@ const BOX_RESIZE_MAXIMUM_HEIGHT = 900.0
 const BOX_OPEN_ANIMATION_SECONDS = 0.18
 const GROUP_ACTIVITY_ANIMATION_INTERVAL_SECONDS = 0.30
 const GROUP_ACTIVITY_FRAMES = [".", "..", "...", "...."]
-const GROUP_ADD_MENU_NEW_BRANCH = 1
-const GROUP_ADD_MENU_SPAWN_EVALUATOR = 2
-const GROUP_ADD_MENU_NEW_FOUR_LIMB = 3
-const GROUP_ADD_MENU_NEW_TURRET = 4
 const DRONE_DISABLE_SOUND_DIRECTORY = "res://assets/sounds/hit_effects"
 const DRONE_DISABLE_SOUND_DEFAULT_VOLUME_DB = -16.0
 const DRONE_DISABLE_SOUND_MINIMUM_VOLUME_DB = -40.0
@@ -404,7 +400,7 @@ var status_label: Label
 var episode_status_label: Label
 var group_list: VBoxContainer
 var all_groups_pause_button: Button
-var group_add_menu: PopupMenu
+var model_body_creator: MLBodyCreatorPanel
 var worker_camera_split: VSplitContainer
 var evaluator_list: VBoxContainer
 var evaluator_summary_label: Label
@@ -2552,6 +2548,7 @@ func _build_interface() -> void:
 	_build_map_browser()
 	_build_branch_dialog()
 	_build_limb_branch_dialog()
+	_build_model_body_creator()
 	var camera_hint = Label.new()
 	camera_hint.anchor_left = 0.5
 	camera_hint.anchor_right = 0.5
@@ -3106,10 +3103,8 @@ func _build_worker_panel(layer: CanvasLayer) -> void:
 	var create_button = _button("+", true)
 	create_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_button.custom_minimum_size.y = 32.0
-	create_button.tooltip_text = "Add a worker group or evaluator\n\nCreate a fresh or branched drone group, add a four-limb PPO group, or open the Model Library to spawn an evaluation drone."
-	create_button.pressed.connect(func() -> void:
-		_open_group_add_menu(create_button)
-	)
+	create_button.tooltip_text = "Create a model body\n\nOpen the model-body creator, choose a body/Core and compatible serialized parts, then create a fresh worker group from that hardware."
+	create_button.pressed.connect(_open_model_body_creator)
 	group_toolbar.add_child(create_button)
 	all_groups_pause_button = _button("Ⅱ")
 	all_groups_pause_button.custom_minimum_size = Vector2(42.0, 32.0)
@@ -3117,18 +3112,6 @@ func _build_worker_panel(layer: CanvasLayer) -> void:
 	all_groups_pause_button.pressed.connect(_toggle_all_groups)
 	group_toolbar.add_child(all_groups_pause_button)
 
-	group_add_menu = PopupMenu.new()
-	group_add_menu.add_item("New branch group", GROUP_ADD_MENU_NEW_BRANCH)
-	group_add_menu.set_item_tooltip(0, "New training group\n\nCopies the selected live model into a child branch.\nWith no group selected, starts a fresh root model.")
-	group_add_menu.add_item("Spawn evaluation drone", GROUP_ADD_MENU_SPAWN_EVALUATOR)
-	group_add_menu.set_item_tooltip(1, "Spawn evaluation drone\n\nOpens the Model Library.\nChoose the exact saved model you want to watch without training it.")
-	group_add_menu.add_separator()
-	group_add_menu.add_item("New four-limb worker group", GROUP_ADD_MENU_NEW_FOUR_LIMB)
-	group_add_menu.set_item_tooltip(3, "New four-limb worker group\n\nSpawns physical four-limbed bodies in this same arena.\nTheir direct joint-and-grip outputs train independently from drone models.")
-	group_add_menu.add_item("New stationary turret worker group", GROUP_ADD_MENU_NEW_TURRET)
-	group_add_menu.set_item_tooltip(4, "New stationary turret worker group\n\nSpawns independently trained rotatable bases and gun barrels. Turrets use finite-speed projectiles, separate models, parts, rewards, and worker controls.")
-	group_add_menu.id_pressed.connect(_on_group_add_menu_id_pressed)
-	add_child(group_add_menu)
 
 	var groups_scroll = ScrollContainer.new()
 	groups_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -5089,12 +5072,12 @@ func _delivery_destination_metadata(group: Dictionary, destination: TrainingItem
 
 
 func _held_training_item_for_limb(body: FourLimbPhysicalBody3D, assigned_item: TrainingItem3D) -> TrainingItem3D:
-	if not is_instance_valid(body) or not is_instance_valid(body.physical_rig):
+	if not is_instance_valid(body):
 		return null
-	if is_instance_valid(assigned_item) and body.physical_rig.holds_instance_id(assigned_item.get_instance_id()):
+	if is_instance_valid(assigned_item) and body.holds_instance_id(assigned_item.get_instance_id()):
 		return assigned_item
 	for item: TrainingItem3D in training_items:
-		if is_instance_valid(item) and body.physical_rig.holds_instance_id(item.get_instance_id()):
+		if is_instance_valid(item) and body.holds_instance_id(item.get_instance_id()):
 			return item
 	return null
 
@@ -5818,8 +5801,7 @@ func _training_item_is_held_by_paused_limb(item: TrainingItem3D) -> bool:
 			var body: FourLimbPhysicalBody3D = worker.get("body") as FourLimbPhysicalBody3D
 			if (
 				is_instance_valid(body)
-				and is_instance_valid(body.physical_rig)
-				and body.physical_rig.holds_instance_id(item_instance_id)
+				and body.holds_instance_id(item_instance_id)
 			):
 				return true
 	return false
@@ -12323,38 +12305,77 @@ func _unique_group_name_for_kind(
 	return ""
 
 
-func _open_group_add_menu(anchor: Control) -> void:
-	if group_add_menu == null or anchor == null:
+func _build_model_body_creator() -> void:
+	model_body_creator = MLBodyCreatorPanel.new()
+	# Dynamically-created Window nodes default to visible. Hide before entering the scene tree so
+	# the creator only appears after the Worker Groups + button is pressed.
+	model_body_creator.visible = false
+	model_body_creator.create_requested.connect(_on_model_body_creator_requested)
+	add_child(model_body_creator)
+
+
+func _open_model_body_creator() -> void:
+	if model_body_creator == null or not is_instance_valid(model_body_creator):
 		return
-	var anchor_rect = anchor.get_global_rect()
-	group_add_menu.position = Vector2i(
-		int(round(anchor_rect.position.x)),
-		int(round(anchor_rect.end.y + 2.0))
-	)
-	group_add_menu.reset_size()
-	group_add_menu.popup()
+	model_body_creator.open_creator()
+	status_label.text = "Model Body Creator opened. Choose a body and equip its parts."
 
 
-func _on_group_add_menu_id_pressed(menu_id: int) -> void:
-	match menu_id:
-		GROUP_ADD_MENU_NEW_BRANCH:
-			_open_branch_dialog()
-		GROUP_ADD_MENU_SPAWN_EVALUATOR:
-			_open_model_browser_for_evaluator()
-		GROUP_ADD_MENU_NEW_FOUR_LIMB:
-			_open_limb_branch_dialog_for_group(-1)
-		GROUP_ADD_MENU_NEW_TURRET:
-			turret_ui.open_branch_dialog(-1)
+func _on_model_body_creator_requested(request: Dictionary) -> void:
+	var body_kind: String = str(request.get("body_kind", "")).strip_edges()
+	var requested_name: String = str(request.get("name", "Model worker group")).strip_edges()
+	var runtime_body: Resource = request.get("runtime_body") as Resource
+	if runtime_body == null:
+		status_label.text = "The creator returned no runtime body."
+		return
+	match body_kind:
+		"drone":
+			var drone_loadout: DroneLoadout = runtime_body as DroneLoadout
+			if drone_loadout == null:
+				status_label.text = "The accepted creator body is not a drone loadout."
+				return
+			var group: Dictionary = _create_worker_group(
+				false,
+				{},
+				requested_name,
+				-1,
+				0.0,
+				"ppo_clip",
+				{"drone_loadout": drone_loadout}
+			)
+			if not group.is_empty():
+				_set_group_active(int(group["group_id"]), true)
+				status_label.text = "%s created from the Model Body Creator." % str(group["name"])
+		"articulated_body":
+			var definition: FourLimbBodyDefinition = runtime_body as FourLimbBodyDefinition
+			if definition == null:
+				status_label.text = "The accepted creator body is not a four-limb definition."
+				return
+			_create_four_limb_worker_group(definition, requested_name)
+		"turret":
+			var turret_loadout: TurretLoadout = runtime_body as TurretLoadout
+			if turret_loadout == null:
+				status_label.text = "The accepted creator body is not a turret loadout."
+				return
+			_create_turret_worker_group(turret_loadout, requested_name)
+		_:
+			status_label.text = "Body kind '%s' is not connected to a worker trainer yet." % body_kind
 
 
-func _create_four_limb_worker_group() -> void:
+func _create_four_limb_worker_group(
+	initial_body_definition: FourLimbBodyDefinition = null,
+	requested_name: String = ""
+) -> void:
 	group_counter += 1
 	var hue = float(posmod(group_counter * 2371, 10000)) / 10000.0
+	var default_name: String = "Limb worker group %d" % group_counter
+	var group_name: String = requested_name if not requested_name.strip_edges().is_empty() else default_name
 	var group = limb_training.create_group(
 		group_counter,
-		_unique_group_name("Limb worker group %d" % group_counter, -1),
+		_unique_group_name(group_name, -1),
 		Color.from_hsv(hue, 0.68, 0.95),
-		FourLimbTrainingCoordinator.DEFAULT_WORKER_COUNT
+		FourLimbTrainingCoordinator.DEFAULT_WORKER_COUNT,
+		initial_body_definition
 	)
 	if group.is_empty():
 		status_label.text = limb_training.last_error
@@ -12376,14 +12397,20 @@ func _create_four_limb_worker_group() -> void:
 	status_label.text = "%s created in the shared arena." % str(group["name"])
 
 
-func _create_turret_worker_group() -> void:
+func _create_turret_worker_group(
+	initial_loadout: TurretLoadout = null,
+	requested_name: String = ""
+) -> void:
 	group_counter += 1
 	var hue = float(posmod(group_counter * 2371, 10000)) / 10000.0
+	var default_name: String = "Turret worker group %d" % group_counter
+	var group_name: String = requested_name if not requested_name.strip_edges().is_empty() else default_name
 	var group = turret_training.create_group(
 		group_counter,
-		_unique_group_name("Turret worker group %d" % group_counter, -1),
+		_unique_group_name(group_name, -1),
 		Color.from_hsv(hue, 0.68, 0.95),
-		1
+		1,
+		initial_loadout
 	)
 	if group.is_empty():
 		status_label.text = turret_training.last_error

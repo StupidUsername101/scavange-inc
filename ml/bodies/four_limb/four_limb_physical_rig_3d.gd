@@ -13,7 +13,7 @@ const MINIMUM_SUPPORT_NORMAL_UP_DOT := 0.20
 # No Skeleton3D, PhysicalBone3D, hidden gait controller, or virtual foot force is involved.
 #######################################################
 
-var owner_body: FourLimbPhysicalBody3D
+var owner_body: Node
 var definition: FourLimbBodyDefinition
 var core_bone: LimbSegment3D
 var attachment_feed: FourLimbAttachmentFeed
@@ -33,7 +33,7 @@ var rest_bindings_finalized := false
 
 
 func configure(
-	body: FourLimbPhysicalBody3D,
+	body: Node,
 	body_definition: FourLimbBodyDefinition
 ) -> void:
 	owner_body = body
@@ -101,7 +101,7 @@ func _stop_unstable_simulation() -> void:
 	neutralize_commands()
 	set_runtime_active(false)
 	if is_instance_valid(owner_body):
-		owner_body.last_failure_reason = "unstable_physics"
+		owner_body.set("last_failure_reason", "unstable_physics")
 
 
 func get_core_transform() -> Transform3D:

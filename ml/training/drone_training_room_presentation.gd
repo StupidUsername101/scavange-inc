@@ -426,6 +426,36 @@ static func scanner_panel_style(selected = false) -> StyleBoxFlat:
 	return style
 
 
+static func creator_panel_style(inner: bool = false) -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = (
+		Color(0.075, 0.050, 0.016, 0.985)
+		if inner
+		else Color(0.115, 0.070, 0.018, 0.99)
+	)
+	style.border_color = Color(0.96, 0.62, 0.16, 1.0)
+	style.set_border_width_all(2 if not inner else 1)
+	style.set_corner_radius_all(5)
+	style.content_margin_left = 12.0
+	style.content_margin_right = 12.0
+	style.content_margin_top = 10.0
+	style.content_margin_bottom = 10.0
+	return style
+
+
+static func creator_slot_panel_style() -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = Color(0.024, 0.078, 0.061, 0.96)
+	style.border_color = Color(0.70, 0.43, 0.12, 0.92)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(4)
+	style.content_margin_left = 10.0
+	style.content_margin_right = 10.0
+	style.content_margin_top = 8.0
+	style.content_margin_bottom = 8.0
+	return style
+
+
 static func reward_card_panel_style(signal_type: int) -> StyleBoxFlat:
 	var style = StyleBoxFlat.new()
 	match signal_type:

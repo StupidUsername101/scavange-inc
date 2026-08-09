@@ -81,6 +81,13 @@ func submit_raw_commands(commands: PackedFloat64Array) -> bool:
 	return physical_rig.submit_commands(commands)
 
 
+func holds_instance_id(instance_id: int) -> bool:
+	return (
+		is_instance_valid(physical_rig)
+		and physical_rig.holds_instance_id(instance_id)
+	)
+
+
 func get_ml_snapshot(
 	objective: Dictionary = {},
 	contact_snapshot: Dictionary = {}
