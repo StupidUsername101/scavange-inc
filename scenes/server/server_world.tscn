@@ -1,0 +1,49 @@
+[gd_scene format=3 uid="uid://d0olu8csdxxau"]
+
+[ext_resource type="Script" uid="uid://bb1aeenlcngac" path="res://scripts/drones/air_environment.gd" id="1_air"]
+[ext_resource type="PackedScene" path="res://scenes/server/server_drone.tscn" id="2_drone"]
+[ext_resource type="PackedScene" path="res://scenes/server/drone_crafting_station.tscn" id="3_crafting_station"]
+[ext_resource type="PackedScene" path="res://scenes/server/drone_inspection_station.tscn" id="4_inspection_station"]
+[ext_resource type="PackedScene" path="res://scenes/server/dev_warehouse.tscn" id="5_warehouse"]
+[ext_resource type="Resource" path="res://resources/drones/loadouts/maxed_follow_quad.tres" id="6_maxed_loadout"]
+[ext_resource type="PackedScene" path="res://scenes/server/dev_zoo.tscn" id="7_zoo"]
+[ext_resource type="Resource" path="res://resources/drones/loadouts/perfect_combat_follow_quad.tres" id="8_perfect_loadout"]
+[ext_resource type="PackedScene" path="res://scenes/server/body_part_shop_terminal.tscn" id="9_body_part_shop"]
+
+[sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_ground"]
+
+[node name="ServerWorld" type="Node3D" unique_id=922432823]
+
+[node name="AirEnvironment" type="Node3D" parent="." unique_id=591442164]
+script = ExtResource("1_air")
+
+[node name="Ground" type="StaticBody3D" parent="." unique_id=248901509]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground" unique_id=1308376672]
+shape = SubResource("WorldBoundaryShape3D_ground")
+
+[node name="DefaultDrone" parent="." unique_id=976199589 instance=ExtResource("2_drone")]
+position = Vector3(-1.25, 0.55, -2.5)
+
+[node name="MaxedFollowDrone" parent="." instance=ExtResource("2_drone")]
+position = Vector3(1.25, 0.55, -2.5)
+loadout = ExtResource("6_maxed_loadout")
+
+[node name="PerfectCombatFollowDrone" parent="." instance=ExtResource("2_drone")]
+position = Vector3(0, 0.6, -4.5)
+loadout = ExtResource("8_perfect_loadout")
+
+[node name="DroneCraftingStation" parent="." unique_id=790099393 instance=ExtResource("3_crafting_station")]
+position = Vector3(6, 0, 2)
+
+[node name="DroneInspectionStation" parent="." instance=ExtResource("4_inspection_station")]
+position = Vector3(-5, 0, -2)
+
+[node name="BodyPartShopTerminal" parent="." instance=ExtResource("9_body_part_shop")]
+position = Vector3(-5, 0, 2)
+
+[node name="DevWarehouse" parent="." instance=ExtResource("5_warehouse")]
+position = Vector3(0, 0, -12)
+
+[node name="DevZoo" parent="." instance=ExtResource("7_zoo")]
+position = Vector3(0, 0, 19)

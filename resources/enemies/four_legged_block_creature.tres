@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="EnemyDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/enemy_definition.gd" id="1_definition"]
+[ext_resource type="Resource" path="res://resources/enemies/behaviors/block_quadruped_hunter.tres" id="2_behavior"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/block_quadruped.tres" id="3_anatomy"]
+
+[resource]
+script = ExtResource("1_definition")
+display_name = "Four-Legged Block Creature"
+visual_color = Color(0.24, 0.31, 0.34, 1)
+faction_id = 2
+physical_visual_style = 1
+body_size = Vector3(2.15, 1.1, 2.75)
+collision_size = Vector3(1.75, 1.55, 2.2)
+body_center_height = 0.98
+max_health = 680.0
+target_height = 1.08
+behavior = ExtResource("2_behavior")
+physical_anatomy = ExtResource("3_anatomy")
+death_linger_seconds = 2.0
+respawn_delay_seconds = 2.5

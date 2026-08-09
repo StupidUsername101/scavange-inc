@@ -1,0 +1,23 @@
+[gd_resource type="Resource" script_class="FourLimbSlotDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://ml/bodies/four_limb/four_limb_slot_definition.gd" id="1"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/end_effectors/front_right_grip.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+slot_name = "Front Right"
+installed = true
+hip_offset = Vector3(0.4, 0, -0.5)
+rest_foot_offset = Vector3(1.05, -1.65, -1.15)
+bend_hint = Vector3(0.6917144638660746, 0.20751433915982237, -0.6917144638660746)
+upper_length = 1.05
+lower_length = 1.10
+segment_radius = 0.075
+segment_mass = 0.38
+maximum_health = 100.0
+end_effector = ExtResource("2")
+hip_swing_span_degrees = 68.0
+hip_elevation_upper_extension_degrees = 40.0
+hip_twist_span_degrees = 72.0
+knee_limit_lower_degrees = -8.0
+knee_limit_upper_degrees = 72.0

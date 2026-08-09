@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="DroneBatteryDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_battery_definition.gd" id="1_battery"]
+
+[resource]
+script = ExtResource("1_battery")
+display_name = "Calibrated Reference Cell"
+quality = 2
+visual_color = Color(0.12, 0.92, 0.82, 1)
+mass = 0.25
+energy_capacity_wh = 20.0
+nominal_power_output = 320.0
+maximum_power_output = 320.0
+body_size = Vector3(0.34, 0.11, 0.25)
+power_output_consistency = 1.0
+fluctuation_rate = 0.0
+spike_chance_per_second = 0.0
+minimum_spike_duration = 0.01
+maximum_spike_duration = 0.01
+minimum_drop_multiplier = 1.0
+maximum_drop_multiplier = 1.0
+minimum_boost_multiplier = 1.0
+maximum_boost_multiplier = 1.0
+surge_protection = 1.0
+extreme_spike_damage_coupling = 0.0

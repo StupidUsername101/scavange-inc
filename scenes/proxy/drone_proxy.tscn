@@ -1,0 +1,242 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/client/drone_proxy.gd" id="1_proxy"]
+
+[sub_resource type="StandardMaterial3D" id="Material_core"]
+albedo_color = Color(0.09, 0.11, 0.14, 1)
+metallic = 0.55
+roughness = 0.38
+
+[sub_resource type="StandardMaterial3D" id="Material_arm"]
+albedo_color = Color(0.18, 0.22, 0.27, 1)
+metallic = 0.35
+roughness = 0.48
+
+[sub_resource type="StandardMaterial3D" id="Material_rotor"]
+albedo_color = Color(0.84, 0.58, 0.12, 1)
+metallic = 0.25
+roughness = 0.32
+
+[sub_resource type="StandardMaterial3D" id="Material_battery"]
+albedo_color = Color(0.16, 0.42, 0.24, 1)
+metallic = 0.2
+roughness = 0.38
+
+[sub_resource type="StandardMaterial3D" id="Material_guide"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(0.1, 0.75, 1, 0.48)
+emission_enabled = true
+emission = Color(0.05, 0.45, 0.85, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_core"]
+material = SubResource("Material_core")
+size = Vector3(0.65, 0.24, 0.65)
+
+[sub_resource type="BoxMesh" id="Mesh_arm"]
+material = SubResource("Material_arm")
+size = Vector3(1.35, 0.055, 0.075)
+
+[sub_resource type="CylinderMesh" id="Mesh_hub"]
+material = SubResource("Material_rotor")
+top_radius = 0.055
+bottom_radius = 0.055
+height = 0.08
+radial_segments = 12
+
+[sub_resource type="BoxMesh" id="Mesh_blade"]
+material = SubResource("Material_rotor")
+size = Vector3(0.38, 0.018, 0.045)
+
+[sub_resource type="BoxMesh" id="Mesh_battery"]
+material = SubResource("Material_battery")
+size = Vector3(0.35, 0.12, 0.26)
+
+[sub_resource type="BoxMesh" id="Mesh_core_guide"]
+material = SubResource("Material_guide")
+size = Vector3(0.68, 0.025, 0.68)
+
+[sub_resource type="BoxMesh" id="Mesh_battery_guide"]
+material = SubResource("Material_guide")
+size = Vector3(0.37, 0.025, 0.28)
+
+[sub_resource type="CylinderMesh" id="Mesh_propeller_guide"]
+material = SubResource("Material_guide")
+top_radius = 0.18
+bottom_radius = 0.18
+height = 0.025
+radial_segments = 18
+
+[sub_resource type="BoxMesh" id="Mesh_ai_chip_guide"]
+material = SubResource("Material_guide")
+size = Vector3(0.2, 0.025, 0.15)
+
+[sub_resource type="BoxMesh" id="Mesh_attachment_guide"]
+material = SubResource("Material_guide")
+size = Vector3(0.24, 0.025, 0.3)
+
+[node name="DroneProxy" type="Node3D"]
+script = ExtResource("1_proxy")
+
+[node name="Core" type="MeshInstance3D" parent="."]
+mesh = SubResource("Mesh_core")
+
+[node name="Battery" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.18, 0)
+mesh = SubResource("Mesh_battery")
+
+[node name="EditGuides" type="Node3D" parent="."]
+
+[node name="CoreGuide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+position = Vector3(0, -0.13, 0)
+mesh = SubResource("Mesh_core_guide")
+
+[node name="BatteryGuide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+position = Vector3(0, 0.18, 0)
+mesh = SubResource("Mesh_battery_guide")
+
+[node name="Propeller0Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+position = Vector3(-0.58, 0.15, -0.58)
+mesh = SubResource("Mesh_propeller_guide")
+
+[node name="Propeller1Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+position = Vector3(0.58, 0.15, -0.58)
+mesh = SubResource("Mesh_propeller_guide")
+
+[node name="Propeller2Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+position = Vector3(-0.58, 0.15, 0.58)
+mesh = SubResource("Mesh_propeller_guide")
+
+[node name="Propeller3Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+position = Vector3(0.58, 0.15, 0.58)
+mesh = SubResource("Mesh_propeller_guide")
+
+[node name="AIChip0Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_ai_chip_guide")
+
+[node name="AIChip1Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_ai_chip_guide")
+
+[node name="AIChip2Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_ai_chip_guide")
+
+[node name="AIChip3Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_ai_chip_guide")
+
+[node name="AIChip4Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_ai_chip_guide")
+
+[node name="AIChip5Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_ai_chip_guide")
+
+[node name="AIChip6Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_ai_chip_guide")
+
+[node name="AIChip7Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_ai_chip_guide")
+
+[node name="Attachment0Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_attachment_guide")
+
+[node name="Attachment1Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_attachment_guide")
+
+[node name="Attachment2Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_attachment_guide")
+
+[node name="Attachment3Guide" type="MeshInstance3D" parent="EditGuides"]
+visible = false
+mesh = SubResource("Mesh_attachment_guide")
+
+[node name="ArmDiagonalA" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.08, 0)
+rotation = Vector3(0, 0.785398, 0)
+mesh = SubResource("Mesh_arm")
+
+[node name="ArmDiagonalB" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.08, 0)
+rotation = Vector3(0, -0.785398, 0)
+mesh = SubResource("Mesh_arm")
+
+[node name="Propellers" type="Node3D" parent="."]
+
+[node name="FrontLeft" type="Node3D" parent="Propellers"]
+position = Vector3(-0.58, 0.15, -0.58)
+
+[node name="Hub" type="MeshInstance3D" parent="Propellers/FrontLeft"]
+mesh = SubResource("Mesh_hub")
+
+[node name="Blade" type="MeshInstance3D" parent="Propellers/FrontLeft"]
+mesh = SubResource("Mesh_blade")
+
+[node name="FrontRight" type="Node3D" parent="Propellers"]
+position = Vector3(0.58, 0.15, -0.58)
+
+[node name="Hub" type="MeshInstance3D" parent="Propellers/FrontRight"]
+mesh = SubResource("Mesh_hub")
+
+[node name="Blade" type="MeshInstance3D" parent="Propellers/FrontRight"]
+mesh = SubResource("Mesh_blade")
+
+[node name="BackLeft" type="Node3D" parent="Propellers"]
+position = Vector3(-0.58, 0.15, 0.58)
+
+[node name="Hub" type="MeshInstance3D" parent="Propellers/BackLeft"]
+mesh = SubResource("Mesh_hub")
+
+[node name="Blade" type="MeshInstance3D" parent="Propellers/BackLeft"]
+mesh = SubResource("Mesh_blade")
+
+[node name="BackRight" type="Node3D" parent="Propellers"]
+position = Vector3(0.58, 0.15, 0.58)
+
+[node name="Hub" type="MeshInstance3D" parent="Propellers/BackRight"]
+mesh = SubResource("Mesh_hub")
+
+[node name="Blade" type="MeshInstance3D" parent="Propellers/BackRight"]
+mesh = SubResource("Mesh_blade")
+
+[node name="AIChips" type="Node3D" parent="."]
+
+[node name="Slot0" type="Node3D" parent="AIChips"]
+
+[node name="Slot1" type="Node3D" parent="AIChips"]
+
+[node name="Slot2" type="Node3D" parent="AIChips"]
+
+[node name="Slot3" type="Node3D" parent="AIChips"]
+
+[node name="Slot4" type="Node3D" parent="AIChips"]
+
+[node name="Slot5" type="Node3D" parent="AIChips"]
+
+[node name="Slot6" type="Node3D" parent="AIChips"]
+
+[node name="Slot7" type="Node3D" parent="AIChips"]
+
+[node name="Attachments" type="Node3D" parent="."]
+
+[node name="Slot0" type="Node3D" parent="Attachments"]
+
+[node name="Slot1" type="Node3D" parent="Attachments"]
+
+[node name="Slot2" type="Node3D" parent="Attachments"]
+
+[node name="Slot3" type="Node3D" parent="Attachments"]

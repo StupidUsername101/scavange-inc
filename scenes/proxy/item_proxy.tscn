@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://d4e145caq32eg"]
+
+[ext_resource type="Script" uid="uid://clse8p736tv4b" path="res://scripts/client/item_proxy.gd" id="1_xo1ew"]
+
+[node name="ItemProxy" type="Node3D" unique_id=1101737762]
+script = ExtResource("1_xo1ew")

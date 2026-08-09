@@ -1,0 +1,270 @@
+extends SceneTree
+
+#######################################################
+# Focused room-level regression coverage for the per-group target migration. The room-default
+# target is evaluator/template state, not an extra worker target, and every runtime worker group
+# must own an independent handler before target dispatch.
+#######################################################
+
+var failure_count: int = 0
+var assertion_count: int = 0
+
+
+func _init() -> void:
+	_test_default_target_visual_only_tracks_evaluators()
+	_test_runtime_group_dispatch_repairs_missing_handler()
+	_test_drone_target_height_is_literal()
+	_test_limb_target_marker_is_support_surface()
+	_test_turret_group_publishes_live_runtime_members()
+	_test_fresh_drone_model_architecture_reaches_constructor()
+	_test_library_windows_start_hidden()
+
+	if failure_count == 0:
+		print("Training target room integration tests passed: %d assertions" % assertion_count)
+		quit(0)
+	else:
+		push_error("Training target room integration tests failed: %d/%d assertions" % [
+			failure_count,
+			assertion_count,
+		])
+		quit(1)
+
+
+func _new_room_with_target_visuals() -> DroneTrainingRoom:
+	var room: DroneTrainingRoom = DroneTrainingRoom.new()
+	room._initialize_targeting()
+	room._build_target()
+	return room
+
+
+
+func _test_library_windows_start_hidden() -> void:
+	var room: DroneTrainingRoom = DroneTrainingRoom.new()
+	room.turret_ui.configure(room, room.turret_training, room.turret_model_registry)
+	room._build_model_browser()
+	room._build_limb_model_browser()
+	room.turret_ui.build_model_browser()
+	room._build_map_browser()
+	_expect(not room.model_browser.visible, "drone model library starts hidden")
+	_expect(not room.limb_model_browser.visible, "four-limb model library starts hidden")
+	_expect(not room.turret_ui.model_browser.visible, "turret model library starts hidden")
+	_expect(not room.map_browser.visible, "training map library starts hidden")
+	room.free()
+
+func _test_default_target_visual_only_tracks_evaluators() -> void:
+	var room: DroneTrainingRoom = _new_room_with_target_visuals()
+	_expect(not room.target_marker.visible, "room-default marker starts hidden without an evaluator")
+	_expect(not room.target_radius_ring.visible, "room-default radius starts hidden without an evaluator")
+
+	room.trials.append({"mode": "algorithm_training", "group_id": 1})
+	room._refresh_default_target_visual_visibility()
+	_expect(not room.target_marker.visible, "ordinary training workers do not reveal the room-default target")
+
+	var evaluator_trial: Dictionary = {"mode": "evaluation", "group_id": -1}
+	room.trials.append(evaluator_trial)
+	room._refresh_default_target_visual_visibility()
+	_expect(room.target_marker.visible, "an evaluator reveals the room-default target it actually consumes")
+	_expect(room.target_radius_ring.visible, "an evaluator reveals the matching room-default radius")
+
+	room.trials.erase(evaluator_trial)
+	room._refresh_default_target_visual_visibility()
+	_expect(not room.target_marker.visible, "removing the last evaluator hides the room-default target again")
+	room.free()
+
+
+func _test_runtime_group_dispatch_repairs_missing_handler() -> void:
+	var room: DroneTrainingRoom = _new_room_with_target_visuals()
+	var group: Dictionary = {
+		"group_id": 17,
+		"color": Color("65d8ff"),
+		"parent_group_id": -1,
+	}
+	room.worker_groups.append(group)
+	_expect(not room.target_handlers_by_group_id.has(17), "test begins with a deliberately missing group handler")
+
+	var targets: Dictionary = room._resolved_targets_by_group()
+	var handler: TrainingTargetHandler = room._target_handler_for_group_id(17)
+	_expect(handler != null, "dispatch repairs a missing runtime group handler")
+	_expect(handler != room.default_target_handler, "repaired worker groups never alias the room-default handler")
+	_expect(targets.has(17), "repaired group receives an explicit routed target entry")
+	_expect(
+		room._target_group_id_for_trial({"mode": "algorithm_training", "group_id": 17}) == 17,
+		"training trials keep their explicit target-owner group id"
+	)
+	_expect(
+		room._target_group_id_for_trial({"mode": "evaluation", "group_id": 17}) == -1,
+		"evaluation trials stay on the room-default evaluator target"
+	)
+	room.free()
+
+
+func _test_limb_target_marker_is_support_surface() -> void:
+	var room: DroneTrainingRoom = _new_room_with_target_visuals()
+	var group: Dictionary = {
+		"group_id": 23,
+		"color": Color("ffb45e"),
+		"parent_group_id": -1,
+	}
+	room.limb_training.groups.append(group)
+	room.limb_training.groups_by_id[23] = group
+	var handler: TrainingTargetHandler = room._ensure_group_target_handler(23, group["color"])
+	var path_system: TrainingPathTargetSystem = handler.path_system()
+	_expect(
+		path_system != null
+		and is_zero_approx(path_system.base_height_m)
+		and path_system.random_height_range_m.is_equal_approx(Vector2.ZERO),
+		"fresh four-limb targets start on the ground and represent the actual support/destination surface instead of inheriting drone height assumptions"
+	)
+	room.limb_training.groups.erase(group)
+	room.limb_training.groups_by_id.erase(23)
+	room.free()
+
+
+func _test_turret_group_publishes_live_runtime_members() -> void:
+	var room: DroneTrainingRoom = _new_room_with_target_visuals()
+	var drone_group: Dictionary = {
+		"group_id": 31,
+		"name": "Runtime targets",
+		"color": Color.WHITE,
+		"parent_group_id": -1,
+	}
+	room.worker_groups.append(drone_group)
+	room.worker_groups_by_id[31] = drone_group
+	var turret_group: Dictionary = {
+		"group_id": 32,
+		"name": "Targeting turret",
+		"color": Color("ff9f5a"),
+		"parent_group_id": -1,
+		"target_worker_group_id": 31,
+		"workers": [],
+	}
+	room.turret_training.groups.append(turret_group)
+	room.turret_training.groups_by_id[32] = turret_group
+	var first_body: Node3D = Node3D.new()
+	var second_body: Node3D = Node3D.new()
+	room.add_child(first_body)
+	room.add_child(second_body)
+	first_body.global_position = Vector3(1.0, 2.0, 3.0)
+	second_body.global_position = Vector3(4.0, 2.0, 5.0)
+	var first_adapter: TrainingCombatantAdapter = TrainingCombatantAdapter.new(
+		first_body, &"drone", 3101, 31, 0, 1
+	)
+	var second_adapter: TrainingCombatantAdapter = TrainingCombatantAdapter.new(
+		second_body, &"drone", 3102, 31, 1, 1
+	)
+	room.training_entity_spatial_hash.register_entity(
+		first_adapter.spatial_key(), first_body, first_adapter.entity_kind,
+		first_adapter.entity_id, first_adapter.metadata()
+	)
+	room.training_entity_spatial_hash.register_entity(
+		second_adapter.spatial_key(), second_body, second_adapter.entity_kind,
+		second_adapter.entity_id, second_adapter.metadata()
+	)
+	var handler: TrainingTargetHandler = room._ensure_group_target_handler(32, turret_group["color"])
+	room._sync_turret_group_target_registration(32, handler)
+	var registered: TrainingRegisteredTargetSystem = handler.registered_system()
+	handler.resolve(room._target_context_for_group(32))
+	var selected: Dictionary = handler.selected_candidate
+	_expect(
+		registered != null and registered.target_count() == 2,
+		"a selected turret target group publishes each live worker as an individual runtime candidate"
+	)
+	_expect(
+		str(selected.get("target_kind", "")) == "combat_objective"
+		and int((selected.get("metadata", {}) as Dictionary).get("target_worker_group_id", -1)) == 31
+		and [3101, 3102].has(int((selected.get("metadata", {}) as Dictionary).get("target_entity_id", 0))),
+		"the registered target handler resolves directly to a real member of the selected group instead of a moving centroid surrogate"
+	)
+	var locked_entity_id: int = int((selected.get("metadata", {}) as Dictionary).get("target_entity_id", 0))
+	room._push_turret_resolved_target_identity(32, handler)
+	_expect(
+		int(turret_group.get("resolved_target_entity_id", -1)) == locked_entity_id,
+		"the target handler pushes its exact selected worker into the turret policy immediately instead of waiting for a later coordinator tick"
+	)
+	second_body.global_position = Vector3(0.1, 2.0, 0.1)
+	room.training_entity_spatial_hash.update_entity(second_adapter.spatial_key())
+	room._sync_turret_group_target_registration(32, handler)
+	handler.resolve(room._target_context_for_group(32))
+	_expect(
+		int((handler.selected_candidate.get("metadata", {}) as Dictionary).get("target_entity_id", 0)) == locked_entity_id,
+		"an explicit turret target stays locked to the same live worker instead of thrashing when a sibling becomes slightly more attractive"
+	)
+	second_adapter.body = null
+	room._sync_turret_group_target_registration(32, handler)
+	_expect(
+		registered.target_count() == 1,
+		"dead or removed target members disappear from the runtime candidate provider immediately"
+	)
+	room.free()
+
+
+func _test_fresh_drone_model_architecture_reaches_constructor() -> void:
+	var ppo: DroneTrainingAlgorithm = DroneTrainingRoom._create_group_training_algorithm(
+		"ppo_clip",
+		{"config": {"hidden_layer_width": 96, "hidden_layer_depth": 3}},
+		70001
+	)
+	var ppo_architecture: Dictionary = ppo.network_architecture() if ppo != null else {}
+	_expect(
+		ppo != null
+		and int(ppo_architecture.get("hidden_layer_width", -1)) == 96
+		and int(ppo_architecture.get("hidden_layer_depth", -1)) == 3,
+		"fresh drone PPO group creation applies requested hidden width/depth before the immutable network is constructed"
+	)
+	var sac: DroneTrainingAlgorithm = DroneTrainingRoom._create_group_training_algorithm(
+		"sac_her_maze",
+		{"config": {"hidden_layer_width": 192, "hidden_layer_depth": 4}},
+		70002
+	)
+	var sac_architecture: Dictionary = sac.network_architecture() if sac != null else {}
+	_expect(
+		sac != null
+		and int(sac_architecture.get("hidden_layer_width", -1)) == 192
+		and int(sac_architecture.get("hidden_layer_depth", -1)) == 4,
+		"fresh drone SAC-HER group creation applies requested hidden width/depth before the immutable network is constructed"
+	)
+	var malformed: DroneTrainingAlgorithm = DroneTrainingRoom._create_group_training_algorithm(
+		"ppo_clip",
+		{"config": "broken"},
+		70003
+	)
+	var malformed_architecture: Dictionary = malformed.network_architecture() if malformed != null else {}
+	_expect(
+		malformed != null
+		and int(malformed_architecture.get("hidden_layer_width", -1)) == DronePPOActorCritic.HIDDEN_SIZE
+		and int(malformed_architecture.get("hidden_layer_depth", -1)) == DronePPOActorCritic.HIDDEN_LAYER_COUNT,
+		"malformed startup config falls back to the default architecture instead of throwing during group creation"
+	)
+
+
+func _test_drone_target_height_is_literal() -> void:
+	var room: DroneTrainingRoom = _new_room_with_target_visuals()
+	var group: Dictionary = {
+		"group_id": 19,
+		"color": Color("65d8ff"),
+		"parent_group_id": -1,
+	}
+	room.worker_groups.append(group)
+	var handler: TrainingTargetHandler = room._ensure_group_target_handler(19, group["color"])
+	var path_system: TrainingPathTargetSystem = handler.path_system()
+	_expect(
+		path_system != null and is_equal_approx(path_system.base_height_m, DroneTrainingRoom.TARGET_START.y),
+		"fresh drone targets start at the authored five-metre navigation height"
+	)
+	path_system.set_base_height(15.0)
+	handler.resolve(room._target_context_for_group(19))
+	var resolved: Dictionary = room._resolved_target_for_group_id(19)
+	var resolved_position: Vector3 = resolved.get("position_world", Vector3.ZERO)
+	_expect(
+		is_equal_approx(resolved_position.y, 15.0),
+		"a drone target height of 15 m routes exactly Y=15 m with no hidden hover offset"
+	)
+	room.free()
+
+
+func _expect(condition: bool, message: String) -> void:
+	assertion_count += 1
+	if condition:
+		return
+	failure_count += 1
+	push_error(message)

@@ -1,0 +1,121 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_crafting_station.gd" id="1_station"]
+[ext_resource type="Script" path="res://scripts/drones/drone_station_button.gd" id="2_button"]
+[ext_resource type="Script" path="res://scripts/drones/drone_crafting_station_surface.gd" id="3_surface"]
+
+[sub_resource type="BoxShape3D" id="BoxShape_area"]
+size = Vector3(3, 2.2, 2.4)
+
+[sub_resource type="BoxShape3D" id="BoxShape_base"]
+size = Vector3(3, 0.18, 2.3)
+
+[sub_resource type="BoxShape3D" id="BoxShape_pedestal"]
+size = Vector3(1.18, 0.55, 0.92)
+
+[sub_resource type="CylinderShape3D" id="CylinderShape_deck"]
+radius = 1.08
+height = 0.1
+
+[sub_resource type="BoxShape3D" id="BoxShape_console"]
+size = Vector3(3, 0.16, 0.58)
+
+[sub_resource type="BoxShape3D" id="BoxShape_button"]
+size = Vector3(0.34, 0.16, 0.24)
+
+[node name="DroneCraftingStation" type="Node3D"]
+script = ExtResource("1_station")
+
+[node name="EditArea" type="Area3D" parent="."]
+position = Vector3(0, 1.42, 0.12)
+collision_layer = 0
+collision_mask = 1
+monitoring = true
+monitorable = false
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="EditArea"]
+shape = SubResource("BoxShape_area")
+
+[node name="EditAnchor" type="Marker3D" parent="."]
+position = Vector3(0, 1.43, 0.12)
+
+[node name="PartOutput" type="Marker3D" parent="."]
+position = Vector3(-1.1, 1.02, -1.72)
+
+[node name="WorkbenchCollision" type="StaticBody3D" parent="."]
+script = ExtResource("3_surface")
+
+[node name="Base" type="CollisionShape3D" parent="WorkbenchCollision"]
+position = Vector3(0, 0.22, 0)
+shape = SubResource("BoxShape_base")
+
+[node name="Pedestal" type="CollisionShape3D" parent="WorkbenchCollision"]
+position = Vector3(0, 0.55, 0.18)
+shape = SubResource("BoxShape_pedestal")
+
+[node name="HologramDeck" type="CollisionShape3D" parent="WorkbenchCollision"]
+position = Vector3(0, 0.87, 0.12)
+shape = SubResource("CylinderShape_deck")
+
+[node name="ControlStrip" type="CollisionShape3D" parent="WorkbenchCollision"]
+position = Vector3(0, 0.82, -1.35)
+rotation = Vector3(-0.139626, 0, 0)
+shape = SubResource("BoxShape_console")
+
+[node name="Buttons" type="Node3D" parent="."]
+
+[node name="Accept" type="StaticBody3D" parent="Buttons"]
+position = Vector3(-1.15, 0.94, -1.36)
+script = ExtResource("2_button")
+action = &"accept"
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Buttons/Accept"]
+shape = SubResource("BoxShape_button")
+
+[node name="Abort" type="StaticBody3D" parent="Buttons"]
+position = Vector3(-0.77, 0.94, -1.36)
+script = ExtResource("2_button")
+action = &"abort"
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Buttons/Abort"]
+shape = SubResource("BoxShape_button")
+
+[node name="RotateXNegative" type="StaticBody3D" parent="Buttons"]
+position = Vector3(-0.29, 0.94, -1.36)
+script = ExtResource("2_button")
+action = &"rotate_x_negative"
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Buttons/RotateXNegative"]
+shape = SubResource("BoxShape_button")
+
+[node name="RotateXPositive" type="StaticBody3D" parent="Buttons"]
+position = Vector3(0.09, 0.94, -1.36)
+script = ExtResource("2_button")
+action = &"rotate_x_positive"
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Buttons/RotateXPositive"]
+shape = SubResource("BoxShape_button")
+
+[node name="RotateYNegative" type="StaticBody3D" parent="Buttons"]
+position = Vector3(0.47, 0.94, -1.36)
+script = ExtResource("2_button")
+action = &"rotate_y_negative"
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Buttons/RotateYNegative"]
+shape = SubResource("BoxShape_button")
+
+[node name="RotateYPositive" type="StaticBody3D" parent="Buttons"]
+position = Vector3(0.85, 0.94, -1.36)
+script = ExtResource("2_button")
+action = &"rotate_y_positive"
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Buttons/RotateYPositive"]
+shape = SubResource("BoxShape_button")
+
+[node name="ResetRotation" type="StaticBody3D" parent="Buttons"]
+position = Vector3(1.23, 0.94, -1.36)
+script = ExtResource("2_button")
+action = &"reset_rotation"
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Buttons/ResetRotation"]
+shape = SubResource("BoxShape_button")

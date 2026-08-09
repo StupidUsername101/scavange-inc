@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="DronePropellerDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_propeller_definition.gd" id="1_propeller"]
+
+[resource]
+script = ExtResource("1_propeller")
+display_name = "Bent Salvage Propeller"
+quality = 0
+visual_color = Color(0.5, 0.25, 0.09, 1)
+mass = 0.22
+max_power_draw = 25.0
+rotor_radius = 0.15
+aerodynamic_efficiency = 0.52
+reaction_torque_per_newton = 0.019
+axial_flow_response = 0.8
+minimum_axial_flow_factor = 0.48
+maximum_axial_flow_factor = 1.28

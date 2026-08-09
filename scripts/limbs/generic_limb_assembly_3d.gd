@@ -1,0 +1,212 @@
+class_name GenericLimbAssembly3D
+extends Node3D
+
+#######################################################
+# Reusable model-forge limb host. Any RigidBody3D—including ServerDrone—can own arbitrary
+# generic limb definitions and their end effectors without depending on the four-limb ML adapter.
+# The assembly is top-level so independently simulated limb bodies do not inherit the host's
+# transform a second time merely because the assembly is kept as a lifecycle child of that host.
+#######################################################
+
+var host_body: RigidBody3D
+var owner_model: Node
+var limb_definitions: Array[GenericLimbDefinition] = []
+var limbs: Array[GenericLimb3D] = []
+var controller: LimbsController3D
+var collision_layer_value := 4
+var collision_mask_value := 1
+var exclude_self_collision := true
+var built := false
+
+
+func _init() -> void:
+	top_level = true
+
+
+func configure(
+	new_host_body: RigidBody3D,
+	new_definitions: Array[GenericLimbDefinition],
+	new_owner_model: Node = null,
+	new_collision_layer: int = 4,
+	new_collision_mask: int = 1,
+	new_exclude_self_collision: bool = true
+) -> void:
+	host_body = new_host_body
+	owner_model = new_owner_model if new_owner_model != null else new_host_body
+	limb_definitions = new_definitions
+	collision_layer_value = maxi(new_collision_layer, 0)
+	collision_mask_value = maxi(new_collision_mask, 0)
+	exclude_self_collision = new_exclude_self_collision
+	if is_inside_tree():
+		_build()
+
+
+func _ready() -> void:
+	_build()
+
+
+func _build() -> void:
+	if built or not is_instance_valid(host_body):
+		return
+	built = true
+	for index in range(limb_definitions.size()):
+		var definition := limb_definitions[index]
+		if definition == null:
+			continue
+		var limb := GenericLimb3D.new()
+		limb.name = "GenericLimb%02d" % index
+		add_child(limb)
+		limb.configure(
+			owner_model,
+			host_body,
+			definition,
+			index,
+			Color.from_hsv(fmod(float(index) * 0.173, 1.0), 0.65, 0.95),
+			collision_layer_value,
+			collision_mask_value
+		)
+		limbs.append(limb)
+	_configure_self_collision_exceptions()
+	controller = LimbsController3D.new()
+	controller.name = "LimbsController"
+	add_child(controller)
+	controller.configure(host_body, limbs)
+
+
+func _configure_self_collision_exceptions() -> void:
+	if not exclude_self_collision or not is_instance_valid(host_body):
+		return
+	var bodies: Array[PhysicsBody3D] = []
+	bodies.append(host_body)
+	for limb: GenericLimb3D in limbs:
+		if not is_instance_valid(limb):
+			continue
+		for segment: LimbSegment3D in limb.segments:
+			if is_instance_valid(segment):
+				bodies.append(segment)
+	for first_index in range(bodies.size()):
+		var first := bodies[first_index]
+		for second_index in range(first_index + 1, bodies.size()):
+			var second := bodies[second_index]
+			first.add_collision_exception_with(second)
+			second.add_collision_exception_with(first)
+
+
+func submit_commands(commands: PackedFloat64Array) -> bool:
+	return is_instance_valid(controller) and controller.submit_commands(commands)
+
+
+func neutralize() -> void:
+	if is_instance_valid(controller):
+		controller.neutralize()
+
+
+func set_runtime_active(value: bool, release_grip_on_deactivate: bool = true) -> void:
+	for limb: GenericLimb3D in limbs:
+		if is_instance_valid(limb):
+			limb.set_runtime_active(value)
+			if not value and release_grip_on_deactivate and is_instance_valid(limb.end_effector):
+				limb.end_effector.release_grip()
+	if is_instance_valid(controller):
+		controller.set_active(value)
+
+
+func release_grips() -> void:
+	for limb: GenericLimb3D in limbs:
+		if is_instance_valid(limb) and is_instance_valid(limb.end_effector):
+			limb.end_effector.release_grip()
+
+
+func reset_to_rest() -> void:
+	neutralize()
+	release_grips()
+	for limb: GenericLimb3D in limbs:
+		if is_instance_valid(limb):
+			limb.reset_to_rest()
+
+
+func required_action_count() -> int:
+	return LimbsController3D.required_action_count_for_limbs(limbs)
+
+
+func holds_instance_id(instance_id: int) -> bool:
+	if instance_id <= 0:
+		return false
+	for limb: GenericLimb3D in limbs:
+		if (
+			is_instance_valid(limb)
+			and is_instance_valid(limb.end_effector)
+			and limb.end_effector.holds_instance_id(instance_id)
+		):
+			return true
+	return false
+
+
+func state_snapshot() -> Dictionary:
+	var limb_states: Array[Dictionary] = []
+	for limb: GenericLimb3D in limbs:
+		if not is_instance_valid(limb):
+			continue
+		var segment_states: Array[Dictionary] = []
+		for segment: LimbSegment3D in limb.segments:
+			if not is_instance_valid(segment):
+				continue
+			segment_states.append({
+				"segment_index": segment.segment_index,
+				"transform_world": segment.global_transform,
+				"linear_velocity_world": segment.linear_velocity,
+				"angular_velocity_world": segment.angular_velocity,
+				"mass": segment.mass,
+				"health_ratio": segment.health_ratio(),
+				"actuator_effectiveness": segment.actuator_effectiveness,
+			})
+		var joint_states: Array[Dictionary] = []
+		for record: Dictionary in limb.joint_records:
+			var joint_definition := record.get("definition") as LimbJointDefinition
+			joint_states.append({
+				"joint_index": int(record.get("joint_index", joint_states.size())),
+				"action_indices": (
+					joint_definition.action_indices
+					if joint_definition != null
+					else Vector3i(-1, -1, -1)
+				),
+				"current_angles": record.get("current_angles", Vector3.ZERO),
+				"target_angles": record.get("target_angles", Vector3.ZERO),
+				"target_error_angles": record.get("target_error_angles", Vector3.ZERO),
+				"rest_error_angles": record.get("rest_error_angles", Vector3.ZERO),
+				"applied_torque_joint": record.get("applied_torque_joint", Vector3.ZERO),
+				"passive_torque_joint": record.get("passive_torque_joint", Vector3.ZERO),
+				"active_torque_joint": record.get("active_torque_joint", Vector3.ZERO),
+				"limit_torque_joint": record.get("limit_torque_joint", Vector3.ZERO),
+			})
+		limb_states.append({
+			"slot_index": limb.slot_index,
+			"limb_name": limb.definition.limb_name if limb.definition != null else "",
+			"installed": limb.definition.installed if limb.definition != null else false,
+			"end_effector": limb.end_effector_snapshot(),
+			"segment_count": limb.segments.size(),
+			"segments": segment_states,
+			"joints": joint_states,
+		})
+	return {
+		"host_instance_id": host_body.get_instance_id() if is_instance_valid(host_body) else 0,
+		"host_transform_world": (
+			host_body.global_transform if is_instance_valid(host_body) else Transform3D.IDENTITY
+		),
+		"host_linear_velocity_world": (
+			host_body.linear_velocity if is_instance_valid(host_body) else Vector3.ZERO
+		),
+		"host_angular_velocity_world": (
+			host_body.angular_velocity if is_instance_valid(host_body) else Vector3.ZERO
+		),
+		"action_count": required_action_count(),
+		"mapping_valid": (
+			controller.action_mapping_valid if is_instance_valid(controller) else false
+		),
+		"commands": (
+			controller.desired_commands.duplicate()
+			if is_instance_valid(controller)
+			else PackedFloat64Array()
+		),
+		"limbs": limb_states,
+	}

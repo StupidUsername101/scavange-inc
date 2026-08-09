@@ -1,0 +1,107 @@
+[gd_scene load_steps=9 format=3 uid="uid://d7ua7jmq566a"]
+
+[ext_resource type="Script" uid="uid://c6ucunx40lk05" path="res://scripts/client/player_proxy.gd" id="1_435og"]
+[ext_resource type="Script" path="res://scripts/client/player_inventory_hud.gd" id="2_hud"]
+[ext_resource type="Script" path="res://scripts/client/ocular_vision_controller.gd" id="3_vision"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_torso"]
+size = Vector3(0.7, 0.85, 0.4)
+
+[sub_resource type="SphereMesh" id="SphereMesh_head"]
+radius = 0.28
+height = 0.56
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_arm"]
+radius = 0.11
+height = 0.82
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_leg"]
+radius = 0.14
+height = 0.88
+
+[sub_resource type="SphereMesh" id="SphereMesh_edit_aim_hit"]
+radius = 0.065
+height = 0.13
+radial_segments = 12
+rings = 6
+
+[node name="PlayerProxy" type="Node3D" unique_id=2005150977]
+script = ExtResource("1_435og")
+
+[node name="HeadPivot" type="Node3D" parent="." unique_id=2080418166]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55575824, -0.42391348)
+
+[node name="Camera3D" type="Camera3D" parent="HeadPivot" unique_id=786003596]
+
+[node name="BodyVisual" type="Node3D" parent="."]
+
+[node name="Torso" type="MeshInstance3D" parent="BodyVisual"]
+position = Vector3(0, 0.15, 0)
+mesh = SubResource("BoxMesh_torso")
+
+[node name="Head" type="MeshInstance3D" parent="BodyVisual"]
+position = Vector3(0, 0.78, 0)
+mesh = SubResource("SphereMesh_head")
+
+[node name="LeftArm" type="MeshInstance3D" parent="BodyVisual"]
+position = Vector3(-0.47, 0.16, 0)
+mesh = SubResource("CapsuleMesh_arm")
+
+[node name="RightArm" type="MeshInstance3D" parent="BodyVisual"]
+position = Vector3(0.47, 0.16, 0)
+mesh = SubResource("CapsuleMesh_arm")
+
+[node name="LeftLeg" type="MeshInstance3D" parent="BodyVisual"]
+position = Vector3(-0.2, -0.62, 0)
+mesh = SubResource("CapsuleMesh_leg")
+
+[node name="RightLeg" type="MeshInstance3D" parent="BodyVisual"]
+position = Vector3(0.2, -0.62, 0)
+mesh = SubResource("CapsuleMesh_leg")
+
+[node name="BackpackMount" type="Node3D" parent="BodyVisual"]
+position = Vector3(0, 0.18, 0.32)
+
+[node name="EyesMount" type="Node3D" parent="BodyVisual"]
+position = Vector3(0, 0.8, -0.265)
+
+[node name="HeldItemMount" type="Node3D" parent="BodyVisual"]
+position = Vector3(0.43, 0.05, -0.32)
+rotation = Vector3(0.04, -0.08, -0.08)
+
+[node name="FirstPersonItemMount" type="Node3D" parent="HeadPivot/Camera3D"]
+position = Vector3(0.22, -0.2, -0.58)
+rotation = Vector3(-0.025, -0.025, 0.0)
+
+[node name="EditAimHit" type="MeshInstance3D" parent="."]
+cast_shadow = 0
+mesh = SubResource("SphereMesh_edit_aim_hit")
+
+[node name="PlayerInterface" type="CanvasLayer" parent="."]
+layer = 50
+
+[node name="PlayerHud" type="Control" parent="PlayerInterface"]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("2_hud")
+
+[node name="OcularPostProcess" type="CanvasLayer" parent="."]
+layer = 100
+
+[node name="VisionEffect" type="ColorRect" parent="OcularPostProcess"]
+material = null
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+script = ExtResource("3_vision")

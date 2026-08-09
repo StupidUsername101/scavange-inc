@@ -1,0 +1,39 @@
+[gd_resource type="Resource" script_class="RopeDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ropes/rope_definition.gd" id="1_rope"]
+
+[sub_resource type="CapsuleShape3D" id="SpoolShape"]
+radius = 0.27
+height = 0.58
+
+[resource]
+script = ExtResource("1_rope")
+display_name = "24 m Powered Tow Cable"
+overall_size = 1.14
+mass = 1.75
+collision_shape = SubResource("SpoolShape")
+shape_rotation_x = 90.0
+rope_color = Color(0.12, 0.16, 0.18, 1)
+visual_effect = 1
+effect_color = Color(1, 0.56, 0.08, 1)
+effect_speed = 5.0
+maximum_length = 24.0
+placement_slack = 0.42
+diameter = 0.046
+target_segment_length = 0.46
+maximum_simulation_segments = 64
+visual_repeat_length = 0.3
+visual_section_contrast = 0.12
+linear_density_kg_per_m = 0.16
+breaking_force_newtons = 5200.0
+stretch_stiffness_newtons_per_m = 8000.0
+tension_damping = 145.0
+force_response = 14.0
+tension_slew_rate_newtons_per_second = 1800.0
+motion_damping = 0.99
+surface_friction = 0.42
+solver_iterations = 8
+break_grace_seconds = 0.2
+transfers_power = true
+maximum_transfer_power_w = 420.0
+transfer_efficiency = 0.92

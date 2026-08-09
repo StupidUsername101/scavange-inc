@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="EyeDefinition" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/items/eye_definition.gd" id="1_definition"]
+[ext_resource type="PackedScene" path="res://scenes/items/visuals/salvaged_oculars_visual.tscn" id="2_visual"]
+[ext_resource type="Shader" path="res://shaders/salvaged_oculars.gdshader" id="3_shader"]
+
+[sub_resource type="BoxShape3D" id="Shape"]
+size = Vector3(0.3, 0.14, 0.11)
+
+[resource]
+script = ExtResource("1_definition")
+display_name = "Salvaged Ocular Pair"
+inventory_code = "JNK"
+mass = 0.24
+visual_scene = ExtResource("2_visual")
+collision_shape = SubResource("Shape")
+equipped_visual_scene = ExtResource("2_visual")
+visual_acuity = 0.58
+contrast_sensitivity = 0.52
+light_sensitivity = 0.82
+optical_quality = 0.32
+lens_distortion = 0.028
+motion_smear = 0.65
+vision_shader = ExtResource("3_shader")

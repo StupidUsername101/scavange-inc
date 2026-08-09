@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="DroneBatteryDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_battery_definition.gd" id="1_battery"]
+
+[resource]
+script = ExtResource("1_battery")
+display_name = "Budget Power Brick"
+quality = 0
+visual_color = Color(0.38, 0.34, 0.12, 1)
+mass = 0.52
+energy_capacity_wh = 0.72
+nominal_power_output = 68.0
+maximum_power_output = 92.0
+body_size = Vector3(0.4, 0.16, 0.3)
+power_output_consistency = 0.74
+fluctuation_rate = 2.4
+spike_chance_per_second = 0.28
+minimum_spike_duration = 0.18
+maximum_spike_duration = 0.72
+minimum_drop_multiplier = 0.18
+maximum_drop_multiplier = 0.58
+minimum_boost_multiplier = 1.25
+maximum_boost_multiplier = 1.62
+surge_protection = 0.04
+extreme_spike_damage_coupling = 0.095

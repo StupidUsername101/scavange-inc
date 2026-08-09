@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="GenericLimbDefinition" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/limbs/generic_limb_definition.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/limbs/limb_segment_definition.gd" id="2"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/generic_limb_template/upper_segment.tres" id="3"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/generic_limb_template/lower_segment.tres" id="4"]
+
+[resource]
+script = ExtResource("1")
+limb_name = "Walker Limb Template"
+installed = true
+segments = Array[ExtResource("2")]([ExtResource("3"), ExtResource("4")])

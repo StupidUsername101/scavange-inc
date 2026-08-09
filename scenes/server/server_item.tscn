@@ -1,0 +1,9 @@
+[gd_scene format=3 uid="uid://dixn6vwgy1gg3"]
+
+[ext_resource type="Script" uid="uid://ucr6kj3knf2x" path="res://scripts/server/server_item.gd" id="1_okosj"]
+
+[node name="ServerItem" type="RigidBody3D" unique_id=1722303000]
+mass = 4.991
+script = ExtResource("1_okosj")
+
+[node name="ItemCollision" type="CollisionShape3D" parent="." unique_id=897067608]

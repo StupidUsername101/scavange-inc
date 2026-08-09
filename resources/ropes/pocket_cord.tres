@@ -1,0 +1,34 @@
+[gd_resource type="Resource" script_class="RopeDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ropes/rope_definition.gd" id="1_rope"]
+
+[sub_resource type="CapsuleShape3D" id="SpoolShape"]
+radius = 0.22
+height = 0.48
+
+[resource]
+script = ExtResource("1_rope")
+display_name = "4 m Pocket Cord"
+overall_size = 0.78
+mass = 0.34
+collision_shape = SubResource("SpoolShape")
+shape_rotation_x = 90.0
+rope_color = Color(0.64, 0.48, 0.28, 1)
+effect_color = Color(1, 0.66, 0.24, 1)
+maximum_length = 4.0
+placement_slack = 0.18
+diameter = 0.018
+target_segment_length = 0.28
+maximum_simulation_segments = 24
+visual_repeat_length = 0.16
+visual_section_contrast = 0.1
+linear_density_kg_per_m = 0.035
+breaking_force_newtons = 450.0
+stretch_stiffness_newtons_per_m = 900.0
+tension_damping = 32.0
+force_response = 8.0
+tension_slew_rate_newtons_per_second = 600.0
+motion_damping = 0.982
+surface_friction = 0.48
+solver_iterations = 5
+break_grace_seconds = 0.11

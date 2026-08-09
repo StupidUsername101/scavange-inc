@@ -1,0 +1,1564 @@
+class_name FourLimbPPOTrainer
+extends RefCounted
+
+const CHECKPOINT_SCHEMA_VERSION = 5
+const ALGORITHM_ID = "four_limb_ppo"
+# The rollout feature audit is diagnostic only and performs pairwise correlations plus a
+# standardized-rank estimate in GDScript. On the 420-value limb tensor, running that O(F^2*N)
+# work every ten PPO updates needlessly competes with physics on CPU-heavy training rooms. Keep
+# the first audit and occasional health checks without turning diagnostics into a frame-time tax.
+const FEATURE_AUDIT_UPDATE_INTERVAL = 50
+const FEATURE_AUDIT_MAXIMUM_SAMPLES = 64
+const INITIAL_LOG_PROBABILITY_TOLERANCE = 0.00000001
+const PPO_KL_STOP_MULTIPLIER = 1.5
+const DEFAULT_CONFIG = {
+	"learning_rate": 0.0003,
+	"gamma": 0.995,
+	"gae_lambda": 0.95,
+	"clip_range": 0.2,
+	"entropy_coefficient": 0.008,
+	"value_coefficient": 0.5,
+	"maximum_gradient_norm": 0.5,
+	"rollout_size": 512,
+	"minimum_update_transitions": 64,
+	"epochs": 4,
+	"batch_size": 64,
+	"target_kl": 0.03,
+	"control_interval_seconds": 0.05,
+	"discount_reference_interval_seconds": 0.05,
+	"hidden_layer_width": FourLimbPPOActorCritic.HIDDEN_SIZE,
+	"hidden_layer_depth": FourLimbPPOActorCritic.HIDDEN_LAYER_COUNT,
+}
+
+#######################################################
+# PPO trainer for the physical four-limb body. It follows the drone trainer's split-policy
+# architecture: a stable behavior policy controls bodies while a detached optimizer policy
+# learns on a low-priority thread. Bodies keep simulating during optimization; physical steps
+# are counted but stale on-policy samples are discarded until the learned policy is installed.
+#######################################################
+
+var config = DEFAULT_CONFIG.duplicate(true)
+var actor_critic: FourLimbPPOActorCritic
+var behavior_actor_critic: FourLimbPPOActorCritic
+var rollout: Array[Dictionary] = []
+var rollout_policy_revision = -1
+var rollout_start_network_state: Dictionary = {}
+var skipped_transitions_during_update = 0
+var random_seed = 7340033
+var shuffle_rng = RandomNumberGenerator.new()
+var update_count = 0
+var behavior_policy_update = 0
+var optimizer_policy_revision = 0
+var environment_steps = 0
+var completed_episodes = 0
+var last_metrics: Dictionary = {}
+var best_episode_score = -INF
+# Training performance only nominates a frozen producer-policy candidate. The designated
+# best network changes only after an external deterministic fixed-seed evaluation.
+var best_network_state: Dictionary = {}
+var candidate_nomination_score = -INF
+var candidate_sequence = 0
+var pending_candidate: Dictionary = {}
+var candidate_network_state: Dictionary = {}
+var candidate_training_summary: Dictionary = {}
+var promoted_training_summary: Dictionary = {}
+var best_evaluation: Dictionary = {}
+var best_evaluation_contract: Dictionary = {}
+var evaluation_contract_template: Dictionary = {}
+var pending_promoted_candidate: Dictionary = {}
+var last_error = ""
+var background_thread: Thread
+var background_job: FourLimbPPOUpdateJob
+var background_result_discarded = false
+var background_started_usec = 0
+var last_background_update_ms = 0.0
+
+
+func _init(
+	seed_value: int = 7340033,
+	network_config: Dictionary = {}
+) -> void:
+	random_seed = seed_value
+	for key: String in ["hidden_layer_width", "hidden_layer_depth"]:
+		if network_config.has(key):
+			config[key] = network_config[key]
+	_sanitize_config()
+	actor_critic = FourLimbPPOActorCritic.new(
+		random_seed,
+		int(config["hidden_layer_width"]),
+		int(config["hidden_layer_depth"])
+	)
+	behavior_actor_critic = FourLimbPPOActorCritic.new(
+		random_seed + 500003,
+		int(config["hidden_layer_width"]),
+		int(config["hidden_layer_depth"])
+	)
+	_sync_behavior_from_optimizer(true)
+	shuffle_rng.seed = random_seed + 11
+
+
+func algorithm_display_name() -> String:
+	return "Clipped PPO + GAE"
+
+
+func config_values() -> Dictionary:
+	return config.duplicate(true)
+
+
+func configuration_controls() -> Array[Dictionary]:
+	var controls: Array[Dictionary] = [
+		{"key": "learning_rate", "title": "Learning rate", "minimum": 0.000001, "maximum": 0.01, "step": 0.000001, "tooltip": "Adam learning rate used by both actor and critic."},
+		{"key": "gamma", "title": "Discount factor", "minimum": 0.90, "maximum": 1.0, "step": 0.001, "tooltip": "How strongly future reward contributes to the current update."},
+		{"key": "gae_lambda", "title": "GAE lambda", "minimum": 0.0, "maximum": 1.0, "step": 0.01, "tooltip": "Bias/variance balance for generalized advantage estimation."},
+		{"key": "clip_range", "title": "PPO clip range", "minimum": 0.01, "maximum": 0.5, "step": 0.01, "tooltip": "Maximum trusted policy-ratio change per PPO update."},
+		{"key": "entropy_coefficient", "title": "Exploration strength", "minimum": 0.0, "maximum": 0.1, "step": 0.0005, "tooltip": "Regularizes the Gaussian policy before tanh squashes it into physical joint/grip commands. This is latent-policy entropy, not literal actuator-command entropy."},
+		{"key": "value_coefficient", "title": "Value loss weight", "minimum": 0.0, "maximum": 2.0, "step": 0.01, "tooltip": "Relative critic-loss weight."},
+		{"key": "maximum_gradient_norm", "title": "Maximum gradient norm", "minimum": 0.0, "maximum": 10.0, "step": 0.05, "tooltip": "Gradient clipping threshold used to limit unstable updates."},
+		{"key": "rollout_size", "title": "Rollout transitions", "minimum": 64.0, "maximum": 4096.0, "step": 64.0, "integer": true, "tooltip": "Transitions collected before a normal background PPO update starts."},
+		{"key": "minimum_update_transitions", "title": "Minimum partial update", "minimum": 16.0, "maximum": 1024.0, "step": 16.0, "integer": true, "tooltip": "Smallest rollout accepted for a forced partial update at an episode boundary."},
+		{"key": "epochs", "title": "PPO epochs", "minimum": 1.0, "maximum": 16.0, "step": 1.0, "integer": true, "tooltip": "Number of optimization passes over each detached rollout."},
+		{"key": "batch_size", "title": "Minibatch size", "minimum": 16.0, "maximum": 512.0, "step": 16.0, "integer": true, "tooltip": "Samples processed before each optimizer step."},
+		{"key": "target_kl", "title": "Target KL", "minimum": 0.0, "maximum": 0.2, "step": 0.001, "tooltip": "Stops an update early when the policy moves too far from the behavior policy."},
+	]
+	return controls
+
+
+func set_config_value(key: String, value: Variant) -> bool:
+	last_error = ""
+	if key == "hidden_layer_width" or key == "hidden_layer_depth":
+		last_error = "Network depth and width are fixed when the model is created."
+		return false
+	if not config.has(key):
+		last_error = "Unknown four-limb PPO setting '%s'." % key
+		return false
+	config[key] = value
+	_sanitize_config()
+	return true
+
+
+func network_architecture() -> Dictionary:
+	return {
+		"hidden_layer_width": actor_critic.hidden_size,
+		"hidden_layer_depth": actor_critic.hidden_layer_count,
+	}
+
+
+func sample_action(observation: Dictionary, deterministic: bool = false) -> Dictionary:
+	var sample = behavior_actor_critic.sample_action(observation, deterministic)
+	if not sample.is_empty():
+		sample["policy_revision"] = behavior_policy_update
+	return sample
+
+
+func sample_runtime_action(observation: Dictionary, deterministic: bool = false) -> Dictionary:
+	var sample = behavior_actor_critic.sample_runtime_action(observation, deterministic)
+	if not sample.is_empty():
+		sample["policy_revision"] = behavior_policy_update
+	return sample
+
+
+func sample_validated_runtime_action(
+	observation: Dictionary,
+	deterministic: bool = false
+) -> Dictionary:
+	var sample = behavior_actor_critic.sample_validated_runtime_action(observation, deterministic)
+	if not sample.is_empty():
+		sample["policy_revision"] = behavior_policy_update
+	return sample
+
+
+func sample_validated_training_action(
+	observation: Dictionary,
+	deterministic: bool = false
+) -> Dictionary:
+	var sample: Dictionary = behavior_actor_critic.sample_validated_training_action(
+		observation,
+		deterministic
+	)
+	if not sample.is_empty():
+		sample["policy_revision"] = behavior_policy_update
+	return sample
+
+
+func stable_policy_state() -> Dictionary:
+	return behavior_actor_critic.to_state().duplicate(true)
+
+
+func perturb_policy(relative_strength: float, perturbation_seed: int) -> bool:
+	last_error = ""
+	shutdown_background_update()
+	discard_incomplete_rollout()
+	var strength = clampf(relative_strength, 0.0, 0.5)
+	if strength <= 0.0:
+		return true
+	if not actor_critic.perturb_weights(strength, perturbation_seed):
+		last_error = "The four-limb branch variation produced an invalid network."
+		return false
+	optimizer_policy_revision = maxi(optimizer_policy_revision + 1, update_count + 1)
+	if not _sync_behavior_from_optimizer(false):
+		last_error = "The varied four-limb behavior policy could not be synchronized."
+		return false
+	reset_episode_statistics()
+	last_metrics.clear()
+	rollout.clear()
+	rollout_policy_revision = -1
+	rollout_start_network_state.clear()
+	return true
+
+
+func add_transition(
+	worker_id: int,
+	action_sample: Dictionary,
+	reward: float,
+	next_observation: Dictionary,
+	terminated: bool,
+	truncated: bool,
+	delta_seconds: float = 0.05,
+	precomputed_next_input: PackedFloat64Array = PackedFloat64Array(),
+	precomputed_next_value: float = NAN
+) -> bool:
+	last_error = ""
+	if (
+		action_sample.is_empty()
+		or not is_finite(reward)
+		or not (action_sample.get("actor_input") is PackedFloat64Array)
+		or not (action_sample.get("critic_input") is PackedFloat64Array)
+		or not (action_sample.get("latent_action") is PackedFloat64Array)
+		or not (action_sample.get("commands") is PackedFloat64Array)
+		or not (action_sample.get("policy_revision") is int or action_sample.get("policy_revision") is float)
+	):
+		last_error = "The four-limb PPO transition contains an invalid sample or reward."
+		return false
+	if terminated and truncated:
+		last_error = "A four-limb PPO transition cannot be both terminated and truncated."
+		return false
+	_sanitize_config()
+	# PPO is on-policy. Bodies may keep moving while the detached optimizer works, but samples
+	# produced during that time still belong to the policy that generated the previous rollout.
+	# Dropping those samples is preferable to silently training a newer network against stale
+	# log probabilities.
+	if has_background_update():
+		skipped_transitions_during_update += 1
+		# This physical interaction still happened even though on-policy PPO must discard it.
+		# Keep environment-step telemetry/checkpoint counters comparable with drone PPO.
+		environment_steps += 1
+		return true
+	var sample_policy_revision: int = RLTrainingMath.finite_int_or(
+		action_sample.get("policy_revision", -1),
+		-1
+	)
+	if sample_policy_revision != behavior_policy_update:
+		if sample_policy_revision >= 0 and sample_policy_revision < behavior_policy_update:
+			# A held action can straddle the frame where a completed detached optimizer is
+			# adopted. Its full physical interval still has to be settled by the coordinator,
+			# but PPO must not put the stale behavior sample into the new rollout.
+			skipped_transitions_during_update += 1
+			environment_steps += 1
+			return true
+		last_error = (
+			"The four-limb PPO transition belongs to behavior policy %d, but policy %d is active."
+			% [sample_policy_revision, behavior_policy_update]
+		)
+		return false
+	if rollout.is_empty():
+		rollout_policy_revision = sample_policy_revision
+		rollout_start_network_state = behavior_actor_critic.to_runtime_state()
+	elif rollout_policy_revision != sample_policy_revision:
+		last_error = "The four-limb PPO rollout mixed multiple behavior-policy revisions."
+		return false
+	# At a normal control boundary, the next action sample already encoded this exact observation.
+	# Reuse that immutable tensor. Full/runtime callers may also supply its critic value; the live limb
+	# training path deliberately leaves both critic values for the detached optimizer to reconstruct.
+	var deferred_critic: bool = RLTrainingMath.bool_or(
+		action_sample.get("critic_value_deferred", false),
+		false
+	)
+	var next_input: PackedFloat64Array = precomputed_next_input
+	var next_value: float = 0.0
+	# Natural terminal states never bootstrap. Accepting them without a fabricated successor
+	# preserves the final failure transition even when the body is already destroyed. For the live
+	# training hot path, critic evaluation is deliberately deferred to the detached optimizer.
+	if not terminated:
+		if next_input.is_empty():
+			next_input = FourLimbMLFeatureEncoder.encode(next_observation)
+		if not FourLimbMLFeatureEncoder.is_normalized(next_input):
+			last_error = "The four-limb PPO transition contains an invalid next observation tensor."
+			return false
+		if is_finite(precomputed_next_value):
+			next_value = precomputed_next_value
+		elif not deferred_critic:
+			next_value = behavior_actor_critic.value_from_input(next_input)
+		else:
+			next_value = NAN
+	var actor_input: PackedFloat64Array = action_sample.get(
+		"actor_input", PackedFloat64Array()
+	)
+	var critic_input: PackedFloat64Array = action_sample.get(
+		"critic_input", PackedFloat64Array()
+	)
+	var latent_action: PackedFloat64Array = action_sample.get(
+		"latent_action", PackedFloat64Array()
+	)
+	var commands: PackedFloat64Array = action_sample.get(
+		"commands", PackedFloat64Array()
+	)
+	var old_log_probability: float = RLTrainingMath.finite_float_or(
+		action_sample.get("log_probability", NAN),
+		NAN
+	)
+	var old_value: float = RLTrainingMath.finite_float_or(
+		action_sample.get("value", NAN),
+		NAN
+	)
+	var safe_delta_seconds = maxf(delta_seconds, 0.000001)
+	if (
+		actor_input.size() != FourLimbMLFeatureEncoder.FEATURE_COUNT
+		or critic_input.size() != FourLimbMLFeatureEncoder.FEATURE_COUNT
+		or latent_action.size() != FourLimbMLAction.ACTION_COUNT
+		or commands.size() != FourLimbMLAction.ACTION_COUNT
+		or not FourLimbMLFeatureEncoder.is_normalized(actor_input)
+		or not FourLimbMLFeatureEncoder.is_normalized(critic_input)
+		or not _finite_packed(latent_action)
+		or not _normalized_packed(commands)
+		or not is_finite(old_log_probability)
+		or (not deferred_critic and not is_finite(old_value))
+		or (not deferred_critic and not is_finite(next_value))
+		or not is_finite(delta_seconds)
+		or delta_seconds <= 0.0
+	):
+		last_error = "The four-limb PPO transition contains invalid or non-finite tensors."
+		return false
+	rollout.append({
+		"worker_id": worker_id,
+		"actor_input": actor_input,
+		"critic_input": critic_input,
+		"latent_action": latent_action,
+		"commands": commands,
+		"old_log_probability": old_log_probability,
+		"value": old_value,
+		"reward": reward,
+		"next_value": next_value,
+		"next_critic_input": next_input,
+		"critic_value_deferred": deferred_critic,
+		"terminated": terminated,
+		"truncated": truncated,
+		"policy_revision": sample_policy_revision,
+		"delta_seconds": safe_delta_seconds,
+	})
+	environment_steps += 1
+	return true
+
+
+func can_update(force_partial: bool = false) -> bool:
+	_sanitize_config()
+	if has_background_update():
+		return false
+	var required = (
+		int(config["minimum_update_transitions"])
+		if force_partial
+		else int(config["rollout_size"])
+	)
+	return rollout.size() >= maxi(required, 1)
+
+
+func discard_incomplete_rollout() -> void:
+	# Worker-count changes and manual episode restarts must not leave fragments from the
+	# previous physical population in the next on-policy PPO batch. This mirrors the drone
+	# trainer contract used by the shared room.
+	rollout.clear()
+	rollout_policy_revision = -1
+	rollout_start_network_state.clear()
+
+
+func update_if_ready(force_partial: bool = false) -> Dictionary:
+	last_error = ""
+	if not can_update(force_partial):
+		return {}
+	_consider_rollout_candidate(rollout, rollout_start_network_state)
+	if (
+		rollout_start_network_state.is_empty()
+		or not actor_critic.load_state(rollout_start_network_state)
+	):
+		last_error = "The four-limb rollout has no compatible producer-policy snapshot."
+		return {"error": last_error}
+	if not _hydrate_deferred_critic_values():
+		last_error = "The four-limb rollout could not reconstruct producer-critic values."
+		return {"error": last_error}
+	var identity = _policy_divergence_metrics(rollout)
+	var initial_log_probability_error_max = float(identity.get(
+		"maximum_log_probability_error",
+		INF
+	))
+	var initial_approximate_kl = float(identity.get("approximate_kl", INF))
+	var initial_clip_fraction = float(identity.get("clip_fraction", 1.0))
+	if (
+		not is_finite(initial_log_probability_error_max)
+		or initial_log_probability_error_max > INITIAL_LOG_PROBABILITY_TOLERANCE
+	):
+		last_error = (
+			"The four-limb rollout does not match producer policy revision %d "
+			+ "(maximum log-probability error %.12f)."
+		) % [rollout_policy_revision, initial_log_probability_error_max]
+		return {"error": last_error}
+	var advantages_and_returns = _calculate_advantages_and_returns()
+	if advantages_and_returns.is_empty():
+		last_error = "The four-limb rollout could not be converted into learning targets."
+		return {"error": last_error}
+	var advantages: PackedFloat64Array = advantages_and_returns["advantages"]
+	var returns: PackedFloat64Array = advantages_and_returns["returns"]
+	var value_predictions: PackedFloat64Array = advantages_and_returns["value_predictions"]
+	var reward_statistics = _rollout_reward_statistics()
+	var return_statistics = RLTrainingMath.finite_statistics(returns)
+	var value_prediction_statistics = RLTrainingMath.finite_statistics(value_predictions)
+	var explained_variance = RLTrainingMath.explained_variance(returns, value_predictions)
+	var advantage_statistics = _packed_statistics(advantages)
+	var feature_audit = _feature_audit_for_rollout(rollout)
+	var actor_parameters_before = actor_critic.actor.parameters.duplicate()
+	var log_standard_deviation_before = actor_critic.log_standard_deviation.duplicate()
+	_normalize(advantages)
+	var indices: Array[int] = []
+	for index in range(rollout.size()):
+		indices.append(index)
+	var actor_loss_total = 0.0
+	var value_loss_total = 0.0
+	var entropy_total = 0.0
+	var kl_total = 0.0
+	var clip_total = 0.0
+	var sample_total = 0
+	var actor_gradient_total = 0.0
+	var critic_gradient_total = 0.0
+	var completed_epochs = 0
+	var optimizer_batch_count = 0
+	var maximum_minibatch_kl = 0.0
+	var early_stopped = false
+	var early_stop_reason = ""
+	for _epoch in range(int(config["epochs"])):
+		_shuffle_indices(indices)
+		var epoch_kl_total = 0.0
+		var epoch_sample_total = 0
+		var batch_start = 0
+		while batch_start < indices.size():
+			var batch_end = mini(batch_start + int(config["batch_size"]), indices.size())
+			actor_critic.clear_actor_gradients()
+			actor_critic.clear_critic_gradients()
+			for shuffled_index in range(batch_start, batch_end):
+				var transition_index = indices[shuffled_index]
+				var transition = rollout[transition_index]
+				var actor_metrics = actor_critic.accumulate_actor_gradient(
+					transition["actor_input"],
+					transition["latent_action"],
+					float(transition["old_log_probability"]),
+					advantages[transition_index],
+					float(config["clip_range"]),
+					float(config["entropy_coefficient"])
+				)
+				var critic_metrics = actor_critic.accumulate_critic_gradient(
+					transition["critic_input"],
+					returns[transition_index],
+					float(config["value_coefficient"])
+				)
+				var sample_kl = float(actor_metrics.get("approximate_kl", 0.0))
+				actor_loss_total += float(actor_metrics.get("actor_loss", 0.0))
+				value_loss_total += float(critic_metrics.get("value_loss", 0.0))
+				entropy_total += float(actor_metrics.get("entropy", 0.0))
+				kl_total += sample_kl
+				clip_total += float(actor_metrics.get("clip_fraction", 0.0))
+				epoch_kl_total += sample_kl
+				sample_total += 1
+				epoch_sample_total += 1
+			var batch_count = maxi(batch_end - batch_start, 1)
+			actor_gradient_total += actor_critic.apply_actor_gradients(
+				float(config["learning_rate"]),
+				batch_count,
+				float(config["maximum_gradient_norm"])
+			)
+			critic_gradient_total += actor_critic.apply_critic_gradients(
+				float(config["learning_rate"]),
+				batch_count,
+				float(config["maximum_gradient_norm"])
+			)
+			optimizer_batch_count += 1
+			var post_batch_divergence = _policy_divergence_metrics(rollout)
+			var post_batch_kl = float(post_batch_divergence.get("approximate_kl", INF))
+			if is_finite(post_batch_kl):
+				maximum_minibatch_kl = maxf(maximum_minibatch_kl, post_batch_kl)
+			batch_start = batch_end
+			if (
+				float(config["target_kl"]) > 0.0
+				and is_finite(post_batch_kl)
+				and post_batch_kl > float(config["target_kl"]) * PPO_KL_STOP_MULTIPLIER
+			):
+				early_stopped = true
+				early_stop_reason = "target_kl"
+				break
+		completed_epochs += 1
+		if early_stopped:
+			break
+		var epoch_mean_kl = epoch_kl_total / float(maxi(epoch_sample_total, 1))
+		if (
+			float(config["target_kl"]) > 0.0
+			and epoch_mean_kl > float(config["target_kl"]) * 1.5
+		):
+			early_stopped = true
+			early_stop_reason = "target_kl_epoch"
+			break
+	update_count += 1
+	optimizer_policy_revision = maxi(optimizer_policy_revision + 1, update_count)
+	var command_diagnostics = RLTrainingMath.bounded_command_diagnostics(
+		rollout,
+		-1.0,
+		1.0
+	)
+	last_metrics = {
+		"update_count": update_count,
+		"environment_steps": environment_steps,
+		"rollout_samples": rollout.size(),
+		"actor_loss": actor_loss_total / float(maxi(sample_total, 1)),
+		"value_loss": value_loss_total / float(maxi(sample_total, 1)),
+		"entropy": entropy_total / float(maxi(sample_total, 1)),
+		"approximate_kl": kl_total / float(maxi(sample_total, 1)),
+		"clip_fraction": clip_total / float(maxi(sample_total, 1)),
+		"actor_gradient_norm_mean_pre_clip": actor_gradient_total / float(maxi(optimizer_batch_count, 1)),
+		"critic_gradient_norm_mean_pre_clip": critic_gradient_total / float(maxi(optimizer_batch_count, 1)),
+		"actor_gradient_norm": actor_gradient_total / float(maxi(optimizer_batch_count, 1)),
+		"critic_gradient_norm": critic_gradient_total / float(maxi(optimizer_batch_count, 1)),
+		"initial_log_probability_error_max": initial_log_probability_error_max,
+		"initial_approximate_kl": initial_approximate_kl,
+		"initial_clip_fraction": initial_clip_fraction,
+		"maximum_minibatch_kl": maximum_minibatch_kl,
+		"completed_minibatches": optimizer_batch_count,
+		"completed_epochs": completed_epochs,
+		"early_stopped": early_stopped,
+		"early_stop_reason": early_stop_reason,
+		"exploration": actor_critic.exploration_statistics(),
+		"command_diagnostics": command_diagnostics,
+		"rollout_policy_revision": rollout_policy_revision,
+		"optimizer_policy_revision": optimizer_policy_revision,
+		"skipped_transitions_during_update": skipped_transitions_during_update,
+		"mean_transition_reward": float(reward_statistics.get("mean", 0.0)),
+		"transition_reward_standard_deviation": float(reward_statistics.get("standard_deviation", 0.0)),
+		"advantage_standard_deviation_before_normalization": float(advantage_statistics.get("standard_deviation", 0.0)),
+		"return_statistics": return_statistics,
+		"value_prediction_statistics": value_prediction_statistics,
+		"explained_variance": explained_variance,
+		"policy_parameter_delta_rms": _policy_parameter_delta_rms(
+			actor_parameters_before,
+			log_standard_deviation_before
+		),
+		"feature_audit": feature_audit,
+		"effective_gamma": RLTrainingMath.discount_for_delta(
+			float(config["gamma"]),
+			float(config.get("control_interval_seconds", 0.05)),
+			float(config.get("discount_reference_interval_seconds", 0.05))
+		),
+		"discount_half_life_seconds": RLTrainingMath.half_life_seconds(
+			float(config["gamma"]),
+			float(config.get("discount_reference_interval_seconds", 0.05))
+		),
+		"discount_reference_interval_seconds": float(config.get(
+			"discount_reference_interval_seconds", 0.05
+		)),
+		"gae_lambda_time_semantics": "real_time_reference_interval",
+	}
+	rollout.clear()
+	rollout_start_network_state.clear()
+	skipped_transitions_during_update = 0
+	_sync_behavior_from_optimizer(true)
+	rollout_policy_revision = -1
+	return last_metrics.duplicate(true)
+
+
+func begin_background_update(force_partial: bool = false) -> bool:
+	last_error = ""
+	if not can_update(force_partial):
+		return false
+	var detached_rollout: Array[Dictionary] = rollout
+	var detached_policy_revision = rollout_policy_revision
+	var detached_network_state = rollout_start_network_state
+	if detached_network_state.is_empty():
+		last_error = "The rollout has no producer-policy snapshot."
+		return false
+	_consider_rollout_candidate(detached_rollout, detached_network_state)
+	var feature_audit_value: Variant = last_metrics.get("feature_audit", {})
+	var last_feature_audit: Dictionary = (
+		(feature_audit_value as Dictionary).duplicate(true)
+		if feature_audit_value is Dictionary
+		else {}
+	)
+	var payload = {
+		"config": config.duplicate(true),
+		"random_seed": random_seed,
+		# Immutable snapshot captured when the first transition entered this rollout.
+		"network_state": detached_network_state,
+		"rollout": detached_rollout,
+		"rollout_policy_revision": detached_policy_revision,
+		"result_policy_revision": maxi(optimizer_policy_revision + 1, update_count + 1),
+		"update_count": update_count,
+		"environment_steps": environment_steps,
+		"completed_episodes": completed_episodes,
+		"shuffle_rng_state": shuffle_rng.state,
+		"force_partial": force_partial,
+		"last_feature_audit": last_feature_audit,
+	}
+	var next_job = FourLimbPPOUpdateJob.new(payload)
+	var next_thread = Thread.new()
+	rollout = []
+	rollout_policy_revision = -1
+	rollout_start_network_state = {}
+	var start_error = next_thread.start(Callable(next_job, "run"), Thread.PRIORITY_LOW)
+	if start_error != OK:
+		rollout = detached_rollout
+		rollout_policy_revision = detached_policy_revision
+		rollout_start_network_state = detached_network_state
+		last_error = "Godot could not create the four-limb optimizer thread."
+		return false
+	background_job = next_job
+	background_thread = next_thread
+	background_result_discarded = false
+	background_started_usec = Time.get_ticks_usec()
+
+	return true
+
+
+func poll_background_update() -> Dictionary:
+	if background_thread == null or background_thread.is_alive():
+		return {}
+	var result_value: Variant = background_thread.wait_to_finish()
+	background_thread = null
+	background_job = null
+	last_background_update_ms = maxf(
+		float(Time.get_ticks_usec() - background_started_usec) / 1000.0,
+		0.0
+	)
+	background_started_usec = 0
+	var discard_result = background_result_discarded
+	background_result_discarded = false
+	if discard_result:
+		return {}
+	if not (result_value is Dictionary):
+		last_error = "The four-limb optimizer returned no result."
+		return {"error": last_error}
+	var result: Dictionary = result_value
+	if not bool(result.get("ok", false)):
+		last_error = str(result.get("error", "The four-limb optimizer failed."))
+		return {"error": last_error}
+	var network_value: Variant = result.get("network_state", {})
+	if not (network_value is Dictionary) or not actor_critic.load_state(
+		network_value as Dictionary
+	):
+		last_error = "The completed four-limb optimizer state was incompatible."
+		return {"error": last_error}
+	update_count = maxi(int(result.get("update_count", update_count + 1)), 0)
+	optimizer_policy_revision = maxi(int(result.get(
+		"optimizer_policy_revision",
+		maxi(optimizer_policy_revision + 1, update_count)
+	)), 0)
+	shuffle_rng.state = int(result.get("shuffle_rng_state", shuffle_rng.state))
+	var metrics_value: Variant = result.get("metrics", {})
+	last_metrics = (
+		(metrics_value as Dictionary).duplicate(true)
+		if metrics_value is Dictionary
+		else {}
+	)
+	last_metrics["environment_steps"] = environment_steps
+	last_metrics["optimizer_wall_time_ms"] = last_background_update_ms
+	last_metrics["skipped_transitions_during_update"] = skipped_transitions_during_update
+	# Install the learned policy immediately when the worker thread completes. The coordinator
+	# polls at the start of a physics tick and resamples every active body before more transitions
+	# are collected, so no action/reward pair straddles two policy revisions.
+	rollout.clear()
+	if not _sync_behavior_from_optimizer(true):
+		last_error = "The completed four-limb behavior policy could not be synchronized."
+		return {"error": last_error}
+	rollout_policy_revision = -1
+	skipped_transitions_during_update = 0
+	last_error = ""
+	return last_metrics.duplicate(true)
+
+
+func diagnostic_status_text() -> String:
+	return FourLimbPPOFeatureAudit.status_text(last_metrics.get("feature_audit", {}))
+
+
+func _feature_audit_for_rollout(source: Array[Dictionary]) -> Dictionary:
+	var existing: Dictionary = last_metrics.get("feature_audit", {})
+	if update_count > 0 and (update_count + 1) % FEATURE_AUDIT_UPDATE_INTERVAL != 0:
+		return existing.duplicate(true)
+	var samples: Array[Dictionary] = []
+	var sample_count = mini(source.size(), FEATURE_AUDIT_MAXIMUM_SAMPLES)
+	if sample_count == source.size():
+		samples.assign(source)
+	elif sample_count > 0:
+		# Spread the diagnostic across the complete rollout instead of over-representing its first
+		# few workers/seconds. This remains deterministic and does not touch optimizer sampling.
+		for sample_index: int in range(sample_count):
+			var source_index = int(round(
+				float(sample_index) * float(source.size() - 1) / float(maxi(sample_count - 1, 1))
+			))
+			samples.append(source[source_index])
+	return FourLimbPPOFeatureAudit.analyze_rollout(
+		samples,
+		FourLimbMLFeatureEncoder.feature_names()
+	)
+
+
+func has_background_update() -> bool:
+	return background_thread != null
+
+
+func shutdown_background_update() -> void:
+	background_result_discarded = true
+	if background_thread != null and background_thread.is_started():
+		background_thread.wait_to_finish()
+	background_thread = null
+	background_job = null
+	background_started_usec = 0
+	background_result_discarded = false
+
+
+func record_completed_episode(score: float) -> void:
+	completed_episodes += 1
+	if is_finite(score):
+		best_episode_score = maxf(best_episode_score, score)
+
+
+func reset_episode_statistics() -> void:
+	completed_episodes = 0
+	best_episode_score = -INF
+	best_network_state.clear()
+	candidate_nomination_score = -INF
+	pending_candidate.clear()
+	candidate_network_state.clear()
+	candidate_training_summary.clear()
+	promoted_training_summary.clear()
+	best_evaluation.clear()
+	best_evaluation_contract.clear()
+	pending_promoted_candidate.clear()
+	last_metrics = {}
+
+
+func deterministic_model() -> FourLimbPPOModel:
+	var model = FourLimbPPOModel.new()
+	model.load_network_state(stable_policy_state())
+	return model
+
+
+func to_checkpoint(
+	hardware_signature: String,
+	reward_config: Dictionary = {},
+	use_best_policy: bool = false
+) -> Dictionary:
+	if use_best_policy and best_network_state.is_empty():
+		last_error = "No deterministically evaluated four-limb checkpoint is available yet."
+		return {}
+	var checkpoint_network = (
+		best_network_state.duplicate(true)
+		if use_best_policy
+		else stable_policy_state()
+	)
+	var checkpoint = _checkpoint_with_network(checkpoint_network, hardware_signature, reward_config)
+	if use_best_policy:
+		_apply_training_context_to_checkpoint(checkpoint, promoted_training_summary)
+		checkpoint["checkpoint_scope"] = "evaluated_best"
+	else:
+		checkpoint["checkpoint_scope"] = "current_policy"
+	return checkpoint
+
+
+func _checkpoint_with_network(
+	network_state: Dictionary,
+	hardware_signature: String,
+	reward_config: Dictionary
+) -> Dictionary:
+	return {
+		"schema_version": CHECKPOINT_SCHEMA_VERSION,
+		"artifact_type": "trained_four_limb_policy",
+		"algorithm": ALGORITHM_ID,
+		"body_profile_id": FourLimbBodyDefinition.BODY_PROFILE_ID,
+		"observation_schema_version": FourLimbMLObservation.SCHEMA_VERSION,
+		"action_schema_version": FourLimbMLAction.SCHEMA_VERSION,
+		"action_count": FourLimbMLAction.ACTION_COUNT,
+		"feature_count": FourLimbMLFeatureEncoder.FEATURE_COUNT,
+		"network": network_state.duplicate(true),
+		"discount_time_base": {
+			"discount_key": "gamma",
+			"reference_interval_seconds": float(config.get("discount_reference_interval_seconds", 0.05)),
+			"lambda_semantics": "real_time_reference_interval",
+		},
+		"hardware_signature": hardware_signature,
+		"training": {
+			"config": config.duplicate(true),
+			"random_seed": random_seed,
+			"shuffle_rng_state": shuffle_rng.state,
+			"behavior_action_rng_state": behavior_actor_critic.action_rng.state,
+			"update_count": update_count,
+			"optimizer_policy_revision": optimizer_policy_revision,
+			"behavior_policy_revision": behavior_policy_update,
+			"behavior_policy_update": behavior_policy_update,
+			"environment_steps": environment_steps,
+			"completed_episodes": completed_episodes,
+			"has_best_episode_score": is_finite(best_episode_score),
+			"best_episode_score": best_episode_score if is_finite(best_episode_score) else 0.0,
+			"best_network": best_network_state.duplicate(true),
+			"has_candidate_nomination_score": is_finite(candidate_nomination_score),
+			"candidate_nomination_score": candidate_nomination_score if is_finite(candidate_nomination_score) else 0.0,
+			"candidate_sequence": candidate_sequence,
+			"pending_evaluation_candidate": pending_candidate.duplicate(true),
+			"candidate_network_state": candidate_network_state.duplicate(true),
+			"candidate_training_summary": candidate_training_summary.duplicate(true),
+			"promoted_training_summary": promoted_training_summary.duplicate(true),
+			"best_evaluation": best_evaluation.duplicate(true),
+			"best_evaluation_contract": best_evaluation_contract.duplicate(true),
+			"last_metrics": last_metrics.duplicate(true),
+			"resume_mode": "clean_rollout_boundary",
+		},
+		"reward_cards": reward_config.duplicate(true),
+	}
+
+
+func has_best_checkpoint() -> bool:
+	return not best_network_state.is_empty()
+
+
+func set_evaluation_contract(contract: Dictionary) -> bool:
+	if not RLEvaluationContract.is_valid(contract, "four_limb"):
+		evaluation_contract_template.clear()
+		return false
+	evaluation_contract_template = contract.duplicate(true)
+	return true
+
+
+func evaluation_contract() -> Dictionary:
+	return evaluation_contract_template.duplicate(true)
+
+
+func best_selection_summary() -> Dictionary:
+	if not has_best_checkpoint():
+		return {}
+	var summary = promoted_training_summary.duplicate(true)
+	if summary.is_empty():
+		return {
+			"selection_score": best_episode_score if is_finite(best_episode_score) else 0.0,
+			"selection_method": "legacy_training_candidate_unverified",
+			"evaluation_verified": false,
+			"exact_policy_match": false,
+		}
+	summary["training_selection_score"] = RLTrainingMath.finite_float_or(
+		summary.get("selection_score", 0.0), 0.0
+	)
+	summary["selection_score"] = RLTrainingMath.finite_float_or(
+		best_evaluation.get("selection_score", summary.get("selection_score", 0.0)),
+		RLTrainingMath.finite_float_or(summary.get("selection_score", 0.0), 0.0)
+	)
+	summary["selection_method"] = "deterministic_fixed_seed_suite_v2"
+	summary["evaluation_verified"] = not best_evaluation.is_empty()
+	summary["evaluation"] = best_evaluation.duplicate(true)
+	return summary
+
+
+func candidate_checkpoint(
+	hardware_signature: String,
+	reward_config: Dictionary = {}
+) -> Dictionary:
+	if candidate_network_state.is_empty() or pending_candidate.is_empty():
+		return {}
+	var checkpoint = _checkpoint_with_network(candidate_network_state, hardware_signature, reward_config)
+	_apply_training_context_to_checkpoint(checkpoint, candidate_training_summary)
+	checkpoint["checkpoint_scope"] = "evaluation_candidate"
+	checkpoint["candidate"] = pending_candidate.duplicate(true)
+	return checkpoint
+
+
+func pending_evaluation_candidate() -> Dictionary:
+	return pending_candidate.duplicate(true)
+
+
+func pending_evaluation_candidate_id() -> int:
+	return RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1)
+
+
+func discard_pending_evaluation_candidate(candidate_id: int) -> bool:
+	if RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) != candidate_id:
+		return false
+	pending_candidate.clear()
+	candidate_network_state.clear()
+	candidate_training_summary.clear()
+	candidate_nomination_score = -INF
+	return true
+
+
+func record_deterministic_evaluation(candidate_id: int, evaluation_summary: Dictionary) -> Dictionary:
+	if RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) != candidate_id:
+		return {"promoted": false, "reason": "candidate_id_mismatch"}
+	if candidate_network_state.is_empty():
+		return {"promoted": false, "reason": "missing_candidate_network"}
+	var expected_hash = str(pending_candidate.get("candidate_hash", ""))
+	if (
+		expected_hash.is_empty()
+		or expected_hash != RLDeterministicEvaluator.candidate_hash(candidate_network_state)
+	):
+		return {"promoted": false, "reason": "candidate_network_hash_mismatch"}
+	var evaluation_plan: Dictionary = pending_candidate.get("evaluation_plan", {})
+	var validation = RLDeterministicEvaluationSuite.validate_summary_for_plan(
+		evaluation_plan,
+		evaluation_summary,
+		expected_hash
+	)
+	if not bool(validation.get("valid", false)):
+		return {
+			"promoted": false,
+			"reason": str(validation.get("reason", "invalid_evaluation_summary")),
+		}
+	var verified_summary = evaluation_summary.duplicate(true)
+	verified_summary["candidate_hash"] = expected_hash
+	var decision = RLDeterministicEvaluator.promotion_decision(verified_summary, best_evaluation)
+	if bool(decision.get("promote", false)):
+		best_network_state = candidate_network_state.duplicate(true)
+		promoted_training_summary = candidate_training_summary.duplicate(true)
+		best_evaluation = verified_summary
+		best_evaluation_contract = (pending_candidate.get("evaluation_contract", {}) as Dictionary).duplicate(true)
+		pending_promoted_candidate = best_selection_summary()
+		pending_promoted_candidate["candidate_id"] = candidate_id
+		pending_promoted_candidate["candidate_hash"] = expected_hash
+	else:
+		candidate_nomination_score = -INF
+	pending_candidate.clear()
+	candidate_network_state.clear()
+	candidate_training_summary.clear()
+	return {
+		"promoted": bool(decision.get("promote", false)),
+		"reason": str(decision.get("reason", "unknown")),
+		"evaluation": verified_summary,
+	}
+
+
+func record_deterministic_evaluation_records(
+	candidate_id: int,
+	records: Array[Dictionary]
+) -> Dictionary:
+	if RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) != candidate_id:
+		return {"promoted": false, "reason": "candidate_id_mismatch"}
+	var plan: Dictionary = pending_candidate.get("evaluation_plan", {})
+	var candidate_hash = str(pending_candidate.get("candidate_hash", ""))
+	var summary = RLDeterministicEvaluationSuite.aggregate_complete_suite(
+		plan,
+		records,
+		candidate_hash
+	)
+	if summary.is_empty():
+		return {"promoted": false, "reason": "invalid_evaluation_records"}
+	return record_deterministic_evaluation(candidate_id, summary)
+
+
+func record_best_deterministic_evaluation_records(
+	evaluation_plan: Dictionary,
+	records: Array[Dictionary]
+) -> Dictionary:
+	if best_network_state.is_empty():
+		return {"recorded": false, "reason": "missing_best_network"}
+	var best_hash: String = RLDeterministicEvaluator.candidate_hash(best_network_state)
+	var summary: Dictionary = RLDeterministicEvaluationSuite.aggregate_complete_suite(
+		evaluation_plan,
+		records,
+		best_hash
+	)
+	if summary.is_empty():
+		return {"recorded": false, "reason": "invalid_best_evaluation_records"}
+	var validation: Dictionary = RLDeterministicEvaluationSuite.validate_summary_for_plan(
+		evaluation_plan,
+		summary,
+		best_hash
+	)
+	if not bool(validation.get("valid", false)):
+		return {
+			"recorded": false,
+			"reason": str(validation.get("reason", "invalid_best_evaluation")),
+		}
+	best_evaluation = summary.duplicate(true)
+	best_evaluation["candidate_hash"] = best_hash
+	# Best is commonly re-evaluated because a frozen pending Candidate introduced a new
+	# environment contract. The live group may change again while that hidden suite is queued,
+	# so provenance must come from the exact frozen contract whose hash appears in the plan.
+	var plan_contract_hash: String = str(evaluation_plan.get("evaluation_contract_hash", ""))
+	var pending_contract: Dictionary = pending_candidate.get("evaluation_contract", {})
+	if (
+		RLEvaluationContract.is_valid(pending_contract)
+		and str(pending_contract.get("contract_hash", "")) == plan_contract_hash
+	):
+		best_evaluation_contract = pending_contract.duplicate(true)
+	elif (
+		RLEvaluationContract.is_valid(evaluation_contract_template)
+		and str(evaluation_contract_template.get("contract_hash", "")) == plan_contract_hash
+	):
+		best_evaluation_contract = evaluation_contract_template.duplicate(true)
+	else:
+		best_evaluation_contract.clear()
+	return {
+		"recorded": true,
+		"reason": "best_re_evaluated",
+		"evaluation_contract_hash": str(summary.get("evaluation_contract_hash", "")),
+	}
+
+
+func best_evaluation_summary() -> Dictionary:
+	return best_evaluation.duplicate(true)
+
+
+func best_evaluation_contract_snapshot() -> Dictionary:
+	return best_evaluation_contract.duplicate(true)
+
+
+func pending_auto_save_candidate() -> Dictionary:
+	return pending_promoted_candidate.duplicate(true)
+
+
+func acknowledge_auto_save_candidate(candidate_id: int) -> void:
+	if int(pending_promoted_candidate.get("candidate_id", -1)) == candidate_id:
+		pending_promoted_candidate.clear()
+
+
+func _apply_training_context_to_checkpoint(checkpoint: Dictionary, summary: Dictionary) -> void:
+	if checkpoint.is_empty() or summary.is_empty():
+		return
+	var training: Dictionary = checkpoint.get("training", {}).duplicate(true)
+	training["update_count"] = int(summary.get("policy_update", update_count))
+	training["optimizer_policy_revision"] = int(summary.get("optimizer_policy_revision", training.get("optimizer_policy_revision", optimizer_policy_revision)))
+	training["behavior_policy_revision"] = int(summary.get("behavior_policy_revision", training.get("behavior_policy_revision", behavior_policy_update)))
+	training["behavior_policy_update"] = int(training["behavior_policy_revision"])
+	training["environment_steps"] = int(summary.get("environment_steps", environment_steps))
+	training["completed_episodes"] = int(summary.get("completed_episodes", completed_episodes))
+	training["selection_summary"] = summary.duplicate(true)
+	checkpoint["training"] = training
+
+
+func _supported_observation_contract(checkpoint: Dictionary) -> bool:
+	var schema: int = RLTrainingMath.finite_int_or(checkpoint.get("observation_schema_version", 0), -1)
+	var feature_count: int = RLTrainingMath.finite_int_or(checkpoint.get("feature_count", 0), -1)
+	return (
+		schema == FourLimbMLObservation.SCHEMA_VERSION
+		and feature_count == FourLimbMLFeatureEncoder.FEATURE_COUNT
+	)
+
+
+func load_checkpoint(checkpoint: Dictionary, expected_hardware_signature: String = "") -> bool:
+	last_error = ""
+	var training_value: Variant = checkpoint.get("training", {})
+	if (
+		RLTrainingMath.finite_int_or(checkpoint.get("schema_version", 0), -1) != CHECKPOINT_SCHEMA_VERSION
+		or str(checkpoint.get("artifact_type", "")) != "trained_four_limb_policy"
+		or str(checkpoint.get("algorithm", "")) != ALGORITHM_ID
+		or str(checkpoint.get("body_profile_id", "")) != FourLimbBodyDefinition.BODY_PROFILE_ID
+		or not _supported_observation_contract(checkpoint)
+		or RLTrainingMath.finite_int_or(checkpoint.get("action_schema_version", 0), -1) != FourLimbMLAction.SCHEMA_VERSION
+		or RLTrainingMath.finite_int_or(checkpoint.get("action_count", 0), -1) != FourLimbMLAction.ACTION_COUNT
+		or not (checkpoint.get("network", {}) is Dictionary)
+		or not (training_value is Dictionary)
+		or not ((training_value as Dictionary).get("config", {}) is Dictionary)
+	):
+		last_error = "This checkpoint does not match the current four-limb PPO architecture."
+		return false
+	if (
+		not expected_hardware_signature.is_empty()
+		and str(checkpoint.get("hardware_signature", "")) != expected_hardware_signature
+	):
+		last_error = "This model was trained for a different four-limb anatomy."
+		return false
+	var staged_actor_critic: FourLimbPPOActorCritic = FourLimbPPOActorCritic.new()
+	var staged_behavior_actor_critic: FourLimbPPOActorCritic = FourLimbPPOActorCritic.new()
+	if not staged_actor_critic.load_state(checkpoint.get("network", {})):
+		last_error = "The four-limb network state could not be loaded."
+		return false
+	if not staged_behavior_actor_critic.load_state(staged_actor_critic.to_runtime_state()):
+		last_error = "The loaded four-limb behavior policy could not be synchronized."
+		return false
+	shutdown_background_update()
+	actor_critic = staged_actor_critic
+	behavior_actor_critic = staged_behavior_actor_critic
+	var training: Dictionary = training_value
+	var loaded_config: Dictionary = training.get("config", {})
+	for key: Variant in loaded_config:
+		if config.has(key):
+			config[key] = loaded_config[key]
+	_sanitize_config()
+	config["hidden_layer_width"] = staged_actor_critic.hidden_size
+	config["hidden_layer_depth"] = staged_actor_critic.hidden_layer_count
+	random_seed = RLTrainingMath.finite_int_or(
+		training.get("random_seed", random_seed), random_seed
+	)
+	shuffle_rng.state = RLTrainingMath.finite_int_or(
+		training.get("shuffle_rng_state", shuffle_rng.state), shuffle_rng.state
+	)
+	behavior_actor_critic.action_rng.state = RLTrainingMath.finite_int_or(
+		training.get("behavior_action_rng_state", behavior_actor_critic.action_rng.state),
+		behavior_actor_critic.action_rng.state
+	)
+	update_count = maxi(RLTrainingMath.finite_int_or(training.get("update_count", 0), 0), 0)
+	optimizer_policy_revision = maxi(RLTrainingMath.finite_int_or(
+		training.get("optimizer_policy_revision", update_count), update_count
+	), 0)
+	behavior_policy_update = maxi(RLTrainingMath.finite_int_or(
+		training.get(
+			"behavior_policy_revision",
+			training.get("behavior_policy_update", optimizer_policy_revision)
+		),
+		optimizer_policy_revision
+	), 0)
+	environment_steps = maxi(RLTrainingMath.finite_int_or(training.get("environment_steps", 0), 0), 0)
+	completed_episodes = maxi(RLTrainingMath.finite_int_or(training.get("completed_episodes", 0), 0), 0)
+	best_episode_score = (
+		RLTrainingMath.finite_float_or(training.get("best_episode_score", -INF), -INF)
+		if RLTrainingMath.bool_or(training.get("has_best_episode_score", false), false)
+		else -INF
+	)
+	best_network_state = {}
+	var loaded_best: Variant = training.get("best_network", {})
+	if loaded_best is Dictionary and not (loaded_best as Dictionary).is_empty():
+		var migrated_best = FourLimbPPOActorCritic.new()
+		if migrated_best.load_state(loaded_best as Dictionary):
+			best_network_state = migrated_best.to_state()
+	candidate_nomination_score = (
+		RLTrainingMath.finite_float_or(training.get("candidate_nomination_score", -INF), -INF)
+		if RLTrainingMath.bool_or(training.get("has_candidate_nomination_score", false), false)
+		else -INF
+	)
+	candidate_sequence = maxi(RLTrainingMath.finite_int_or(training.get("candidate_sequence", 0), 0), 0)
+	pending_candidate = (
+		(training.get("pending_evaluation_candidate", {}) as Dictionary).duplicate(true)
+		if training.get("pending_evaluation_candidate", {}) is Dictionary else {}
+	)
+	candidate_network_state = {}
+	var loaded_candidate_network: Variant = training.get("candidate_network_state", {})
+	if loaded_candidate_network is Dictionary and not (loaded_candidate_network as Dictionary).is_empty():
+		var migrated_candidate: FourLimbPPOActorCritic = FourLimbPPOActorCritic.new()
+		if migrated_candidate.load_state(loaded_candidate_network as Dictionary):
+			candidate_network_state = migrated_candidate.to_state()
+	candidate_training_summary = (
+		(training.get("candidate_training_summary", {}) as Dictionary).duplicate(true)
+		if training.get("candidate_training_summary", {}) is Dictionary else {}
+	)
+	promoted_training_summary = (
+		(training.get("promoted_training_summary", {}) as Dictionary).duplicate(true)
+		if training.get("promoted_training_summary", {}) is Dictionary else {}
+	)
+	best_evaluation = (
+		(training.get("best_evaluation", {}) as Dictionary).duplicate(true)
+		if training.get("best_evaluation", {}) is Dictionary else {}
+	)
+	best_evaluation_contract = (
+		(training.get("best_evaluation_contract", {}) as Dictionary).duplicate(true)
+		if training.get("best_evaluation_contract", {}) is Dictionary else {}
+	)
+	pending_promoted_candidate.clear()
+	# Pending candidates are resumable only when their frozen evaluation contract is present.
+	# Older checkpoints remain loadable, but their pre-contract pending candidate must not enter
+	# the fixed-seed queue under whatever room settings happen to be active after loading.
+	if not pending_candidate.is_empty():
+		var pending_contract_value: Variant = pending_candidate.get("evaluation_contract", {})
+		var pending_plan_value: Variant = pending_candidate.get("evaluation_plan", {})
+		var pending_contract: Dictionary = (
+			(pending_contract_value as Dictionary) if pending_contract_value is Dictionary else {}
+		)
+		var pending_plan: Dictionary = (
+			(pending_plan_value as Dictionary) if pending_plan_value is Dictionary else {}
+		)
+		var pending_contract_valid: bool = (
+			RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) >= 0
+			and not candidate_network_state.is_empty()
+			and not str(pending_candidate.get("candidate_hash", "")).is_empty()
+			and str(pending_candidate.get("candidate_hash", ""))
+				== RLDeterministicEvaluator.candidate_hash(candidate_network_state)
+			and RLEvaluationContract.is_valid(pending_contract, "four_limb")
+			and str(pending_candidate.get("evaluation_contract_hash", ""))
+				== str(pending_contract.get("contract_hash", ""))
+			and str(pending_plan.get("evaluation_contract_hash", ""))
+				== str(pending_contract.get("contract_hash", ""))
+			and RLDeterministicEvaluationSuite.is_valid_plan(pending_plan, "four_limb")
+		)
+		if not pending_contract_valid:
+			pending_candidate.clear()
+			candidate_network_state.clear()
+			candidate_training_summary.clear()
+			candidate_nomination_score = -INF
+
+	if best_network_state.is_empty():
+		best_evaluation.clear()
+		best_evaluation_contract.clear()
+		promoted_training_summary.clear()
+
+	var evaluated_best_is_verified: bool = (
+		not best_network_state.is_empty()
+		and RLDeterministicEvaluationSuite.is_complete_summary(best_evaluation)
+		and str(best_evaluation.get("candidate_hash", ""))
+			== RLDeterministicEvaluator.candidate_hash(best_network_state)
+		and RLEvaluationContract.is_valid(best_evaluation_contract, "four_limb")
+		and str(best_evaluation.get("evaluation_contract_hash", ""))
+			== str(best_evaluation_contract.get("contract_hash", ""))
+	)
+	if not best_network_state.is_empty() and not evaluated_best_is_verified:
+		# Keep the legacy Best network itself. The scheduler will re-evaluate it under the next
+		# frozen Candidate contract before comparing scores. Converting it into a contract-less
+		# pending candidate would either fail the evaluator or silently late-bind a new task.
+		best_evaluation.clear()
+		best_evaluation_contract.clear()
+
+	last_metrics = (
+		(training.get("last_metrics", {}) as Dictionary).duplicate(true)
+		if training.get("last_metrics", {}) is Dictionary
+		else {}
+	)
+	if last_metrics.has("feature_audit") and not last_metrics["feature_audit"] is Dictionary:
+		last_metrics.erase("feature_audit")
+	rollout.clear()
+	rollout_policy_revision = -1
+	rollout_start_network_state.clear()
+	return true
+
+
+func _consider_rollout_candidate(
+	source_rollout: Array[Dictionary],
+	producer_network_state: Dictionary
+) -> void:
+	if source_rollout.is_empty() or producer_network_state.is_empty():
+		return
+	if not RLEvaluationContract.is_valid(evaluation_contract_template, "four_limb"):
+		return
+	var worker_totals: Dictionary = {}
+	var worker_seconds: Dictionary = {}
+	for transition in source_rollout:
+		var worker_id = int(transition.get("worker_id", 0))
+		worker_totals[worker_id] = float(worker_totals.get(worker_id, 0.0)) + float(transition.get("reward", 0.0))
+		worker_seconds[worker_id] = float(worker_seconds.get(worker_id, 0.0)) + maxf(
+			float(transition.get("delta_seconds", config.get("control_interval_seconds", 0.05))),
+			0.000001
+		)
+	var worker_scores: Array[float] = []
+	for worker_id in worker_totals:
+		worker_scores.append(float(worker_totals[worker_id]) / maxf(float(worker_seconds.get(worker_id, 0.0)), 0.000001))
+	if worker_scores.is_empty():
+		return
+	worker_scores.sort()
+	var total = 0.0
+	for score in worker_scores:
+		total += score
+	var group_mean = total / float(worker_scores.size())
+	var support_index = clampi(floori(float(worker_scores.size() - 1) * 0.25), 0, worker_scores.size() - 1)
+	var support_score = worker_scores[support_index]
+	var best_worker_score = worker_scores[worker_scores.size() - 1]
+	var robust_best_index = clampi(floori(float(worker_scores.size() - 1) * 0.75), 0, worker_scores.size() - 1)
+	var robust_best_score = worker_scores[robust_best_index]
+	var selection_score = group_mean * 0.70 + support_score * 0.30
+	if not is_finite(selection_score) or selection_score <= candidate_nomination_score:
+		return
+	candidate_nomination_score = selection_score
+	candidate_network_state = producer_network_state.duplicate(true)
+	candidate_training_summary = {
+		"selection_score": selection_score,
+		"group_mean_reward_per_second": group_mean,
+		"support_reward_per_second": support_score,
+		"best_worker_reward_per_second": best_worker_score,
+		"robust_best_worker_reward_per_second": robust_best_score,
+		"policy_update": rollout_policy_revision,
+		"optimizer_policy_revision": optimizer_policy_revision,
+		"behavior_policy_revision": rollout_policy_revision,
+		"environment_steps": environment_steps,
+		"completed_episodes": completed_episodes,
+		"worker_count": worker_scores.size(),
+		"transition_count": source_rollout.size(),
+		"exact_policy_match": true,
+		"selection_method": "frozen_rollout_robust_candidate_v1",
+	}
+	candidate_sequence += 1
+	pending_candidate = candidate_training_summary.duplicate(true)
+	pending_candidate["candidate_id"] = candidate_sequence
+	pending_candidate["candidate_hash"] = RLDeterministicEvaluator.candidate_hash(candidate_network_state)
+	pending_candidate["evaluation_status"] = "awaiting_deterministic_suite"
+	pending_candidate["evaluation_contract"] = evaluation_contract_template.duplicate(true)
+	pending_candidate["evaluation_contract_hash"] = str(evaluation_contract_template.get("contract_hash", ""))
+	pending_candidate["evaluation_plan"] = RLDeterministicEvaluationSuite.plan_for_contract("four_limb", evaluation_contract_template)
+
+
+func _sync_behavior_from_optimizer(preserve_rng: bool) -> bool:
+	var rng_state = behavior_actor_critic.action_rng.state
+	if not behavior_actor_critic.load_state(actor_critic.to_runtime_state()):
+		return false
+	if preserve_rng:
+		behavior_actor_critic.action_rng.state = rng_state
+	behavior_policy_update = optimizer_policy_revision
+	return true
+
+
+func _policy_divergence_metrics(
+	source_rollout: Array[Dictionary],
+	maximum_samples: int = 64
+) -> Dictionary:
+	if source_rollout.is_empty():
+		return {
+			"maximum_log_probability_error": INF,
+			"approximate_kl": INF,
+			"clip_fraction": 1.0,
+		}
+	var count = mini(source_rollout.size(), maxi(maximum_samples, 1))
+	var maximum_error = 0.0
+	var kl_total = 0.0
+	var clipped_count = 0
+	for index in range(count):
+		var transition: Dictionary = source_rollout[index]
+		var current_log_probability = actor_critic.log_probability_from_input(
+			transition.get("actor_input", PackedFloat64Array()),
+			transition.get("latent_action", PackedFloat64Array())
+		)
+		var old_log_probability = float(transition.get("old_log_probability", NAN))
+		if not is_finite(current_log_probability) or not is_finite(old_log_probability):
+			return {
+				"maximum_log_probability_error": INF,
+				"approximate_kl": INF,
+				"clip_fraction": 1.0,
+			}
+		var error = absf(current_log_probability - old_log_probability)
+		maximum_error = maxf(maximum_error, error)
+		kl_total += old_log_probability - current_log_probability
+		var ratio = exp(clampf(current_log_probability - old_log_probability, -20.0, 20.0))
+		if absf(ratio - 1.0) > float(config["clip_range"]):
+			clipped_count += 1
+	return {
+		"maximum_log_probability_error": maximum_error,
+		"approximate_kl": kl_total / float(count),
+		"clip_fraction": float(clipped_count) / float(count),
+	}
+
+
+func _hydrate_deferred_critic_values() -> bool:
+	# Deferred values are evaluated only after actor_critic has been restored to the immutable
+	# producer-policy snapshot. This is mathematically the same critic that generated the rollout,
+	# but the O(420*64) forward passes run on the optimizer worker instead of the physics thread.
+	for transition_value: Variant in rollout:
+		if not (transition_value is Dictionary):
+			return false
+		var transition: Dictionary = transition_value
+		if not bool(transition.get("critic_value_deferred", false)):
+			if (
+				not is_finite(float(transition.get("value", NAN)))
+				or not is_finite(float(transition.get("next_value", NAN)))
+			):
+				return false
+			continue
+		var critic_input: PackedFloat64Array = transition.get(
+			"critic_input",
+			PackedFloat64Array()
+		)
+		if not FourLimbMLFeatureEncoder.is_normalized(critic_input):
+			return false
+		var value: float = actor_critic.value_from_input(critic_input)
+		if not is_finite(value):
+			return false
+		var next_value: float = 0.0
+		if not bool(transition.get("terminated", false)):
+			var next_input: PackedFloat64Array = transition.get(
+				"next_critic_input",
+				PackedFloat64Array()
+			)
+			if not FourLimbMLFeatureEncoder.is_normalized(next_input):
+				return false
+			next_value = actor_critic.value_from_input(next_input)
+			if not is_finite(next_value):
+				return false
+		transition["value"] = value
+		transition["next_value"] = next_value
+		transition["critic_value_deferred"] = false
+	return true
+
+
+func _calculate_advantages_and_returns() -> Dictionary:
+	var count = rollout.size()
+	if count <= 0:
+		return {}
+	var advantages = PackedFloat64Array()
+	var returns = PackedFloat64Array()
+	var value_predictions = PackedFloat64Array()
+	advantages.resize(count)
+	returns.resize(count)
+	value_predictions.resize(count)
+	advantages.fill(0.0)
+	returns.fill(0.0)
+	value_predictions.fill(0.0)
+	var indices_by_worker: Dictionary[int, Array] = {}
+	for index in range(count):
+		var worker_id = int(rollout[index].get("worker_id", -1))
+		if not indices_by_worker.has(worker_id):
+			indices_by_worker[worker_id] = []
+		(indices_by_worker[worker_id] as Array).append(index)
+	for worker_indices_value: Variant in indices_by_worker.values():
+		var worker_indices: Array = worker_indices_value
+		var next_advantage = 0.0
+		for position in range(worker_indices.size() - 1, -1, -1):
+			var index = int(worker_indices[position])
+			var transition = rollout[index]
+			var terminated = bool(transition.get("terminated", false))
+			var truncated = bool(transition.get("truncated", false))
+			var continuation = 0.0 if terminated or truncated else 1.0
+			var bootstrap = 0.0 if terminated else float(transition.get("next_value", 0.0))
+			var gamma_delta = RLTrainingMath.discount_for_delta(
+				float(config["gamma"]),
+				float(transition.get("delta_seconds", config.get("control_interval_seconds", 0.05))),
+				float(config.get("discount_reference_interval_seconds", 0.05))
+			)
+			var lambda_delta = RLTrainingMath.discount_for_delta(
+				float(config["gae_lambda"]),
+				float(transition.get("delta_seconds", config.get("control_interval_seconds", 0.05))),
+				float(config.get("discount_reference_interval_seconds", 0.05))
+			)
+			var delta = (
+				float(transition.get("reward", 0.0))
+				+ gamma_delta * bootstrap
+				- float(transition.get("value", 0.0))
+			)
+			var advantage = delta + (
+				gamma_delta
+				* lambda_delta
+				* continuation
+				* next_advantage
+			)
+			advantages[index] = advantage
+			returns[index] = advantage + float(transition.get("value", 0.0))
+			value_predictions[index] = float(transition.get("value", 0.0))
+			if (
+				not is_finite(advantages[index])
+				or not is_finite(returns[index])
+				or not is_finite(value_predictions[index])
+			):
+				return {}
+			next_advantage = advantage
+	return {
+		"advantages": advantages,
+		"returns": returns,
+		"value_predictions": value_predictions,
+	}
+
+
+func _rollout_reward_statistics() -> Dictionary:
+	var values = PackedFloat64Array()
+	values.resize(rollout.size())
+	for index in range(rollout.size()):
+		values[index] = float(rollout[index].get("reward", 0.0))
+	return _packed_statistics(values)
+
+
+func _packed_statistics(values: PackedFloat64Array) -> Dictionary:
+	if values.is_empty():
+		return {"mean": 0.0, "standard_deviation": 0.0}
+	var mean = 0.0
+	for value in values:
+		mean += value
+	mean /= float(values.size())
+	var variance = 0.0
+	for value in values:
+		variance += pow(value - mean, 2.0)
+	variance /= float(values.size())
+	return {
+		"mean": mean,
+		"standard_deviation": sqrt(maxf(variance, 0.0)),
+	}
+
+
+func _policy_parameter_delta_rms(
+	actor_parameters_before: PackedFloat64Array,
+	log_standard_deviation_before: PackedFloat64Array
+) -> float:
+	var sum_squared = 0.0
+	var count = 0
+	var actor_count = mini(
+		actor_parameters_before.size(),
+		actor_critic.actor.parameters.size()
+	)
+	for index in range(actor_count):
+		var difference = (
+			actor_critic.actor.parameters[index]
+			- actor_parameters_before[index]
+		)
+		sum_squared += difference * difference
+		count += 1
+	var deviation_count = mini(
+		log_standard_deviation_before.size(),
+		actor_critic.log_standard_deviation.size()
+	)
+	for index in range(deviation_count):
+		var difference = (
+			actor_critic.log_standard_deviation[index]
+			- log_standard_deviation_before[index]
+		)
+		sum_squared += difference * difference
+		count += 1
+	return sqrt(sum_squared / float(maxi(count, 1)))
+
+
+func _normalize(values: PackedFloat64Array) -> void:
+	if values.is_empty():
+		return
+	var mean = 0.0
+	for value in values:
+		mean += value
+	mean /= float(values.size())
+	var variance = 0.0
+	for value in values:
+		variance += pow(value - mean, 2.0)
+	variance /= float(values.size())
+	var deviation = sqrt(variance + 0.00000001)
+	for index in range(values.size()):
+		values[index] = (values[index] - mean) / deviation
+
+
+func _shuffle_indices(indices: Array[int]) -> void:
+	for index in range(indices.size() - 1, 0, -1):
+		var swap_index = shuffle_rng.randi_range(0, index)
+		var temporary = indices[index]
+		indices[index] = indices[swap_index]
+		indices[swap_index] = temporary
+
+
+func _finite_packed(values: PackedFloat64Array) -> bool:
+	for value in values:
+		if not is_finite(value):
+			return false
+	return true
+
+
+func _normalized_packed(values: PackedFloat64Array) -> bool:
+	for value in values:
+		if not is_finite(value) or value < -1.000001 or value > 1.000001:
+			return false
+	return true
+
+
+func _sanitize_config() -> void:
+	config["learning_rate"] = clampf(RLTrainingMath.finite_float_or(config.get("learning_rate"), DEFAULT_CONFIG["learning_rate"]), 0.000001, 0.1)
+	config["gamma"] = clampf(RLTrainingMath.finite_float_or(config.get("gamma"), DEFAULT_CONFIG["gamma"]), 0.0, 1.0)
+	config["gae_lambda"] = clampf(RLTrainingMath.finite_float_or(config.get("gae_lambda"), DEFAULT_CONFIG["gae_lambda"]), 0.0, 1.0)
+	config["clip_range"] = clampf(RLTrainingMath.finite_float_or(config.get("clip_range"), DEFAULT_CONFIG["clip_range"]), 0.01, 1.0)
+	config["entropy_coefficient"] = maxf(RLTrainingMath.finite_float_or(config.get("entropy_coefficient"), DEFAULT_CONFIG["entropy_coefficient"]), 0.0)
+	config["value_coefficient"] = maxf(RLTrainingMath.finite_float_or(config.get("value_coefficient"), DEFAULT_CONFIG["value_coefficient"]), 0.0)
+	config["maximum_gradient_norm"] = maxf(RLTrainingMath.finite_float_or(config.get("maximum_gradient_norm"), DEFAULT_CONFIG["maximum_gradient_norm"]), 0.0)
+	config["rollout_size"] = maxi(RLTrainingMath.finite_int_or(config.get("rollout_size"), DEFAULT_CONFIG["rollout_size"]), 1)
+	config["minimum_update_transitions"] = clampi(
+		RLTrainingMath.finite_int_or(config.get("minimum_update_transitions"), DEFAULT_CONFIG["minimum_update_transitions"]),
+		1,
+		int(config["rollout_size"])
+	)
+	config["epochs"] = maxi(RLTrainingMath.finite_int_or(config.get("epochs"), DEFAULT_CONFIG["epochs"]), 1)
+	config["batch_size"] = maxi(RLTrainingMath.finite_int_or(config.get("batch_size"), DEFAULT_CONFIG["batch_size"]), 1)
+	config["target_kl"] = maxf(RLTrainingMath.finite_float_or(config.get("target_kl"), DEFAULT_CONFIG["target_kl"]), 0.0)
+	config["control_interval_seconds"] = clampf(
+		RLTrainingMath.finite_float_or(config.get("control_interval_seconds"), DEFAULT_CONFIG["control_interval_seconds"]), 0.001, 1.0
+	)
+	config["discount_reference_interval_seconds"] = clampf(
+		RLTrainingMath.finite_float_or(config.get("discount_reference_interval_seconds"), DEFAULT_CONFIG["discount_reference_interval_seconds"]), 0.001, 1.0
+	)
+	config["hidden_layer_width"] = clampi(
+		RLTrainingMath.finite_int_or(config.get("hidden_layer_width"), DEFAULT_CONFIG["hidden_layer_width"]),
+		DronePPOMLP.MINIMUM_HIDDEN_WIDTH,
+		DronePPOMLP.MAXIMUM_HIDDEN_WIDTH
+	)
+	config["hidden_layer_depth"] = clampi(
+		RLTrainingMath.finite_int_or(config.get("hidden_layer_depth"), DEFAULT_CONFIG["hidden_layer_depth"]),
+		DronePPOMLP.MINIMUM_HIDDEN_DEPTH,
+		DronePPOMLP.MAXIMUM_HIDDEN_DEPTH
+	)

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="GunBuild" load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/weapons/gun_build.gd" id="1_build"]
+[ext_resource type="Resource" path="res://resources/guns/parts/stamped_service_receiver.tres" id="2_receiver"]
+[ext_resource type="Resource" path="res://resources/guns/parts/service_pistol_barrel.tres" id="3_barrel"]
+[ext_resource type="Resource" path="res://resources/guns/parts/compact_service_magazine.tres" id="4_magazine"]
+[ext_resource type="Resource" path="res://resources/guns/parts/service_ball_ammunition.tres" id="5_ammunition"]
+
+[resource]
+script = ExtResource("1_build")
+receiver = ExtResource("2_receiver")
+barrel = ExtResource("3_barrel")
+magazine = ExtResource("4_magazine")
+ammunition = ExtResource("5_ammunition")

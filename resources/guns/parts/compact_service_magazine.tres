@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="GunMagazineDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/weapons/gun_magazine_definition.gd" id="1_magazine"]
+
+[sub_resource type="BoxShape3D" id="Shape"]
+size = Vector3(0.08, 0.2, 0.09)
+
+[resource]
+script = ExtResource("1_magazine")
+display_name = "8-Round Service Magazine"
+inventory_code = "MAG"
+mass = 0.16
+collision_shape = SubResource("Shape")
+part_slot = 2
+caliber_id = &"9x19"
+component_color = Color(0.09, 0.1, 0.11, 1)
+component_size = Vector3(0.08, 0.2, 0.09)
+capacity = 8
+reload_time_multiplier = 1.0

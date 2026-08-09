@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="BackpackDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/items/backpack_definition.gd" id="1_definition"]
+[ext_resource type="PackedScene" path="res://scenes/items/visuals/industrial_frame_pack_visual.tscn" id="2_visual"]
+
+[sub_resource type="BoxShape3D" id="Shape"]
+size = Vector3(0.72, 0.84, 0.36)
+
+[resource]
+script = ExtResource("1_definition")
+display_name = "Industrial Frame Pack"
+inventory_code = "IFP"
+mass = 4.6
+visual_scene = ExtResource("2_visual")
+collision_shape = SubResource("Shape")
+equipped_visual_scene = ExtResource("2_visual")
+inventory_capacity = 9

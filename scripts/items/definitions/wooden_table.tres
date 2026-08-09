@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="ItemDefinition" format=3 uid="uid://dil5y2eqmaur7"]
+
+[ext_resource type="Script" uid="uid://cjselu71rl1r0" path="res://scripts/items/item_definition.gd" id="1_definition"]
+[ext_resource type="PackedScene" uid="uid://bc77e5x3omfej" path="res://assets/models/wooden-table.glb" id="2_visual"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_table"]
+size = Vector3(1.984, 0.986, 1.984)
+
+[resource]
+script = ExtResource("1_definition")
+display_name = "Wooden Table"
+mass = 35.0
+visual_scene = ExtResource("2_visual")
+mesh_rotation_x = 90.0
+collision_shape = SubResource("BoxShape3D_table")

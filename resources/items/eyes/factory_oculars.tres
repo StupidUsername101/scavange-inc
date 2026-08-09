@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="EyeDefinition" format=3 uid="uid://d2fe64wydi6cw"]
+
+[ext_resource type="Script" uid="uid://6iv2fr7idbcs" path="res://scripts/items/eye_definition.gd" id="1_definition"]
+[ext_resource type="PackedScene" path="res://scenes/items/visuals/factory_oculars_visual.tscn" id="2_visual"]
+[ext_resource type="Shader" uid="uid://c0djmsxqetvr3" path="res://shaders/factory_oculars.gdshader" id="3_shader"]
+
+[sub_resource type="BoxShape3D" id="Shape"]
+size = Vector3(0.28, 0.13, 0.1)
+
+[resource]
+script = ExtResource("1_definition")
+contrast_sensitivity = 0.76
+optical_quality = 0.74
+vision_shader = ExtResource("3_shader")
+equipment_slot = &"eyes"
+equipped_visual_scene = ExtResource("2_visual")
+display_name = "Factory Ocular Pair"
+inventory_code = "EYE"
+mass = 0.18
+grip_surface_tags = PackedStringArray("carryable")
+visual_scene = ExtResource("2_visual")
+collision_shape = SubResource("Shape")

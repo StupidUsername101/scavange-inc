@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="RopeDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ropes/rope_definition.gd" id="1_rope"]
+
+[sub_resource type="CapsuleShape3D" id="SpoolShape"]
+radius = 0.25
+height = 0.52
+
+[resource]
+script = ExtResource("1_rope")
+display_name = "12 m Utility Rope"
+mass = 0.82
+collision_shape = SubResource("SpoolShape")
+shape_rotation_x = 90.0
+rope_color = Color(0.46, 0.38, 0.26, 1)
+effect_color = Color(0.96, 0.7, 0.3, 1)
+maximum_length = 12.0
+placement_slack = 0.32
+diameter = 0.032
+target_segment_length = 0.38
+maximum_simulation_segments = 48
+visual_repeat_length = 0.22
+visual_section_contrast = 0.09
+linear_density_kg_per_m = 0.09
+breaking_force_newtons = 1600.0
+stretch_stiffness_newtons_per_m = 2600.0
+tension_damping = 72.0
+force_response = 10.0
+tension_slew_rate_newtons_per_second = 1100.0
+motion_damping = 0.986
+surface_friction = 0.58
+solver_iterations = 6
+break_grace_seconds = 0.16

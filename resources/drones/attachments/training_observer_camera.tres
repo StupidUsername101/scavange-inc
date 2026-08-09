@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="DroneCameraAttachmentDefinition" format=3 uid="uid://bhfg00i2rilhl"]
+
+[ext_resource type="Script" uid="uid://chh52f7h0diwg" path="res://scripts/drones/drone_camera_attachment_definition.gd" id="1_camera"]
+
+[resource]
+script = ExtResource("1_camera")
+mount_position = Vector3(0, 0.1, -0.38)
+field_of_view_degrees = 78.0
+near_clip_m = 0.02
+capability_tags = Array[StringName]([&"camera"])
+body_size = Vector3(0.01, 0.01, 0.01)
+display_name = "Core Observer Camera"
+visual_color = Color(0.18, 0.24, 0.3, 1)
+mass = 0.0
+rated_voltage_v = 0.0

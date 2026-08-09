@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="DronePropellerDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_propeller_definition.gd" id="1_propeller"]
+
+[resource]
+script = ExtResource("1_propeller")
+display_name = "Whisper Patrol Propeller"
+quality = 1
+visual_color = Color(0.24, 0.52, 0.56, 1)
+mass = 0.14
+max_power_draw = 27.0
+rotor_radius = 0.22
+aerodynamic_efficiency = 0.75
+reaction_torque_per_newton = 0.005
+axial_flow_response = 0.56
+minimum_axial_flow_factor = 0.7
+maximum_axial_flow_factor = 1.42

@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="TrainingItemDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://ml/training/items/training_item_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+display_name = "Generic Training Cargo"
+item_type = "generic"
+shape_kind = 0
+dimensions = {
+"depth": 0.45,
+"height": 0.32,
+"radius": 0.22,
+"width": 0.45
+}
+mass_kg = 1.0
+reward_value = 1.0
+grip_surface_tags = PackedStringArray("carryable")
+visual_color = Color(0.94902, 0.721569, 0.294118, 1)

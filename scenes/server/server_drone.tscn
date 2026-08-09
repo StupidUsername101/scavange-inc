@@ -1,0 +1,129 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/server/server_drone.gd" id="1_drone"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/drone_quad.tres" id="2_loadout"]
+[ext_resource type="Script" path="res://scripts/drones/drone_propeller_slot.gd" id="3_slot"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_core"]
+size = Vector3(0.65, 0.24, 0.65)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_arm"]
+size = Vector3(1.35, 0.055, 0.075)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_battery"]
+size = Vector3(0.35, 0.12, 0.26)
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_propeller"]
+radius = 0.18
+height = 0.1
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ai_chip"]
+size = Vector3(0.2, 0.035, 0.15)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_attachment"]
+size = Vector3(0.24, 0.15, 0.3)
+
+[node name="ServerDrone" type="RigidBody3D"]
+mass = 1.8
+linear_damp = 0.0
+angular_damp = 0.05
+script = ExtResource("1_drone")
+loadout = ExtResource("2_loadout")
+
+[node name="CoreCollision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_core")
+
+[node name="ArmCollisionA" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.08, 0)
+rotation = Vector3(0, 0.785398, 0)
+shape = SubResource("BoxShape3D_arm")
+
+[node name="ArmCollisionB" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.08, 0)
+rotation = Vector3(0, -0.785398, 0)
+shape = SubResource("BoxShape3D_arm")
+
+[node name="BatterySocket" type="Node3D" parent="."]
+position = Vector3(0, 0.18, 0)
+
+[node name="BatteryCollision" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.18, 0)
+shape = SubResource("BoxShape3D_battery")
+
+[node name="Propeller0Collision" type="CollisionShape3D" parent="."]
+position = Vector3(-0.58, 0.15, -0.58)
+shape = SubResource("CylinderShape3D_propeller")
+
+[node name="Propeller1Collision" type="CollisionShape3D" parent="."]
+position = Vector3(0.58, 0.15, -0.58)
+shape = SubResource("CylinderShape3D_propeller")
+
+[node name="Propeller2Collision" type="CollisionShape3D" parent="."]
+position = Vector3(-0.58, 0.15, 0.58)
+shape = SubResource("CylinderShape3D_propeller")
+
+[node name="Propeller3Collision" type="CollisionShape3D" parent="."]
+position = Vector3(0.58, 0.15, 0.58)
+shape = SubResource("CylinderShape3D_propeller")
+
+[node name="PropellerSlots" type="Node3D" parent="."]
+
+[node name="FrontLeft" type="Node3D" parent="PropellerSlots"]
+position = Vector3(-0.58, 0.15, -0.58)
+script = ExtResource("3_slot")
+slot_index = 0
+spin_direction = 1
+
+[node name="FrontRight" type="Node3D" parent="PropellerSlots"]
+position = Vector3(0.58, 0.15, -0.58)
+script = ExtResource("3_slot")
+slot_index = 1
+spin_direction = -1
+
+[node name="BackLeft" type="Node3D" parent="PropellerSlots"]
+position = Vector3(-0.58, 0.15, 0.58)
+script = ExtResource("3_slot")
+slot_index = 2
+spin_direction = -1
+
+[node name="BackRight" type="Node3D" parent="PropellerSlots"]
+position = Vector3(0.58, 0.15, 0.58)
+script = ExtResource("3_slot")
+slot_index = 3
+spin_direction = 1
+
+[node name="AIChip0Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_ai_chip")
+
+[node name="AIChip1Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_ai_chip")
+
+[node name="AIChip2Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_ai_chip")
+
+[node name="AIChip3Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_ai_chip")
+
+[node name="AIChip4Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_ai_chip")
+
+[node name="AIChip5Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_ai_chip")
+
+[node name="AIChip6Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_ai_chip")
+
+[node name="AIChip7Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_ai_chip")
+
+[node name="Attachment0Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_attachment")
+
+[node name="Attachment1Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_attachment")
+
+[node name="Attachment2Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_attachment")
+
+[node name="Attachment3Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_attachment")

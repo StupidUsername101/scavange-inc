@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="LimbDefinition" format=3 uid="uid://bg3ngobea2xir"]
+
+[ext_resource type="Script" uid="uid://c1c06sln8voxw" path="res://scripts/characters/limb_definition.gd" id="1_limb"]
+
+[resource]
+script = ExtResource("1_limb")
+display_name = "Human Right Arm"
+slot = 1
+shop_buyable = true
+shop_price = 180
+shop_category_path = PackedStringArray("Arms", "Human")
+shop_description = "Standard biological replacement arm. Right-side socket."
+shop_item_path = "res://resources/items/body_parts/human_right_arm.tres"
+grab_strength = 0.5

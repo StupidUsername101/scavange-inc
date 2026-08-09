@@ -1,0 +1,22 @@
+[gd_scene format=3 uid="uid://c4tdngayqqxx"]
+
+[ext_resource type="Script" uid="uid://cllmwjar2yqb1" path="res://scripts/server/server_player.gd" id="1_sthwa"]
+[ext_resource type="Script" path="res://scripts/grabbing/grabber_component.gd" id="2_grabber"]
+[ext_resource type="Resource" path="res://resources/grab_capabilities/player_default.tres" id="3_capability"]
+[ext_resource type="Resource" path="res://resources/character_loadouts/full_body.tres" id="4_loadout"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_sthwa"]
+size = Vector3(1, 1.9790039, 1)
+
+[node name="ServerPlayer" type="CharacterBody3D" unique_id=1224081810]
+script = ExtResource("1_sthwa")
+body_loadout = ExtResource("4_loadout")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="." unique_id=198600016]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.001767695, 0)
+shape = SubResource("BoxShape3D_sthwa")
+
+[node name="Grabber" type="Node3D" parent="."]
+position = Vector3(0, 0.56, -0.42)
+script = ExtResource("2_grabber")
+capability = ExtResource("3_capability")

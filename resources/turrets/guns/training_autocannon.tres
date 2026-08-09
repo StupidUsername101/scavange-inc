@@ -1,0 +1,23 @@
+[gd_resource type="Resource" script_class="TurretGunDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/turrets/turret_gun_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+display_name = "Training Autocannon"
+mass_kg = 12.0
+maximum_health = 180.0
+barrel_length_m = 1.15
+barrel_radius_m = 0.075
+barrel_mount_offset = Vector3(0, 0.08, 0)
+minimum_pitch_degrees = -12.0
+maximum_pitch_degrees = 68.0
+maximum_pitch_speed_degrees_per_second = 85.0
+pitch_acceleration_degrees_per_second_squared = 300.0
+pitch_braking_degrees_per_second_squared = 220.0
+seconds_between_shots = 0.32
+projectile_speed_mps = 48.0
+projectile_damage = 18.0
+maximum_range_m = 80.0
+spread_degrees = 0.15
+trigger_threshold = 0.55

@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://c2dk64ljk1pqt"]
+
+[ext_resource type="Script" uid="uid://d02mfkbqc4kf8" path="res://scripts/client/rope_proxy.gd" id="1_rope"]
+
+[node name="RopeProxy" type="Node3D" unique_id=597539797]
+script = ExtResource("1_rope")

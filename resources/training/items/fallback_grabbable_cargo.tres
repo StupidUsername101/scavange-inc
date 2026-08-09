@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="TrainingItemDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://ml/training/items/training_item_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+display_name = "Fallback Grabbable Cargo"
+item_type = "generic"
+shape_kind = 0
+dimensions = {
+"depth": 0.34,
+"height": 0.34,
+"radius": 0.17,
+"width": 0.34
+}
+mass_kg = 0.85
+reward_value = 1.0
+grip_surface_tags = PackedStringArray("carryable")
+visual_color = Color(0.94902, 0.721569, 0.294118, 1)

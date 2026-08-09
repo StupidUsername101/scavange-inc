@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="DroneAIChipDefinition" format=3 uid="uid://cx60svbqdj0fp"]
+
+[ext_resource type="Script" uid="uid://mirhdrf5wrip" path="res://scripts/drones/drone_ai_chip_definition.gd" id="1_chip"]
+[ext_resource type="Script" uid="uid://c8r1xd6t6s250" path="res://scripts/drones/ai_behaviors/orca_collision_avoidance_behavior.gd" id="2_behavior"]
+
+[resource]
+script = ExtResource("1_chip")
+behavior_id = &"orca_collision_avoidance"
+behavior_description = "Reciprocal local collision avoidance for nearby drones. Equipped peers share the maneuver; unequipped drones leave this chip to do all the work."
+behavior_script = ExtResource("2_behavior")
+behavior_parameters = {
+"max_neighbors": 8,
+"neighbor_distance": 12.0,
+"radius_padding": 0.28,
+"time_horizon": 2.0,
+"vertical_tolerance": 1.15
+}
+processing_priority = 92
+response_time = 0.06
+processing_efficiency = 0.96
+minimum_operating_power_ratio = 0.3
+idle_power_draw = 1.8
+active_power_draw = 6.4
+sensor_range = 12.0
+aim_error_degrees = 0.5
+friendly_identification_accuracy = 1.0
+damaging_spike_threshold = 1.72
+surge_fragility = 0.18
+surge_immune = true
+display_name = "ORCA Flight Coordinator"
+quality = 2
+visual_color = Color(0.12, 0.86, 0.74, 1)
+mass = 0.024
+rated_voltage_v = 12.0
+body_size = Vector3(0.2, 0.035, 0.15)

@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="TurretBaseDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/turrets/turret_base_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+display_name = "Training Servo Base"
+mass_kg = 28.0
+maximum_health = 300.0
+footprint_size = Vector3(0.9, 0.35, 0.9)
+rotating_head_radius_m = 0.32
+rotating_head_height_m = 0.28
+head_center_height_m = 0.48
+maximum_yaw_speed_degrees_per_second = 110.0
+yaw_acceleration_degrees_per_second_squared = 360.0
+yaw_braking_degrees_per_second_squared = 240.0

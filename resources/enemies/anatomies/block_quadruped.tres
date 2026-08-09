@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="EnemyPhysicalAnatomyDefinition" load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/enemy_physical_anatomy_definition.gd" id="1_anatomy"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/block_front_left.tres" id="2_fl"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/block_front_right.tres" id="3_fr"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/block_back_left.tres" id="4_bl"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/block_back_right.tres" id="5_br"]
+[ext_resource type="Script" path="res://scripts/enemies/enemy_physical_limb_definition.gd" id="6_limb_type"]
+
+[resource]
+script = ExtResource("1_anatomy")
+limbs = Array[ExtResource("6_limb_type")]([ExtResource("2_fl"), ExtResource("3_fr"), ExtResource("4_bl"), ExtResource("5_br")])
+step_trigger_distance = 0.4
+step_duration = 0.32
+step_height = 0.32
+velocity_look_ahead = 0.16
+probe_height = 1.2
+probe_depth = 2.4
+position_stiffness = 34.0
+position_damping = 9.0
+maximum_drive_force = 210.0
+angular_stiffness = 30.0
+angular_damping = 8.0
+maximum_drive_torque = 88.0
+maximum_target_speed = 10.0
+maximum_target_angular_speed = 26.0
+physical_influence = 1.0
+friction = 0.9
+bounce = 0.02
+passive_linear_damp = 1.5
+passive_angular_damp = 3.4

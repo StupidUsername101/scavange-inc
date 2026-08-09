@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="LimbSegmentDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/limbs/limb_segment_definition.gd" id="1_segment"]
+[ext_resource type="Resource" path="res://resources/drones/attachments/training_belly_grabber/shoulder_joint.tres" id="2_joint"]
+
+[resource]
+script = ExtResource("1_segment")
+segment_name = "Belly Arm Upper"
+rest_direction_local = Vector3(0, -1, 0)
+length = 0.32
+radius = 0.045
+mass = 0.12
+maximum_health = 100.0
+friction = 0.9
+bounce = 0.01
+continuous_collision_detection = false
+joint = ExtResource("2_joint")

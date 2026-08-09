@@ -1,0 +1,102 @@
+[gd_scene format=3 uid="uid://rr3gbeba4myu"]
+
+[ext_resource type="Script" uid="uid://csw00tcnjm6ek" path="res://scripts/ui/lobby_browser.gd" id="1_ntytl"]
+
+[node name="LobbyBrowser" type="Control" unique_id=892522248]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_ntytl")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.025, 0.035, 0.045, 1)
+
+[node name="Margin" type="MarginContainer" parent="Background"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 56.0
+offset_top = 40.0
+offset_right = -56.0
+offset_bottom = -40.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Layout" type="VBoxContainer" parent="Background/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 18
+
+[node name="Header" type="HBoxContainer" parent="Background/Margin/Layout"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="Background/Margin/Layout/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 34
+text = "Lobby browser"
+
+[node name="Back" type="Button" parent="Background/Margin/Layout/Header"]
+custom_minimum_size = Vector2(150, 48)
+layout_mode = 2
+text = "Back"
+
+[node name="Refresh" type="Button" parent="Background/Margin/Layout/Header"]
+custom_minimum_size = Vector2(170, 48)
+layout_mode = 2
+text = "Refresh"
+
+[node name="Status" type="Label" parent="Background/Margin/Layout"]
+custom_minimum_size = Vector2(0, 34)
+layout_mode = 2
+text = "Searching Steam lobbies..."
+
+[node name="ColumnHeader" type="HBoxContainer" parent="Background/Margin/Layout"]
+layout_mode = 2
+
+[node name="Name" type="Label" parent="Background/Margin/Layout/ColumnHeader"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Name"
+
+[node name="Players" type="Label" parent="Background/Margin/Layout/ColumnHeader"]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+text = "Players"
+horizontal_alignment = 1
+
+[node name="Action" type="Label" parent="Background/Margin/Layout/ColumnHeader"]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+text = "Action"
+horizontal_alignment = 1
+
+[node name="Separator" type="HSeparator" parent="Background/Margin/Layout"]
+layout_mode = 2
+
+[node name="LobbyScroll" type="ScrollContainer" parent="Background/Margin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="LobbyCards" type="VBoxContainer" parent="Background/Margin/Layout/LobbyScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+[node name="Empty" type="Label" parent="Background/Margin/Layout/LobbyScroll/LobbyCards"]
+custom_minimum_size = Vector2(0, 90)
+layout_mode = 2
+text = "Searching..."
+horizontal_alignment = 1
+vertical_alignment = 1

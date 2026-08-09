@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="DroneAIChipDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_ai_chip_definition.gd" id="1_chip"]
+[ext_resource type="Script" path="res://scripts/drones/ai_behaviors/follow_player_behavior.gd" id="2_behavior"]
+
+[resource]
+script = ExtResource("1_chip")
+display_name = "Close Companion Follow Chip"
+quality = 1
+visual_color = Color(0.3, 0.72, 0.94, 1)
+mass = 0.02
+behavior_id = &"follow_player"
+behavior_description = "Keeps a compact, lively orbit suitable for a personal utility drone."
+behavior_script = ExtResource("2_behavior")
+behavior_parameters = {"behavior_resume_seconds": 1.0, "follow_mode": &"orbit", "height_offset": 2.55, "inner_radius": 3.0, "movement_acceleration_scale": 0.78, "movement_jerk_scale": 0.7, "movement_speed_scale": 0.82, "movement_stop_distance": 0.24, "orbit_direction": -1.0, "orbit_speed_degrees": 14.0, "outer_radius": 4.8, "preferred_radius": 3.8, "recovery_settle_seconds": 0.55, "recovery_settle_speed": 0.8}
+processing_priority = 28
+response_time = 0.14
+processing_efficiency = 0.86
+minimum_operating_power_ratio = 0.32
+idle_power_draw = 1.5
+active_power_draw = 6.1
+sensor_range = 14.0
+aim_error_degrees = 2.4
+friendly_identification_accuracy = 0.9995
+damaging_spike_threshold = 1.42
+surge_fragility = 0.65
+body_size = Vector3(0.2, 0.035, 0.15)

@@ -1,0 +1,37 @@
+[gd_resource type="Resource" script_class="DroneCoreDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_core_definition.gd" id="1_core"]
+
+[resource]
+script = ExtResource("1_core")
+display_name = "Industrial Flight Core"
+quality = 2
+visual_color = Color(0.18, 0.32, 0.58, 1)
+mass = 1.1
+max_health = 160.0
+max_power_throughput = 160.0
+propeller_slot_count = 4
+ai_chip_slot_count = 4
+attachment_slot_count = 4
+body_size = Vector3(0.68, 0.25, 0.68)
+ai_max_horizontal_speed = 13.5
+ai_max_horizontal_acceleration = 10.0
+ai_max_vertical_speed = 6.0
+ai_max_vertical_acceleration = 10.0
+ai_max_tilt_degrees = 38.0
+ai_horizontal_position_gain = 1.0
+ai_horizontal_velocity_gain = 2.8
+ai_altitude_position_gain = 2.1
+ai_altitude_velocity_gain = 3.4
+ai_attitude_response = 25.0
+ai_angular_velocity_damping = 7.5
+ai_motor_mix_authority = 0.55
+ai_emergency_upright_torque = 1.8
+ai_altitude_authority = 0.24
+spool_up_response = 2.4
+spool_down_response = 3.8
+power_output_consistency = 0.998
+fluctuation_rate = 0.12
+drag_area = 0.16
+drag_coefficient = 0.92
+angular_drag_coefficient = 0.75

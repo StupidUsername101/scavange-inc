@@ -1,0 +1,126 @@
+[gd_scene load_steps=14 format=3]
+
+[ext_resource type="Script" path="res://scripts/client/body_part_shop_terminal_proxy.gd" id="1_shop"]
+
+[sub_resource type="StandardMaterial3D" id="Material_housing"]
+albedo_color = Color(0.055, 0.065, 0.068, 1)
+metallic = 0.55
+roughness = 0.3
+
+[sub_resource type="StandardMaterial3D" id="Material_trim"]
+albedo_color = Color(0.95, 0.47, 0.08, 1)
+metallic = 0.38
+roughness = 0.32
+
+[sub_resource type="StandardMaterial3D" id="Material_base"]
+albedo_color = Color(0.14, 0.15, 0.145, 1)
+metallic = 0.68
+roughness = 0.36
+
+[sub_resource type="StandardMaterial3D" id="Material_screen"]
+shading_mode = 0
+albedo_color = Color(0.92, 0.91, 0.86, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_light"]
+shading_mode = 0
+albedo_color = Color(0.95, 0.47, 0.08, 1)
+emission_enabled = true
+emission = Color(0.72, 0.22, 0.01, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_pad"]
+albedo_color = Color(0.19, 0.2, 0.19, 1)
+metallic = 0.42
+roughness = 0.46
+
+[sub_resource type="BoxMesh" id="Mesh_housing"]
+material = SubResource("Material_housing")
+size = Vector3(3.02, 1.28, 0.16)
+
+[sub_resource type="QuadMesh" id="Mesh_screen"]
+material = SubResource("Material_screen")
+size = Vector2(2.68, 1.02)
+
+[sub_resource type="BoxMesh" id="Mesh_stand"]
+material = SubResource("Material_base")
+size = Vector3(0.62, 1.1, 0.5)
+
+[sub_resource type="BoxMesh" id="Mesh_base"]
+material = SubResource("Material_base")
+size = Vector3(1.5, 0.12, 1.0)
+
+[sub_resource type="BoxMesh" id="Mesh_trim"]
+material = SubResource("Material_trim")
+size = Vector3(3.02, 0.055, 0.055)
+
+[sub_resource type="CylinderMesh" id="Mesh_light"]
+material = SubResource("Material_light")
+top_radius = 0.055
+bottom_radius = 0.055
+height = 0.025
+radial_segments = 20
+
+[sub_resource type="BoxMesh" id="Mesh_pad"]
+material = SubResource("Material_pad")
+size = Vector3(0.92, 0.06, 1.8)
+
+[node name="BodyPartShopTerminal" type="Node3D"]
+script = ExtResource("1_shop")
+station_id = 2
+
+[node name="TerminalHousing" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1.73, -0.63)
+mesh = SubResource("Mesh_housing")
+
+[node name="TerminalScreen" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1.73, -0.541)
+mesh = SubResource("Mesh_screen")
+
+[node name="BrandTrim" type="MeshInstance3D" parent="."]
+position = Vector3(0, 2.39, -0.53)
+mesh = SubResource("Mesh_trim")
+
+[node name="Stand" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.59, -0.57)
+mesh = SubResource("Mesh_stand")
+
+[node name="Base" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.06, -0.42)
+mesh = SubResource("Mesh_base")
+
+[node name="PickupPad" type="MeshInstance3D" parent="."]
+position = Vector3(2.05, 0.035, 0.3)
+mesh = SubResource("Mesh_pad")
+
+[node name="PickupStripe" type="MeshInstance3D" parent="."]
+position = Vector3(2.05, 0.072, 0.3)
+scale = Vector3(0.92, 1, 0.08)
+mesh = SubResource("Mesh_trim")
+
+[node name="OccupiedLight" type="MeshInstance3D" parent="."]
+position = Vector3(1.39, 2.34, -0.535)
+rotation_degrees = Vector3(90, 0, 0)
+mesh = SubResource("Mesh_light")
+
+[node name="Title" type="Label3D" parent="."]
+position = Vector3(0, 2.57, -0.56)
+modulate = Color(0.95, 0.47, 0.08, 1)
+text = "Scav. Inc."
+font_size = 48
+outline_size = 8
+
+[node name="Instructions" type="Label3D" parent="."]
+position = Vector3(0, 0.12, 0.16)
+pixel_size = 0.0017
+modulate = Color(0.75, 0.78, 0.75, 1)
+text = "ORDERING TERMINAL  •  SELECT DEPARTMENT  •  PICK UP BESIDE KIOSK"
+font_size = 22
+outline_size = 5
+
+[node name="PickupLabel" type="Label3D" parent="."]
+position = Vector3(2.05, 0.12, 0.3)
+rotation_degrees = Vector3(-90, 0, 0)
+pixel_size = 0.0018
+modulate = Color(0.95, 0.47, 0.08, 1)
+text = "ORDER PICKUP"
+font_size = 28
+outline_size = 4

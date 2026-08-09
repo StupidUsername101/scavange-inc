@@ -1,0 +1,45 @@
+[gd_resource type="Resource" script_class="DroneAIChipDefinition" format=3 uid="uid://c8dgenj6t2ma"]
+
+[ext_resource type="Script" uid="uid://mirhdrf5wrip" path="res://scripts/drones/drone_ai_chip_definition.gd" id="1_chip"]
+[ext_resource type="Script" uid="uid://cknhjjkgj7vtp" path="res://scripts/drones/ai_behaviors/follow_player_behavior.gd" id="2_behavior"]
+
+[resource]
+script = ExtResource("1_chip")
+behavior_id = &"follow_player"
+behavior_description = "Roams between new positions inside a medium follow ring."
+behavior_script = ExtResource("2_behavior")
+behavior_parameters = {
+"behavior_resume_seconds": 1.25,
+"follow_mode": &"roam",
+"height_offset": 2.8,
+"inner_radius": 3.6,
+"movement_acceleration_scale": 0.72,
+"movement_jerk_scale": 0.62,
+"movement_speed_scale": 0.78,
+"movement_stop_distance": 0.42,
+"outer_radius": 6.6,
+"preferred_radius": 5.1,
+"recovery_boundary_margin": 0.4,
+"recovery_settle_seconds": 0.65,
+"recovery_settle_speed": 0.75,
+"reposition_interval_max": 9.0,
+"reposition_interval_min": 5.0
+}
+processing_priority = 25
+response_time = 0.2
+processing_efficiency = 0.82
+idle_power_draw = 1.2
+active_power_draw = 4.8
+friendly_identification_accuracy = 0.999
+damaging_spike_threshold = 1.38
+surge_fragility = 0.8
+display_name = "Shepherd Follow Chip"
+visual_color = Color(0.2, 0.62, 0.86, 1)
+mass = 0.018
+quality = 1
+rated_voltage_v = 12.0
+minimum_operating_power_ratio = 0.35
+sensor_range = 18.0
+aim_error_degrees = 3.0
+surge_immune = false
+body_size = Vector3(0.2, 0.035, 0.15)

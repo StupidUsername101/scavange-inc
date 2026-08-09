@@ -1,0 +1,31 @@
+[gd_scene load_steps=4 format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_lens"]
+albedo_color = Color(0.78, 0.38, 0.06, 1)
+metallic = 0.56
+roughness = 0.34
+emission_enabled = true
+emission = Color(0.34, 0.09, 0.005, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_lens"]
+material = SubResource("Material_lens")
+size = Vector3(0.115, 0.09, 0.055)
+
+[sub_resource type="BoxMesh" id="Mesh_bridge"]
+material = SubResource("Material_lens")
+size = Vector3(0.12, 0.025, 0.025)
+
+[node name="SalvagedOcularsVisual" type="Node3D"]
+
+[node name="LeftLens" type="MeshInstance3D" parent="."]
+position = Vector3(-0.1, 0.008, 0)
+rotation = Vector3(0, 0, -0.08)
+mesh = SubResource("Mesh_lens")
+
+[node name="RightLens" type="MeshInstance3D" parent="."]
+position = Vector3(0.1, -0.008, 0)
+rotation = Vector3(0, 0, 0.11)
+mesh = SubResource("Mesh_lens")
+
+[node name="Bridge" type="MeshInstance3D" parent="."]
+mesh = SubResource("Mesh_bridge")

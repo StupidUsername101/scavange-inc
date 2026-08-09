@@ -1,0 +1,42 @@
+[gd_resource type="Resource" script_class="FourLimbBodyDefinition" load_steps=12 format=3]
+
+[ext_resource type="Script" path="res://ml/bodies/four_limb/four_limb_body_definition.gd" id="1_body"]
+[ext_resource type="Script" path="res://ml/bodies/four_limb/four_limb_slot_definition.gd" id="2_limb_type"]
+[ext_resource type="Script" path="res://ml/bodies/four_limb/four_limb_attachment_slot_definition.gd" id="3_slot_type"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/limbs/front_right.tres" id="4_fr"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/limbs/rear_right.tres" id="5_rr"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/limbs/rear_left.tres" id="6_rl"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/limbs/front_left.tres" id="7_fl"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/slots/top.tres" id="8_top"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/slots/left.tres" id="9_left"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/slots/right.tres" id="10_right"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/slots/rear.tres" id="11_rear"]
+
+[resource]
+script = ExtResource("1_body")
+core_size = Vector3(0.72, 0.28, 0.92)
+core_mass = 3.2
+core_maximum_health = 300.0
+friction = 0.95
+bounce = 0.01
+linear_damp = 0.60
+angular_damp = 1.20
+hip_stiffness = 210.0
+hip_damping = 22.0
+maximum_hip_torque = 320.0
+hip_horizontal_response_degrees_per_second = 190.0
+knee_stiffness = 240.0
+knee_damping = 24.0
+maximum_knee_torque = 360.0
+joint_limit_soft_zone_degrees = 8.0
+joint_limit_stiffness = 260.0
+joint_limit_damping = 20.0
+maximum_joint_limit_torque = 520.0
+passive_joint_stiffness = 130.0
+passive_joint_damping = 18.0
+maximum_passive_joint_torque = 420.0
+passive_joint_progressive_onset_ratio = 0.40
+passive_joint_progressive_ratio = 5.0
+passive_joint_native_fraction = 0.35
+limbs = Array[ExtResource("2_limb_type")]([ExtResource("4_fr"), ExtResource("5_rr"), ExtResource("6_rl"), ExtResource("7_fl")])
+attachment_slots = Array[ExtResource("3_slot_type")]([ExtResource("8_top"), ExtResource("9_left"), ExtResource("10_right"), ExtResource("11_rear")])

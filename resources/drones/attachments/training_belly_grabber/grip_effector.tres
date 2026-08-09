@@ -1,0 +1,34 @@
+[gd_resource type="Resource" script_class="LimbEndEffectorDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/limbs/limb_end_effector_definition.gd" id="1_effector"]
+
+[resource]
+script = ExtResource("1_effector")
+effector_name = "Belly Arm Grip"
+enabled = true
+effector_type_id = &"generic_grip"
+geometry_type = 2
+box_size = Vector3(0.14, 0.055, 0.14)
+added_mass = 0.05
+friction = 1.0
+bounce = 0.0
+rough = true
+grip_mode = 2
+grip_action_index = -1
+grip_activation_threshold = 0.55
+activation_response_per_second = 18.0
+grip_acquisition_radius = 0.20
+grip_detection_radius = 1.10
+candidate_refresh_seconds = 0.10
+grip_collision_mask = 1
+allow_static_grip = true
+allow_dynamic_grip = true
+maximum_held_mass = 25.0
+grip_stiffness = 1400.0
+grip_damping = 90.0
+grip_release_threshold = 0.30
+maximum_normal_holding_force = 420.0
+maximum_shear_holding_force = 360.0
+breakaway_load_ratio = 1.0
+breakaway_confirmation_seconds = 0.08
+compatible_surface_tags = PackedStringArray("climbable", "carryable")

@@ -1,0 +1,228 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_base"]
+albedo_color = Color(0.065, 0.078, 0.09, 1)
+metallic = 0.76
+roughness = 0.32
+
+[sub_resource type="StandardMaterial3D" id="Material_trim"]
+albedo_color = Color(0.18, 0.21, 0.23, 1)
+metallic = 0.58
+roughness = 0.38
+
+[sub_resource type="StandardMaterial3D" id="Material_hologram"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(0.08, 0.82, 0.94, 0.28)
+emission_enabled = true
+emission = Color(0.02, 0.48, 0.68, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_hologram_dim"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(0.04, 0.55, 0.68, 0.14)
+emission_enabled = true
+emission = Color(0.01, 0.18, 0.28, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_accept"]
+shading_mode = 0
+albedo_color = Color(0.06, 0.82, 0.25, 1)
+emission_enabled = true
+emission = Color(0.02, 0.45, 0.08, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_abort"]
+shading_mode = 0
+albedo_color = Color(0.9, 0.09, 0.055, 1)
+emission_enabled = true
+emission = Color(0.52, 0.015, 0.008, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_rotate"]
+shading_mode = 0
+albedo_color = Color(0.08, 0.62, 0.92, 1)
+emission_enabled = true
+emission = Color(0.015, 0.25, 0.62, 1)
+
+[sub_resource type="StandardMaterial3D" id="Material_reset"]
+shading_mode = 0
+albedo_color = Color(0.96, 0.64, 0.12, 1)
+emission_enabled = true
+emission = Color(0.55, 0.22, 0.015, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_base"]
+material = SubResource("Material_base")
+size = Vector3(3, 0.18, 2.3)
+
+[sub_resource type="BoxMesh" id="Mesh_pedestal"]
+material = SubResource("Material_trim")
+size = Vector3(1.18, 0.55, 0.92)
+
+[sub_resource type="CylinderMesh" id="Mesh_deck"]
+material = SubResource("Material_base")
+top_radius = 1.08
+bottom_radius = 1.08
+height = 0.1
+radial_segments = 40
+
+[sub_resource type="TorusMesh" id="Mesh_holo_ring"]
+material = SubResource("Material_hologram")
+inner_radius = 0.98
+outer_radius = 1.02
+rings = 40
+ring_segments = 10
+
+[sub_resource type="CylinderMesh" id="Mesh_holo_beam"]
+material = SubResource("Material_hologram_dim")
+top_radius = 0.018
+bottom_radius = 0.018
+height = 0.95
+radial_segments = 8
+
+[sub_resource type="BoxMesh" id="Mesh_console"]
+material = SubResource("Material_base")
+size = Vector3(3, 0.16, 0.58)
+
+[sub_resource type="BoxMesh" id="Mesh_button"]
+size = Vector3(0.34, 0.07, 0.22)
+
+[node name="DroneCraftingStation" type="Node3D"]
+
+[node name="Base" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.22, 0)
+mesh = SubResource("Mesh_base")
+
+[node name="Pedestal" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.55, 0.18)
+mesh = SubResource("Mesh_pedestal")
+
+[node name="HologramDeck" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.87, 0.12)
+mesh = SubResource("Mesh_deck")
+
+[node name="LowerHologramRing" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1.02, 0.12)
+mesh = SubResource("Mesh_holo_ring")
+
+[node name="UpperHologramRing" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1.84, 0.12)
+mesh = SubResource("Mesh_holo_ring")
+
+[node name="BeamFrontLeft" type="MeshInstance3D" parent="."]
+position = Vector3(-0.72, 1.43, -0.6)
+mesh = SubResource("Mesh_holo_beam")
+
+[node name="BeamFrontRight" type="MeshInstance3D" parent="."]
+position = Vector3(0.72, 1.43, -0.6)
+mesh = SubResource("Mesh_holo_beam")
+
+[node name="BeamBackLeft" type="MeshInstance3D" parent="."]
+position = Vector3(-0.72, 1.43, 0.84)
+mesh = SubResource("Mesh_holo_beam")
+
+[node name="BeamBackRight" type="MeshInstance3D" parent="."]
+position = Vector3(0.72, 1.43, 0.84)
+mesh = SubResource("Mesh_holo_beam")
+
+[node name="ControlStrip" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.82, -1.35)
+rotation = Vector3(-0.139626, 0, 0)
+mesh = SubResource("Mesh_console")
+
+[node name="Accept" type="MeshInstance3D" parent="."]
+position = Vector3(-1.15, 0.94, -1.36)
+mesh = SubResource("Mesh_button")
+material_override = SubResource("Material_accept")
+
+[node name="Abort" type="MeshInstance3D" parent="."]
+position = Vector3(-0.77, 0.94, -1.36)
+mesh = SubResource("Mesh_button")
+material_override = SubResource("Material_abort")
+
+[node name="RotateXNegative" type="MeshInstance3D" parent="."]
+position = Vector3(-0.29, 0.94, -1.36)
+mesh = SubResource("Mesh_button")
+material_override = SubResource("Material_rotate")
+
+[node name="RotateXPositive" type="MeshInstance3D" parent="."]
+position = Vector3(0.09, 0.94, -1.36)
+mesh = SubResource("Mesh_button")
+material_override = SubResource("Material_rotate")
+
+[node name="RotateYNegative" type="MeshInstance3D" parent="."]
+position = Vector3(0.47, 0.94, -1.36)
+mesh = SubResource("Mesh_button")
+material_override = SubResource("Material_rotate")
+
+[node name="RotateYPositive" type="MeshInstance3D" parent="."]
+position = Vector3(0.85, 0.94, -1.36)
+mesh = SubResource("Mesh_button")
+material_override = SubResource("Material_rotate")
+
+[node name="ResetRotation" type="MeshInstance3D" parent="."]
+position = Vector3(1.23, 0.94, -1.36)
+mesh = SubResource("Mesh_button")
+material_override = SubResource("Material_reset")
+
+[node name="AcceptLabel" type="Label3D" parent="."]
+position = Vector3(-1.15, 1.02, -1.48)
+rotation = Vector3(0, 3.14159, 0)
+text = "OK"
+font_size = 24
+outline_size = 6
+
+[node name="AbortLabel" type="Label3D" parent="."]
+position = Vector3(-0.77, 1.02, -1.48)
+rotation = Vector3(0, 3.14159, 0)
+text = "X"
+font_size = 24
+outline_size = 6
+
+[node name="XNegativeLabel" type="Label3D" parent="."]
+position = Vector3(-0.29, 1.02, -1.48)
+rotation = Vector3(0, 3.14159, 0)
+text = "X-"
+font_size = 22
+outline_size = 6
+
+[node name="XPositiveLabel" type="Label3D" parent="."]
+position = Vector3(0.09, 1.02, -1.48)
+rotation = Vector3(0, 3.14159, 0)
+text = "X+"
+font_size = 22
+outline_size = 6
+
+[node name="YNegativeLabel" type="Label3D" parent="."]
+position = Vector3(0.47, 1.02, -1.48)
+rotation = Vector3(0, 3.14159, 0)
+text = "Y-"
+font_size = 22
+outline_size = 6
+
+[node name="YPositiveLabel" type="Label3D" parent="."]
+position = Vector3(0.85, 1.02, -1.48)
+rotation = Vector3(0, 3.14159, 0)
+text = "Y+"
+font_size = 22
+outline_size = 6
+
+[node name="ResetLabel" type="Label3D" parent="."]
+position = Vector3(1.23, 1.02, -1.48)
+rotation = Vector3(0, 3.14159, 0)
+text = "R"
+font_size = 22
+outline_size = 6
+
+[node name="Title" type="Label3D" parent="."]
+position = Vector3(0, 2.17, 0.12)
+rotation = Vector3(0, 3.14159, 0)
+modulate = Color(0.38, 0.91, 1, 1)
+text = "DRONE ASSEMBLY"
+font_size = 40
+outline_size = 8
+
+[node name="CoreStartHint" type="Label3D" parent="."]
+position = Vector3(0, 1.96, 0.12)
+rotation = Vector3(0, 3.14159, 0)
+modulate = Color(0.68, 0.9, 0.94, 1)
+text = "HOLD CORE + LEFT CLICK HOLOGRAM"
+font_size = 22
+outline_size = 6

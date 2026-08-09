@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="ItemDefinition" format=3 uid="uid://653af8rd3ye3"]
+
+[ext_resource type="Script" uid="uid://cjselu71rl1r0" path="res://scripts/items/item_definition.gd" id="1_wiqq1"]
+[ext_resource type="PackedScene" uid="uid://cmo0056e4ufge" path="res://assets/models/soda-red.glb" id="2_ssw4p"]
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_ssw4p"]
+
+[resource]
+script = ExtResource("1_wiqq1")
+display_name = "red soda"
+sync_size_sliders = false
+overall_size = 0.34
+mass = 0.35000000000000003
+grip_surface_tags = PackedStringArray("carryable")
+visual_scene = ExtResource("2_ssw4p")
+collision_shape = SubResource("CylinderShape3D_ssw4p")
+shape_rotation_x = 90.0
+shape_size_x = 1.1
+shape_size_y = 1.01
+shape_size_z = 1.15
+metadata/_custom_type_script = "uid://cjselu71rl1r0"

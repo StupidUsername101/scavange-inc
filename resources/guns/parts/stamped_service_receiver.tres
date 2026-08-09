@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="GunReceiverDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/weapons/gun_receiver_definition.gd" id="1_receiver"]
+
+[sub_resource type="BoxShape3D" id="Shape"]
+size = Vector3(0.24, 0.15, 0.34)
+
+[resource]
+script = ExtResource("1_receiver")
+display_name = "Stamped Service Receiver"
+inventory_code = "RCV"
+mass = 0.48
+collision_shape = SubResource("Shape")
+part_slot = 0
+caliber_id = &"9x19"
+component_color = Color(0.16, 0.18, 0.2, 1)
+component_size = Vector3(0.24, 0.15, 0.34)
+rounds_per_second = 4.2
+base_spread_degrees = 1.35
+damage_multiplier = 1.0
+reload_seconds = 1.35
+automatic = false

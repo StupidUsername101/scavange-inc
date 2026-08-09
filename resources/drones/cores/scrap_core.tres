@@ -1,0 +1,37 @@
+[gd_resource type="Resource" script_class="DroneCoreDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_core_definition.gd" id="1_core"]
+
+[resource]
+script = ExtResource("1_core")
+display_name = "Rewired Utility Core"
+quality = 0
+visual_color = Color(0.32, 0.2, 0.13, 1)
+mass = 1.05
+max_health = 60.0
+max_power_throughput = 85.0
+propeller_slot_count = 3
+ai_chip_slot_count = 1
+attachment_slot_count = 1
+body_size = Vector3(0.7, 0.28, 0.7)
+ai_max_horizontal_speed = 5.2
+ai_max_horizontal_acceleration = 2.7
+ai_max_vertical_speed = 2.8
+ai_max_vertical_acceleration = 4.0
+ai_max_tilt_degrees = 16.0
+ai_horizontal_position_gain = 0.62
+ai_horizontal_velocity_gain = 1.45
+ai_altitude_position_gain = 1.25
+ai_altitude_velocity_gain = 1.9
+ai_attitude_response = 8.0
+ai_angular_velocity_damping = 3.0
+ai_motor_mix_authority = 0.25
+ai_emergency_upright_torque = 0.8
+ai_altitude_authority = 0.12
+spool_up_response = 0.9
+spool_down_response = 1.7
+power_output_consistency = 0.88
+fluctuation_rate = 1.1
+drag_area = 0.22
+drag_coefficient = 1.2
+angular_drag_coefficient = 0.42

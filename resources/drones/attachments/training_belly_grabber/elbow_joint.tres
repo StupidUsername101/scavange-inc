@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="LimbJointDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/limbs/limb_joint_definition.gd" id="1_joint"]
+
+[resource]
+script = ExtResource("1_joint")
+joint_name = "Belly Arm Elbow"
+lower_limit_degrees = Vector3(0, 0, 0)
+upper_limit_degrees = Vector3(0, 0, 125)
+controlled_axes = Vector3i(0, 0, 1)
+action_indices = Vector3i(-1, -1, -1)
+passive_stiffness = Vector3(0, 0, 85)
+passive_damping = Vector3(0, 0, 14)
+maximum_passive_torque = Vector3(0, 0, 150)
+passive_progressive_ratio = Vector3(0, 0, 4)
+active_stiffness = Vector3(0, 0, 145)
+active_damping = Vector3(0, 0, 18)
+maximum_active_torque = Vector3(0, 0, 175)
+commanded_passive_yield = Vector3(0, 0, 1)
+target_response_degrees_per_second = 260.0
+command_limit_margin_degrees = 4.0
+soft_limit_zone_degrees = 8.0
+soft_limit_stiffness = Vector3(0, 0, 220)
+soft_limit_damping = Vector3(0, 0, 18)
+maximum_soft_limit_torque = Vector3(0, 0, 200)

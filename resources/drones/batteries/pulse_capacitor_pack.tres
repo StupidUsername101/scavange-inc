@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="DroneBatteryDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_battery_definition.gd" id="1_battery"]
+
+[resource]
+script = ExtResource("1_battery")
+display_name = "Pulse Capacitor Pack"
+quality = 2
+visual_color = Color(0.72, 0.18, 0.62, 1)
+mass = 0.28
+energy_capacity_wh = 1.25
+nominal_power_output = 125.0
+maximum_power_output = 190.0
+body_size = Vector3(0.34, 0.12, 0.25)
+power_output_consistency = 0.91
+fluctuation_rate = 1.4
+spike_chance_per_second = 0.14
+minimum_spike_duration = 0.06
+maximum_spike_duration = 0.2
+minimum_drop_multiplier = 0.62
+maximum_drop_multiplier = 0.84
+minimum_boost_multiplier = 1.28
+maximum_boost_multiplier = 1.7
+surge_protection = 0.84
+extreme_spike_damage_coupling = 0.018

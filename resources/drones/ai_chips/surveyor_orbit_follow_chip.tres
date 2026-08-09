@@ -1,0 +1,28 @@
+[gd_resource type="Resource" script_class="DroneAIChipDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_ai_chip_definition.gd" id="1_chip"]
+[ext_resource type="Script" path="res://scripts/drones/ai_behaviors/follow_player_behavior.gd" id="2_behavior"]
+
+[resource]
+script = ExtResource("1_chip")
+display_name = "Surveyor Orbit Follow Chip"
+quality = 2
+visual_color = Color(0.16, 0.82, 0.64, 1)
+mass = 0.026
+behavior_id = &"follow_player"
+behavior_description = "Continuously circles the player inside a precise escort ring."
+behavior_script = ExtResource("2_behavior")
+behavior_parameters = {"behavior_resume_seconds": 0.9, "follow_mode": &"orbit", "height_offset": 3.0, "inner_radius": 4.1, "movement_acceleration_scale": 0.92, "movement_jerk_scale": 0.82, "movement_speed_scale": 0.95, "movement_stop_distance": 0.26, "orbit_direction": 1.0, "orbit_speed_degrees": 10.0, "outer_radius": 6.7, "preferred_radius": 5.35, "recovery_settle_seconds": 0.45, "recovery_settle_speed": 0.7}
+processing_priority = 32
+response_time = 0.09
+processing_efficiency = 0.94
+minimum_operating_power_ratio = 0.28
+idle_power_draw = 2.1
+active_power_draw = 8.2
+sensor_range = 26.0
+aim_error_degrees = 1.2
+friendly_identification_accuracy = 1.0
+damaging_spike_threshold = 1.65
+surge_fragility = 0.22
+surge_immune = true
+body_size = Vector3(0.2, 0.035, 0.15)

@@ -1,0 +1,39 @@
+[gd_resource type="Resource" script_class="RopeDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ropes/rope_definition.gd" id="1_rope"]
+
+[sub_resource type="CapsuleShape3D" id="SpoolShape"]
+radius = 0.23
+height = 0.5
+
+[resource]
+script = ExtResource("1_rope")
+display_name = "60 m Fiber-Optic Tether"
+overall_size = 0.92
+mass = 0.74
+collision_shape = SubResource("SpoolShape")
+shape_rotation_x = 90.0
+rope_color = Color(0.055, 0.13, 0.16, 1)
+visual_effect = 2
+effect_color = Color(0.08, 0.92, 1, 1)
+effect_speed = 3.6
+maximum_length = 60.0
+placement_slack = 0.55
+diameter = 0.016
+target_segment_length = 0.82
+maximum_simulation_segments = 72
+visual_repeat_length = 0.24
+visual_section_contrast = 0.14
+linear_density_kg_per_m = 0.028
+breaking_force_newtons = 1100.0
+stretch_stiffness_newtons_per_m = 2100.0
+tension_damping = 58.0
+force_response = 9.0
+tension_slew_rate_newtons_per_second = 750.0
+motion_damping = 0.988
+surface_friction = 0.34
+solver_iterations = 6
+break_grace_seconds = 0.12
+provides_fiber_link = true
+data_bandwidth_mbps = 1000.0
+signal_loss_per_meter = 0.0025

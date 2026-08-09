@@ -1,0 +1,37 @@
+[gd_resource type="Resource" script_class="EnemyPhysicalAnatomyDefinition" load_steps=11 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/enemy_physical_anatomy_definition.gd" id="1_anatomy"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/spider_front_left.tres" id="2_fl"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/spider_front_right.tres" id="3_fr"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/spider_mid_front_left.tres" id="4_mfl"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/spider_mid_front_right.tres" id="5_mfr"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/spider_mid_back_left.tres" id="6_mbl"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/spider_mid_back_right.tres" id="7_mbr"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/spider_back_left.tres" id="8_bl"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/spider_back_right.tres" id="9_br"]
+[ext_resource type="Script" path="res://scripts/enemies/enemy_physical_limb_definition.gd" id="10_limb_type"]
+
+[resource]
+script = ExtResource("1_anatomy")
+limbs = Array[ExtResource("10_limb_type")]([ExtResource("2_fl"), ExtResource("3_fr"), ExtResource("4_mfl"), ExtResource("5_mfr"), ExtResource("6_mbl"), ExtResource("7_mbr"), ExtResource("8_bl"), ExtResource("9_br")])
+step_trigger_distance = 0.5
+step_duration = 0.28
+step_height = 0.46
+velocity_look_ahead = 0.17
+support_transfer_duration = 0.045
+swing_retraction_distance = 0.18
+probe_height = 1.35
+probe_depth = 2.6
+position_stiffness = 32.0
+position_damping = 8.5
+maximum_drive_force = 195.0
+angular_stiffness = 28.0
+angular_damping = 7.5
+maximum_drive_torque = 82.0
+maximum_target_speed = 12.0
+maximum_target_angular_speed = 30.0
+physical_influence = 1.0
+friction = 0.86
+bounce = 0.03
+passive_linear_damp = 1.35
+passive_angular_damp = 3.1

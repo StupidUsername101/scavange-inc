@@ -1,0 +1,11 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/server/server_drone_part.gd" id="1_part"]
+
+[node name="ServerDronePart" type="RigidBody3D"]
+mass = 0.1
+linear_damp = 0.05
+angular_damp = 0.08
+script = ExtResource("1_part")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]

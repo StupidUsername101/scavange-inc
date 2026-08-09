@@ -1,0 +1,28 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/server/body_part_shop_terminal.gd" id="1_shop"]
+
+[sub_resource type="BoxShape3D" id="Shape_screen"]
+size = Vector3(3.02, 1.28, 0.16)
+
+[sub_resource type="BoxShape3D" id="Shape_stand"]
+size = Vector3(0.62, 1.1, 0.5)
+
+[sub_resource type="BoxShape3D" id="Shape_base"]
+size = Vector3(1.5, 0.12, 1.0)
+
+[node name="BodyPartShopTerminal" type="StaticBody3D"]
+script = ExtResource("1_shop")
+station_id = 2
+
+[node name="ScreenCollision" type="CollisionShape3D" parent="."]
+position = Vector3(0, 1.73, -0.63)
+shape = SubResource("Shape_screen")
+
+[node name="StandCollision" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.59, -0.57)
+shape = SubResource("Shape_stand")
+
+[node name="BaseCollision" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.06, -0.42)
+shape = SubResource("Shape_base")

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="CharacterLoadout" format=3 uid="uid://hypupe6emc6x"]
+
+[ext_resource type="Script" uid="uid://vw3bbtnsw68u" path="res://scripts/characters/character_loadout.gd" id="1_loadout"]
+[ext_resource type="Resource" uid="uid://d4jdo5xut7uux" path="res://resources/limbs/human_left_arm.tres" id="2_left_arm"]
+[ext_resource type="Resource" uid="uid://bg3ngobea2xir" path="res://resources/limbs/human_right_arm.tres" id="3_right_arm"]
+[ext_resource type="Resource" uid="uid://dyckpnoe5datn" path="res://resources/limbs/human_left_leg.tres" id="4_left_leg"]
+[ext_resource type="Resource" uid="uid://cu7els28y5c4t" path="res://resources/limbs/human_right_leg.tres" id="5_right_leg"]
+
+[resource]
+script = ExtResource("1_loadout")
+left_arm = ExtResource("2_left_arm")
+right_arm = ExtResource("3_right_arm")
+left_leg = ExtResource("4_left_leg")
+right_leg = ExtResource("5_right_leg")

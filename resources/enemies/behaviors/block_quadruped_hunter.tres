@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="EnemyBehaviorDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/enemy_behavior_definition.gd" id="1_behavior"]
+
+[resource]
+script = ExtResource("1_behavior")
+behavior_type = 1
+notice_range = 12.0
+preferred_distance = 1.7
+maximum_speed = 2.25
+acceleration = 7.5
+turn_speed_radians = 4.2
+roam_radius = 3.6
+attack_range = 1.85
+attack_cooldown = 1.4
+attack_damage = 28.0

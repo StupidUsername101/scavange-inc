@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="DroneBatteryDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_battery_definition.gd" id="1_battery"]
+
+[resource]
+script = ExtResource("1_battery")
+display_name = "Unstable Salvage Cell"
+quality = 0
+visual_color = Color(0.47, 0.23, 0.11, 1)
+mass = 0.45
+energy_capacity_wh = 1.0
+nominal_power_output = 80.0
+maximum_power_output = 105.0
+body_size = Vector3(0.38, 0.14, 0.28)
+power_output_consistency = 0.82
+fluctuation_rate = 1.8
+spike_chance_per_second = 0.2
+minimum_spike_duration = 0.15
+maximum_spike_duration = 0.65
+minimum_drop_multiplier = 0.25
+maximum_drop_multiplier = 0.65
+minimum_boost_multiplier = 1.2
+maximum_boost_multiplier = 1.55
+surge_protection = 0.1
+extreme_spike_damage_coupling = 0.08

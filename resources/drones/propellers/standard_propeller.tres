@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="DronePropellerDefinition" format=3 uid="uid://bkjpytlxl0n4s"]
+
+[ext_resource type="Script" uid="uid://dd4ovcax8ndar" path="res://scripts/drones/drone_propeller_definition.gd" id="1_propeller"]
+
+[resource]
+script = ExtResource("1_propeller")
+max_power_draw = 42.0
+aerodynamic_efficiency = 0.78
+display_name = "Light Utility Propeller"
+visual_color = Color(0.84, 0.58, 0.12, 1)
+mass = 0.15
+quality = 1
+rated_voltage_v = 12.0
+rotor_radius = 0.18
+reaction_torque_per_newton = 0.012
+axial_flow_response = 0.65
+minimum_axial_flow_factor = 0.55
+maximum_axial_flow_factor = 1.45

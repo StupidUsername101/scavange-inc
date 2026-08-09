@@ -1,0 +1,70 @@
+[gd_scene load_steps=16 format=3]
+
+[ext_resource type="Script" path="res://scripts/server/drone_inspection_station.gd" id="1_station"]
+[ext_resource type="Resource" path="res://resources/drones/inspection/weapon_interface.tres" id="2_weapon"]
+[ext_resource type="Resource" path="res://resources/drones/inspection/arm_interface.tres" id="3_arm"]
+[ext_resource type="Resource" path="res://resources/drones/inspection/core_interface.tres" id="4_core"]
+[ext_resource type="Resource" path="res://resources/drones/inspection/battery_interface.tres" id="5_battery"]
+[ext_resource type="Resource" path="res://resources/drones/inspection/propeller_interface.tres" id="6_propeller"]
+[ext_resource type="Resource" path="res://resources/drones/inspection/ai_chip_interface.tres" id="7_chip"]
+[ext_resource type="Resource" path="res://resources/drones/inspection/attachment_interface.tres" id="8_attachment"]
+[ext_resource type="Resource" path="res://resources/drones/inspection/rope_interface.tres" id="9_rope"]
+[ext_resource type="Resource" path="res://resources/items/player_equipment_inspection_interface.tres" id="10_player_equipment"]
+
+[sub_resource type="BoxShape3D" id="Shape_tabletop"]
+size = Vector3(3.4, 0.2, 1.5)
+
+[sub_resource type="BoxShape3D" id="Shape_leg"]
+size = Vector3(0.22, 0.9, 0.22)
+
+[sub_resource type="BoxShape3D" id="Shape_terminal"]
+size = Vector3(3.05, 1.32, 0.18)
+
+[sub_resource type="BoxShape3D" id="Shape_lower_shelf"]
+size = Vector3(2.9, 0.12, 1.1)
+
+[sub_resource type="BoxShape3D" id="Shape_front_rail"]
+size = Vector3(3.1, 0.34, 0.14)
+
+[node name="DroneInspectionStation" type="StaticBody3D"]
+script = ExtResource("1_station")
+station_id = 1
+stat_interfaces = Array[Resource]([ExtResource("2_weapon"), ExtResource("3_arm"), ExtResource("4_core"), ExtResource("5_battery"), ExtResource("6_propeller"), ExtResource("7_chip"), ExtResource("8_attachment"), ExtResource("9_rope"), ExtResource("10_player_equipment")])
+
+[node name="PartAnchor" type="Marker3D" parent="."]
+position = Vector3(0, 1.28, 0.12)
+
+[node name="PartOutput" type="Marker3D" parent="."]
+position = Vector3(0, 1.27, 1.02)
+
+[node name="Tabletop" type="CollisionShape3D" parent="."]
+position = Vector3(0, 1, 0)
+shape = SubResource("Shape_tabletop")
+
+[node name="FrontLeftLeg" type="CollisionShape3D" parent="."]
+position = Vector3(-1.47, 0.45, 0.55)
+shape = SubResource("Shape_leg")
+
+[node name="FrontRightLeg" type="CollisionShape3D" parent="."]
+position = Vector3(1.47, 0.45, 0.55)
+shape = SubResource("Shape_leg")
+
+[node name="BackLeftLeg" type="CollisionShape3D" parent="."]
+position = Vector3(-1.47, 0.45, -0.55)
+shape = SubResource("Shape_leg")
+
+[node name="BackRightLeg" type="CollisionShape3D" parent="."]
+position = Vector3(1.47, 0.45, -0.55)
+shape = SubResource("Shape_leg")
+
+[node name="LowerShelf" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.34, 0)
+shape = SubResource("Shape_lower_shelf")
+
+[node name="Terminal" type="CollisionShape3D" parent="."]
+position = Vector3(0, 1.73, -0.66)
+shape = SubResource("Shape_terminal")
+
+[node name="FrontRail" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.8, 0.68)
+shape = SubResource("Shape_front_rail")

@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="LimbJointDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/limbs/limb_joint_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+joint_name = "Walker Knee"
+controlled_axes = Vector3i(0, 0, 1)
+action_indices = Vector3i(-1, -1, -1)
+commanded_passive_yield = Vector3(0, 0, 1)
+target_response_degrees_per_second = 260.0

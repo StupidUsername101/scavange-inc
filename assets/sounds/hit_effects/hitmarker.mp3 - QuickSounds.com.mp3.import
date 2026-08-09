@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://c7kh42gepxxml"
+path="res://.godot/imported/hitmarker.mp3 - QuickSounds.com.mp3-c8dbe21985b42a3e25df474d8ae73071.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/hit_effects/hitmarker.mp3 - QuickSounds.com.mp3"
+dest_files=["res://.godot/imported/hitmarker.mp3 - QuickSounds.com.mp3-c8dbe21985b42a3e25df474d8ae73071.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

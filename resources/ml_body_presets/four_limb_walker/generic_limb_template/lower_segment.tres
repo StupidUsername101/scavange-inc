@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="LimbSegmentDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/limbs/limb_segment_definition.gd" id="1"]
+[ext_resource type="Resource" path="res://resources/ml_body_presets/four_limb_walker/generic_limb_template/knee_joint.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+segment_name = "Lower"
+continuous_collision_detection = true
+rough = false
+joint = ExtResource("2")

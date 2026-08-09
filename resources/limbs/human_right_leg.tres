@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="LimbDefinition" format=3 uid="uid://cu7els28y5c4t"]
+
+[ext_resource type="Script" uid="uid://c1c06sln8voxw" path="res://scripts/characters/limb_definition.gd" id="1_limb"]
+
+[resource]
+script = ExtResource("1_limb")
+display_name = "Human Right Leg"
+slot = 3
+shop_buyable = true
+shop_price = 240
+shop_category_path = PackedStringArray("Legs", "Human")
+shop_description = "Standard biological replacement leg. Right-side socket."
+shop_item_path = "res://resources/items/body_parts/human_right_leg.tres"
+movement = 0.5
+jumping = 0.5

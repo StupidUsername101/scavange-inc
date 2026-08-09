@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="BallisticProjectileDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/weapons/ballistic_projectile_definition.gd" id="1_projectile"]
+
+[resource]
+script = ExtResource("1_projectile")
+damage = 14.0
+muzzle_velocity = 72.0
+maximum_range = 52.0
+gravity_scale = 0.22
+impact_impulse = 1.05
+tracer_color = Color(1, 0.72, 0.24, 1)
+tracer_length = 0.72
+tracer_radius = 0.017

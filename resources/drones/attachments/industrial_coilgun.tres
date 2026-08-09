@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="DroneWeaponDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_weapon_definition.gd" id="1_weapon"]
+[ext_resource type="Resource" path="res://resources/weapons/projectiles/industrial_coil_slug.tres" id="2_projectile"]
+
+[resource]
+script = ExtResource("1_weapon")
+display_name = "Industrial Belly Coilgun"
+quality = 2
+visual_color = Color(0.12, 0.58, 0.78, 1)
+mass = 0.42
+capability_tags = Array[StringName]([&"weapon"])
+idle_power_draw = 1.8
+active_power_draw = 34.0
+body_size = Vector3(0.26, 0.15, 0.4)
+damage_per_shot = 18.0
+rounds_per_second = 5.0
+effective_range = 38.0
+traverse_arc_degrees = 95.0
+projectile_speed = 95.0
+projectile_definition = ExtResource("2_projectile")

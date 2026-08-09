@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="DroneBatteryDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_battery_definition.gd" id="1_battery"]
+
+[resource]
+script = ExtResource("1_battery")
+display_name = "Longhaul Endurance Cell"
+quality = 1
+visual_color = Color(0.18, 0.5, 0.3, 1)
+mass = 0.54
+energy_capacity_wh = 5.4
+nominal_power_output = 92.0
+maximum_power_output = 112.0
+body_size = Vector3(0.42, 0.15, 0.31)
+power_output_consistency = 0.98
+fluctuation_rate = 0.42
+spike_chance_per_second = 0.045
+minimum_spike_duration = 0.1
+maximum_spike_duration = 0.3
+minimum_drop_multiplier = 0.72
+maximum_drop_multiplier = 0.9
+minimum_boost_multiplier = 1.08
+maximum_boost_multiplier = 1.22
+surge_protection = 0.68
+extreme_spike_damage_coupling = 0.028

@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cph3rnp6k3uf4"
+path="res://.godot/imported/Dark Souls Damage Hit Sound Effect 6.mp3-fb21ec6063abda77a7847bfd2c7bf5a0.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/hit_effects/Dark Souls Damage Hit Sound Effect 6.mp3"
+dest_files=["res://.godot/imported/Dark Souls Damage Hit Sound Effect 6.mp3-fb21ec6063abda77a7847bfd2c7bf5a0.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

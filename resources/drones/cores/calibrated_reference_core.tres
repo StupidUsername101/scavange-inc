@@ -1,0 +1,37 @@
+[gd_resource type="Resource" script_class="DroneCoreDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_core_definition.gd" id="1_core"]
+
+[resource]
+script = ExtResource("1_core")
+display_name = "Calibrated Reference Core"
+quality = 2
+visual_color = Color(0.12, 0.78, 0.96, 1)
+mass = 0.8
+max_health = 500.0
+max_power_throughput = 320.0
+propeller_slot_count = 4
+ai_chip_slot_count = 4
+attachment_slot_count = 4
+body_size = Vector3(0.66, 0.22, 0.66)
+ai_max_horizontal_speed = 10.0
+ai_max_horizontal_acceleration = 7.5
+ai_max_vertical_speed = 5.5
+ai_max_vertical_acceleration = 9.5
+ai_max_tilt_degrees = 27.0
+ai_horizontal_position_gain = 1.25
+ai_horizontal_velocity_gain = 3.1
+ai_altitude_position_gain = 2.35
+ai_altitude_velocity_gain = 4.0
+ai_attitude_response = 30.0
+ai_angular_velocity_damping = 10.0
+ai_motor_mix_authority = 0.65
+ai_emergency_upright_torque = 2.0
+ai_altitude_authority = 0.3
+spool_up_response = 8.0
+spool_down_response = 8.0
+power_output_consistency = 1.0
+fluctuation_rate = 0.0
+drag_area = 0.15
+drag_coefficient = 0.9
+angular_drag_coefficient = 0.85

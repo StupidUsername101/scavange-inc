@@ -1,0 +1,60 @@
+[gd_scene format=3 uid="uid://bsg3u1db5ayao"]
+
+[ext_resource type="Script" uid="uid://0jryrys858os" path="res://scripts/client/main_menu.gd" id="1_qwnig"]
+
+[node name="MainMenu" type="Control" unique_id=526500244]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_qwnig")
+
+[node name="MarginContainer" type="MarginContainer" parent="." unique_id=298575419]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MarginContainer" type="MarginContainer" parent="MarginContainer" unique_id=1566856814]
+custom_minimum_size = Vector2(50, 50)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+
+[node name="VSplitContainer" type="VBoxContainer" parent="MarginContainer/MarginContainer" unique_id=417085079]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Title" type="Label" parent="MarginContainer/MarginContainer/VSplitContainer" unique_id=198921164]
+custom_minimum_size = Vector2(320, 72)
+layout_mode = 2
+theme_override_font_sizes/font_size = 32
+text = "ScavangeInc"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Button" type="Button" parent="MarginContainer/MarginContainer/VSplitContainer" unique_id=1563721705]
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+text = "Host game"
+
+[node name="Button2" type="Button" parent="MarginContainer/MarginContainer/VSplitContainer" unique_id=1099723546]
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+text = "Find game"
+
+[node name="TrainingRoomButton" type="Button" parent="MarginContainer/MarginContainer/VSplitContainer" unique_id=1922643371]
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+text = "ML Training Room"
+
+[node name="StatusLabel" type="Label" parent="MarginContainer/MarginContainer/VSplitContainer" unique_id=190432282]
+custom_minimum_size = Vector2(320, 48)
+layout_mode = 2
+horizontal_alignment = 1
+vertical_alignment = 1
+autowrap_mode = 2

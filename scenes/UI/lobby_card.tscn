@@ -1,0 +1,51 @@
+[gd_scene format=3 uid="uid://bmh1vuadwr2wq"]
+
+[ext_resource type="Script" uid="uid://biidtf1imqvup" path="res://scripts/ui/lobby_card.gd" id="1_1isq3"]
+
+[node name="LobbyCard" type="Control" unique_id=1192589163]
+custom_minimum_size = Vector2(0, 74)
+layout_mode = 3
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 74.0
+grow_horizontal = 2
+mouse_filter = 1
+script = ExtResource("1_1isq3")
+
+[node name="Panel" type="PanelContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Margin" type="MarginContainer" parent="Panel"]
+layout_mode = 2
+theme_override_constants/margin_left = 18
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 10
+
+[node name="HBox" type="HBoxContainer" parent="Panel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Name" type="Label" parent="Panel/Margin/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 20
+text = "Unnamed lobby"
+text_overrun_behavior = 3
+
+[node name="PlayerCount" type="Label" parent="Panel/Margin/HBox"]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+text = "0 / 4"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Join" type="Button" parent="Panel/Margin/HBox"]
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+text = "Join"

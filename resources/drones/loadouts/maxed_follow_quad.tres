@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="DroneLoadout" load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_loadout.gd" id="1_loadout"]
+[ext_resource type="Script" path="res://scripts/drones/drone_propeller_definition.gd" id="2_propeller_type"]
+[ext_resource type="Resource" path="res://resources/drones/cores/industrial_core.tres" id="3_core"]
+[ext_resource type="Resource" path="res://resources/drones/propellers/heavy_lift_propeller.tres" id="4_propeller"]
+[ext_resource type="Resource" path="res://resources/drones/batteries/industrial_battery.tres" id="5_battery"]
+[ext_resource type="Script" path="res://scripts/drones/drone_ai_chip_definition.gd" id="6_chip_type"]
+[ext_resource type="Resource" path="res://resources/drones/ai_chips/shepherd_follow_chip.tres" id="7_follow_chip"]
+[ext_resource type="Resource" path="res://resources/drones/ai_chips/orca_flight_coordinator_chip.tres" id="8_avoidance_chip"]
+
+[resource]
+script = ExtResource("1_loadout")
+core = ExtResource("3_core")
+battery = ExtResource("5_battery")
+propellers = Array[ExtResource("2_propeller_type")]([ExtResource("4_propeller"), ExtResource("4_propeller"), ExtResource("4_propeller"), ExtResource("4_propeller")])
+ai_chips = Array[ExtResource("6_chip_type")]([ExtResource("7_follow_chip"), ExtResource("8_avoidance_chip")])

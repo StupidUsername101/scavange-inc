@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="CharacterLoadout" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/characters/character_loadout.gd" id="1_loadout"]
+[ext_resource type="Resource" path="res://resources/limbs/human_left_leg.tres" id="2_left_leg"]
+[ext_resource type="Resource" path="res://resources/limbs/human_right_leg.tres" id="3_right_leg"]
+
+[resource]
+script = ExtResource("1_loadout")
+left_leg = ExtResource("2_left_leg")
+right_leg = ExtResource("3_right_leg")

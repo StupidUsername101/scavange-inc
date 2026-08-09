@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="EnemyPhysicalLimbDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/enemy_physical_limb_definition.gd" id="1_limb"]
+
+[resource]
+script = ExtResource("1_limb")
+limb_name = "Front Left"
+gait_group = 0
+hip_offset = Vector3(-0.82, 0.92, -0.72)
+rest_foot_offset = Vector3(-2.05, 0.04, -1.5)
+bend_hint = Vector3(-1, 0.45, -0.2)
+upper_length = 1.45
+lower_length = 1.35
+segment_radius = 0.105
+segment_mass = 0.42
+hip_swing_span_degrees = 52.0
+hip_twist_span_degrees = 30.0
+knee_limit_lower_degrees = -48.0
+knee_limit_upper_degrees = 48.0

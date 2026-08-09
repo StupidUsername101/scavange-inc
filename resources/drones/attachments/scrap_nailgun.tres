@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="DroneWeaponDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_weapon_definition.gd" id="1_weapon"]
+[ext_resource type="Resource" path="res://resources/weapons/projectiles/scrap_nail.tres" id="2_projectile"]
+
+[resource]
+script = ExtResource("1_weapon")
+display_name = "Improvised Belly Nailgun"
+quality = 0
+visual_color = Color(0.42, 0.16, 0.07, 1)
+mass = 0.38
+capability_tags = Array[StringName]([&"weapon"])
+idle_power_draw = 0.4
+active_power_draw = 14.0
+body_size = Vector3(0.24, 0.16, 0.34)
+damage_per_shot = 6.0
+rounds_per_second = 2.5
+effective_range = 16.0
+traverse_arc_degrees = 48.0
+projectile_speed = 32.0
+projectile_definition = ExtResource("2_projectile")

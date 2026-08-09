@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="EnemyDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/enemy_definition.gd" id="1_definition"]
+[ext_resource type="Resource" path="res://resources/enemies/behaviors/giant_spider_hunter.tres" id="2_behavior"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/giant_spider.tres" id="3_anatomy"]
+
+[resource]
+script = ExtResource("1_definition")
+display_name = "Giant Physics Spider"
+visual_color = Color(0.16, 0.105, 0.075, 1)
+faction_id = 2
+body_size = Vector3(2.25, 0.82, 2.35)
+collision_size = Vector3(1.5, 1.75, 1.7)
+body_center_height = 0.94
+max_health = 520.0
+target_height = 0.98
+behavior = ExtResource("2_behavior")
+physical_anatomy = ExtResource("3_anatomy")
+death_linger_seconds = 2.0
+respawn_delay_seconds = 2.5

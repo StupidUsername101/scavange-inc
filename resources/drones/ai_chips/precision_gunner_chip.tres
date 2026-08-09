@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="DroneAIChipDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_ai_chip_definition.gd" id="1_chip"]
+[ext_resource type="Script" path="res://scripts/drones/ai_behaviors/combat_behavior.gd" id="2_behavior"]
+
+[resource]
+script = ExtResource("1_chip")
+display_name = "Aegis Precision Gunner"
+quality = 2
+visual_color = Color(0.88, 0.76, 0.12, 1)
+mass = 0.02
+behavior_id = &"combat_targeting"
+behavior_description = "Fast industrial weapon discovery and targeting with hardened perfect IFF."
+behavior_script = ExtResource("2_behavior")
+processing_priority = 85
+response_time = 0.055
+processing_efficiency = 0.98
+minimum_operating_power_ratio = 0.25
+idle_power_draw = 6.0
+active_power_draw = 19.0
+sensor_range = 36.0
+aim_error_degrees = 0.35
+friendly_identification_accuracy = 1.0
+damaging_spike_threshold = 2.5
+surge_fragility = 0.0
+surge_immune = true
+body_size = Vector3(0.2, 0.035, 0.15)
