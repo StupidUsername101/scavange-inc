@@ -14,6 +14,7 @@ var maximum_health := 100.0
 var current_health := 100.0
 var actuator_effectiveness := 1.0
 var rest_transform_local := Transform3D.IDENTITY
+var rest_transform_core_local: Transform3D = Transform3D.IDENTITY
 
 
 func configure(

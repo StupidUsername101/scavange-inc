@@ -11,9 +11,10 @@ const CURRENT_KEY_PREFIX: String = "__current__:"
 const DEFAULT_WINDOW_SIZE: Vector2i = Vector2i(900, 860)
 const WINDOW_EDGE_MARGIN_PX: int = 40
 const SLOT_SCROLL_MINIMUM_HEIGHT_PX: float = 120.0
-const SLOT_SCROLL_MAXIMUM_VIEWPORT_FRACTION: float = 0.42
 
 var root_panel: PanelContainer
+var content_scroll: ScrollContainer
+var root_content: VBoxContainer
 var slots_scroll: ScrollContainer
 var preset_picker: OptionButton
 var core_picker: OptionButton
@@ -65,10 +66,12 @@ func open_creator() -> void:
 		return
 	if preset_picker.item_count > 0 and current_draft == null:
 		_load_preset_at(0)
-	# Derive the first-open size from the realized creator contents. The parts list gets enough
-	# height to show all cards when the viewport permits it, then becomes the intentional scroll
-	# region when the complete creator is taller than the game window.
+	# Derive the first-open size from the realized creator contents. The complete creator is one
+	# vertical scroll surface, so every control remains reachable when the content is taller than
+	# the game window instead of trapping scrolling inside only the parts list.
 	_prepare_creator_window_size()
+	if content_scroll != null:
+		content_scroll.scroll_vertical = 0
 	popup_centered()
 	# Window/content minimums settle one frame after the popup becomes visible. Re-apply the
 	# content-derived bounds so Godot cannot leave the first open too small or partially off-screen.
@@ -87,17 +90,11 @@ func _creator_viewport_size() -> Vector2i:
 func _update_slot_scroll_minimum() -> void:
 	if slots_scroll == null or slots_content == null:
 		return
-	var viewport_size: Vector2i = _creator_viewport_size()
 	var natural_height: float = slots_content.get_combined_minimum_size().y
-	var viewport_limit: float = maxf(
-		float(viewport_size.y) * SLOT_SCROLL_MAXIMUM_VIEWPORT_FRACTION,
-		SLOT_SCROLL_MINIMUM_HEIGHT_PX
-	)
-	slots_scroll.custom_minimum_size.y = clampf(
-		natural_height,
-		SLOT_SCROLL_MINIMUM_HEIGHT_PX,
-		viewport_limit
-	)
+	# The whole creator now owns vertical scrolling. Keep the parts container at its natural height
+	# so wheel/trackpad scrolling works from anywhere in the dialog instead of trapping the pointer
+	# inside a nested parts-only scroll region.
+	slots_scroll.custom_minimum_size.y = maxf(natural_height, SLOT_SCROLL_MINIMUM_HEIGHT_PX)
 
 
 func _desired_creator_window_size() -> Vector2i:
@@ -105,7 +102,7 @@ func _desired_creator_window_size() -> Vector2i:
 	var available_width: int = maxi(viewport_size.x - WINDOW_EDGE_MARGIN_PX, min_size.x)
 	var available_height: int = maxi(viewport_size.y - WINDOW_EDGE_MARGIN_PX, min_size.y)
 	var content_minimum: Vector2 = (
-		root_panel.get_combined_minimum_size() if root_panel != null else Vector2(float(DEFAULT_WINDOW_SIZE.x), float(DEFAULT_WINDOW_SIZE.y))
+		root_content.get_combined_minimum_size() if root_content != null else Vector2(float(DEFAULT_WINDOW_SIZE.x), float(DEFAULT_WINDOW_SIZE.y))
 	)
 	var desired_width: int = maxi(DEFAULT_WINDOW_SIZE.x, int(ceil(content_minimum.x)))
 	var desired_height: int = maxi(min_size.y, int(ceil(content_minimum.y)))
@@ -154,9 +151,20 @@ func _build_ui() -> void:
 	)
 	add_child(root_panel)
 
-	var root: VBoxContainer = VBoxContainer.new()
-	root.add_theme_constant_override("separation", 10)
-	root_panel.add_child(root)
+	content_scroll = ScrollContainer.new()
+	content_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	content_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	content_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	content_scroll.follow_focus = true
+	content_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root_panel.add_child(content_scroll)
+
+	root_content = VBoxContainer.new()
+	root_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root_content.add_theme_constant_override("separation", 10)
+	content_scroll.add_child(root_content)
+	var root: VBoxContainer = root_content
 
 	var heading: Label = Label.new()
 	heading.text = "MODEL BODY CREATOR"
@@ -237,7 +245,8 @@ func _build_ui() -> void:
 
 	slots_scroll = ScrollContainer.new()
 	slots_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	slots_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	slots_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	slots_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.add_child(slots_scroll)
 	slots_content = VBoxContainer.new()
 	slots_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -783,6 +792,19 @@ func _rebuild_slot_rows() -> void:
 	call_deferred("_refresh_creator_window_after_layout")
 
 
+func _creator_part_label(part: Resource, suffix: String = "") -> String:
+	var label_text: String = MLBodyPartCatalog.display_name(part)
+	var controls: int = MLBodyPartContract.control_descriptors(part).size()
+	var observations: int = MLBodyPartContract.observation_descriptors(part).size()
+	if controls > 0 or observations > 0:
+		label_text += "  • ML %dC/%dO" % [controls, observations]
+	elif part is DroneAttachmentDefinition:
+		label_text += "  • passive (no ML controls)"
+	if not suffix.is_empty():
+		label_text += suffix
+	return label_text
+
+
 func _build_slot_row(slot: MLBodySlotDefinition, current_part: Resource) -> void:
 	var slot_id: String = str(slot.slot_id)
 	var panel: PanelContainer = PanelContainer.new()
@@ -828,7 +850,7 @@ func _build_slot_row(slot: MLBodySlotDefinition, current_part: Resource) -> void
 		var current_key: String = CURRENT_KEY_PREFIX + slot_id
 		part_map[current_key] = MLBodyPartContract.deep_duplicate_resource(current_part)
 		var current_index: int = picker.item_count
-		picker.add_item("%s  • current" % MLBodyPartCatalog.display_name(current_part))
+		picker.add_item(_creator_part_label(current_part, "  • current"))
 		picker.set_item_metadata(current_index, current_key)
 		selected_index = current_index
 		selected_key = current_key
@@ -843,7 +865,7 @@ func _build_slot_row(slot: MLBodySlotDefinition, current_part: Resource) -> void
 			part_map[source_path] = part
 			var option_index: int = picker.item_count
 			picker.add_item("%s   [%s]" % [
-				MLBodyPartCatalog.display_name(part),
+				_creator_part_label(part),
 				source_path.get_base_dir().get_file(),
 			])
 			picker.set_item_metadata(option_index, source_path)

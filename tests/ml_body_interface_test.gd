@@ -16,6 +16,7 @@ func _init() -> void:
 	_test_body_factories_keep_resource_backing()
 	_test_interface_signature_tracks_topology_not_tuning()
 	_test_regular_articulated_drone_limb()
+	_test_creator_attachment_catalog_exposes_real_model_channels()
 	_test_arbitrary_generic_limb_topology()
 	_test_existing_limb_mapping_order()
 	_test_turret_part_ownership()
@@ -731,6 +732,37 @@ func _test_regular_articulated_drone_limb() -> void:
 		and names.has(prefix + "limb_0.segment_1.joint_z")
 		and names.has(prefix + "limb_0.grip"),
 		"accepted drone manifest exposes every regular limb actuator independently"
+	)
+
+
+func _test_creator_attachment_catalog_exposes_real_model_channels() -> void:
+	var utility_arm: DroneLimbAttachmentDefinition = load(
+		"res://resources/drones/attachments/utility_arm.tres"
+	) as DroneLimbAttachmentDefinition
+	_expect(
+		utility_arm != null
+		and MLBodyPartContract.control_descriptors(utility_arm).size() == 4
+		and MLBodyPartContract.observation_descriptors(utility_arm).size() > 0,
+		"Utility Manipulator Arm is real articulated ML hardware instead of a zero-channel legacy attachment"
+	)
+	var draft: MLBodyBuildDraft = MLBodyPresetLibrary.instantiate_draft(MLBodyPresetLibrary.DRONE_QUAD)
+	var attachment_slot: MLBodySlotDefinition = null
+	if draft != null:
+		for entry: Dictionary in draft.slots:
+			var candidate: MLBodySlotDefinition = entry.get("definition") as MLBodySlotDefinition
+			if candidate != null and candidate.slot_type == &"attachment":
+				attachment_slot = candidate
+				break
+	var compatible: Array[Resource] = MLBodyPartCatalog.compatible_parts(attachment_slot)
+	var utility_present: bool = false
+	var training_observer_present: bool = false
+	for part: Resource in compatible:
+		var path: String = MLBodyPartContract.resource_source_path(part)
+		utility_present = utility_present or path.ends_with("/utility_arm.tres")
+		training_observer_present = training_observer_present or path.ends_with("/training_observer_camera.tres")
+	_expect(
+		utility_present and not training_observer_present,
+		"creator attachment catalogue includes controllable arms but excludes evaluator instrumentation"
 	)
 
 

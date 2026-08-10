@@ -25,9 +25,34 @@ static func compatible_parts(slot: MLBodySlotDefinition) -> Array[Resource]:
 		return result
 	_ensure_cache()
 	for part: Resource in _cached_parts:
-		if part != null and slot.accepts(part):
+		if part != null and slot.accepts(part) and creator_compatibility_error(part).is_empty():
 			result.append(part)
 	return result
+
+
+static func creator_compatibility_error(part: Resource) -> String:
+	if part == null:
+		return ""
+	if part is DroneCameraAttachmentDefinition:
+		var source_path: String = MLBodyPartContract.resource_source_path(part)
+		if source_path.ends_with("/training_observer_camera.tres"):
+			return "The training observer is instrumentation, not authored model hardware."
+	# Passive attachments are allowed: they can intentionally change mass/shape without consuming
+	# action channels. A non-limb attachment that *declares* controls is different—the current
+	# ServerDrone runtime has no generic actuator node for it, so accepting it would silently drop
+	# policy outputs. Articulated limb attachments have a concrete GenericLimbAssembly3D consumer.
+	if part is DroneAttachmentDefinition and not (part is DroneLimbAttachmentDefinition):
+		var controls: Array[Dictionary] = MLBodyPartContract.control_descriptors(part)
+		if not controls.is_empty():
+			return "Attachment declares model controls but has no supported ServerDrone runtime adapter."
+	if part is DroneLimbAttachmentDefinition:
+		var limb_controls: Array[Dictionary] = MLBodyPartContract.control_descriptors(part)
+		var limb_observations: Array[Dictionary] = MLBodyPartContract.observation_descriptors(part)
+		if limb_controls.is_empty():
+			return "Articulated attachment declares no model controls."
+		if limb_observations.is_empty():
+			return "Articulated attachment declares no model observations."
+	return ""
 
 
 static func display_name(part: Resource) -> String:
@@ -66,7 +91,7 @@ static func _ensure_cache() -> void:
 			continue
 		# Slot filtering below is authoritative. Caching only resources with an explicit model-part
 		# method avoids pulling unrelated maps/items/loadouts into every creator dropdown.
-		if resource.has_method("ml_part_tags"):
+		if resource.has_method("ml_part_tags") and creator_compatibility_error(resource).is_empty():
 			_cached_parts.append(resource)
 
 

@@ -192,6 +192,11 @@ func _create_segment(
 	# transform. Store the resulting container-local pose so reset_to_rest() remains deterministic.
 	var rest_transform_world := core_body.global_transform * rest_transform_core_local
 	segment.global_transform = rest_transform_world
+	# Keep both representations for compatibility/debugging, but reset from the authored Core-local
+	# transform. Drone-mounted limb containers are top-level lifecycle nodes and do not follow a
+	# moving/teleported Core, so replaying the old container-local transform would return the arm to
+	# its construction-time world position on every episode reset.
+	segment.rest_transform_core_local = rest_transform_core_local
 	segment.rest_transform_local = global_transform.affine_inverse() * rest_transform_world
 
 	var collision := CollisionShape3D.new()
@@ -332,7 +337,10 @@ func reset_to_rest() -> void:
 		if not is_instance_valid(segment):
 			continue
 		segment.freeze = true
-		segment.transform = segment.rest_transform_local
+		if is_instance_valid(core_body):
+			segment.global_transform = core_body.global_transform * segment.rest_transform_core_local
+		else:
+			segment.transform = segment.rest_transform_local
 		segment.linear_velocity = Vector3.ZERO
 		segment.angular_velocity = Vector3.ZERO
 	if is_instance_valid(end_effector):

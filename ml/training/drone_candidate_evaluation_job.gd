@@ -348,7 +348,8 @@ func _begin_case(next_case_index: int) -> bool:
 	_register_evaluation_drone_combatant()
 	if _scenario_is_degraded_propeller(scenario_id):
 		var degraded_slot: int = posmod(case_seed, QUAD_PROPELLER_COUNT)
-		drone.remove_propeller(degraded_slot)
+		if not drone.set_ml_propeller_degraded(degraded_slot, true):
+			return _fail_start("degraded-propeller scenario could not disable its selected rotor")
 	obstacle_probe = DroneTrainingObstacleSensor.clear_probe()
 	obstacle_probe["ground_clearance_m"] = spawn_position.y
 	sensor_elapsed_seconds = SENSOR_INTERVAL_SECONDS

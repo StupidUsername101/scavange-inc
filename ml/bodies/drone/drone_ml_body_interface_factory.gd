@@ -121,6 +121,100 @@ static func host_state(drone: ServerDrone) -> Dictionary:
 	}
 
 
+static func training_runtime_validation_error(
+	drone: ServerDrone,
+	expected_manifest: MLBodyInterfaceManifest = null
+) -> String:
+	if not is_instance_valid(drone):
+		return "Drone runtime is missing."
+	var manifest: MLBodyInterfaceManifest = drone.model_body_interface()
+	if manifest == null or not manifest.finalized:
+		return "Drone runtime could not finalize its model-body interface."
+	if expected_manifest != null and not manifest.is_compatible_with(expected_manifest):
+		return "Drone runtime body no longer matches the accepted creator body contract."
+	if drone.loadout == null or drone.loadout.core == null:
+		return "Drone runtime has no Core/loadout."
+
+	# Validate observations from the real instantiated worker, not only from Resource metadata. This
+	# catches an attachment that advertises sensor channels but failed to build its runtime node.
+	var states: Dictionary = runtime_states(drone)
+	var encoded: PackedFloat64Array = manifest.encode_body_observation(states, host_state(drone))
+	if encoded.size() != manifest.observation_count():
+		return "Runtime body produced %d/%d finalized observation channels." % [
+			encoded.size(), manifest.observation_count(),
+		]
+
+	var core_control_count: int = int(manifest.core_record.get("control_count", 0))
+	if core_control_count > 0:
+		if not drone.can_submit_model_core_commands(core_control_count):
+			return "Runtime Core cannot consume its %d finalized model controls." % core_control_count
+
+	for record: Dictionary in manifest.slot_records:
+		var slot_id: String = str(record.get("slot_id", ""))
+		var control_count: int = int(record.get("control_count", 0))
+		var observation_count: int = int(record.get("observation_count", 0))
+		if observation_count > 0 and not states.has(slot_id):
+			return "%s declares observations but has no runtime state provider." % slot_id
+		if control_count <= 0:
+			continue
+		if slot_id.begins_with("propeller_"):
+			var suffix: String = slot_id.trim_prefix("propeller_")
+			if not suffix.is_valid_int():
+				return "Malformed finalized propeller slot %s." % slot_id
+			var propeller_index: int = int(suffix)
+			if control_count != 1 or drone.loadout.get_propeller(propeller_index) == null:
+				return "%s does not resolve to one live throttle actuator." % slot_id
+			continue
+		if slot_id.begins_with("attachment_"):
+			var attachment_suffix: String = slot_id.trim_prefix("attachment_")
+			if not attachment_suffix.is_valid_int():
+				return "Malformed finalized attachment slot %s." % slot_id
+			var attachment_index: int = int(attachment_suffix)
+			if not drone.can_submit_model_attachment_slot_commands(attachment_index, control_count):
+				return "%s advertises %d controls but its instantiated attachment cannot consume them." % [
+					slot_id, control_count,
+				]
+			var attachment: DroneAttachmentDefinition = drone.loadout.get_attachment(attachment_index)
+			if attachment is DroneLimbAttachmentDefinition:
+				var assembly: GenericLimbAssembly3D = drone.get_limb_attachment_assembly(attachment_index)
+				if not is_instance_valid(assembly):
+					return "%s has no instantiated articulated runtime assembly." % slot_id
+				var declared_controls: Array[Dictionary] = MLBodyPartContract.control_descriptors(attachment)
+				var runtime_controls: Array[Dictionary] = GenericLimbModelContract.control_descriptors(assembly.limb_definitions)
+				var declared_observations: Array[Dictionary] = MLBodyPartContract.observation_descriptors(attachment)
+				var runtime_observations: Array[Dictionary] = GenericLimbModelContract.observation_descriptors(assembly.limb_definitions)
+				if not _descriptor_topology_matches(declared_controls, runtime_controls):
+					return "%s live articulated control mapping differs from the accepted attachment contract." % slot_id
+				if not _descriptor_topology_matches(declared_observations, runtime_observations):
+					return "%s live articulated observation mapping differs from the accepted attachment contract." % slot_id
+			continue
+		if not drone.has_method("can_submit_model_slot_commands") or not bool(
+			drone.call("can_submit_model_slot_commands", slot_id, control_count)
+		):
+			return "%s advertises controls but the drone runtime has no consumer for them." % slot_id
+
+	return ""
+
+
+static func _descriptor_topology_matches(expected: Array[Dictionary], actual: Array[Dictionary]) -> bool:
+	if expected.size() != actual.size():
+		return false
+	for index: int in range(expected.size()):
+		var expected_descriptor: Dictionary = expected[index]
+		var actual_descriptor: Dictionary = actual[index]
+		for key: String in ["name", "kind"]:
+			if str(expected_descriptor.get(key, "")) != str(actual_descriptor.get(key, "")):
+				return false
+		for key: String in ["minimum", "maximum", "neutral"]:
+			if expected_descriptor.has(key) or actual_descriptor.has(key):
+				if not is_equal_approx(
+					float(expected_descriptor.get(key, 0.0)),
+					float(actual_descriptor.get(key, 0.0))
+				):
+					return false
+	return true
+
+
 static func _core_contract(loadout: DroneLoadout) -> Dictionary:
 	var core: DroneCoreDefinition = loadout.core
 	return {

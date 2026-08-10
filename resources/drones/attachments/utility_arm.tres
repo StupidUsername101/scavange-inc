@@ -1,17 +1,23 @@
-[gd_resource type="Resource" script_class="DroneArmDefinition" load_steps=2 format=3]
+[gd_resource type="Resource" script_class="DroneLimbAttachmentDefinition" load_steps=4 format=3]
 
-[ext_resource type="Script" path="res://scripts/drones/drone_arm_definition.gd" id="1_arm"]
+[ext_resource type="Script" path="res://scripts/drones/drone_limb_attachment_definition.gd" id="1_attachment"]
+[ext_resource type="Script" path="res://scripts/limbs/generic_limb_definition.gd" id="2_limb_type"]
+[ext_resource type="Resource" path="res://resources/drones/attachments/training_belly_grabber/articulated_limb.tres" id="3_limb"]
 
 [resource]
-script = ExtResource("1_arm")
+script = ExtResource("1_attachment")
 display_name = "Utility Manipulator Arm"
 quality = 1
 visual_color = Color(0.42, 0.46, 0.5, 1)
 mass = 0.32
-capability_tags = Array[StringName]([&"manipulator"])
+rated_voltage_v = 12.0
+capability_tags = Array[StringName]([&"limb_host", &"manipulator", &"articulated_limb"])
 idle_power_draw = 0.6
 active_power_draw = 11.0
 body_size = Vector3(0.22, 0.18, 0.24)
-manipulation_force = 62.0
-reach = 1.45
-rotation_torque = 24.0
+limb_definitions = Array[ExtResource("2_limb_type")]([ExtResource("3_limb")])
+mount_at_attachment_slot = true
+auto_pack_action_indices = true
+limb_collision_layer = 4
+limb_collision_mask = 1
+exclude_self_collision = true

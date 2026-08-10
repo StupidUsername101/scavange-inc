@@ -29,6 +29,7 @@ func _run() -> void:
 	await _test_static_ground_can_anchor_generic_grip()
 	await _test_physical_end_effector_grip_uses_surface_anchor()
 	await _test_arbitrary_segment_counts()
+	await _test_reset_tracks_current_host_transform()
 	await _test_duplicate_action_mapping_is_rejected()
 	await _test_sparse_action_mapping_is_rejected()
 	await _test_passive_return_without_actuator_authority()
@@ -495,6 +496,45 @@ func _test_arbitrary_segment_counts() -> void:
 		chain.queue_free()
 		core.queue_free()
 		await process_frame
+
+
+func _test_reset_tracks_current_host_transform() -> void:
+	var core: RigidBody3D = _create_frozen_core("MovingHostCore", Vector3(2.0, 6.0, -1.0))
+	var definition: GenericLimbDefinition = _create_chain_definition(2, 0)
+	definition.mount_offset_local = Vector3(0.3, -0.2, 0.15)
+	var chain: GenericLimb3D = GenericLimb3D.new()
+	chain.name = "MovingHostChain"
+	test_world.add_child(chain)
+	chain.configure(null, core, definition, 0, Color.WHITE, 4, 0)
+	await process_frame
+	_expect(chain.segments.size() == 2, "moving-host reset test builds its articulated chain")
+	if chain.segments.size() != 2:
+		chain.queue_free()
+		core.queue_free()
+		await process_frame
+		return
+	var old_segment_position: Vector3 = chain.segments[0].global_position
+	core.global_transform = Transform3D(
+		Basis(Vector3.UP, deg_to_rad(67.0)),
+		Vector3(-8.0, 11.0, 5.5)
+	)
+	chain.reset_to_rest()
+	for segment: LimbSegment3D in chain.segments:
+		var expected: Transform3D = core.global_transform * segment.rest_transform_core_local
+		_expect(
+			segment.global_position.distance_to(expected.origin) <= 0.0001
+			and segment.global_basis.x.distance_to(expected.basis.x) <= 0.0001
+			and segment.global_basis.y.distance_to(expected.basis.y) <= 0.0001
+			and segment.global_basis.z.distance_to(expected.basis.z) <= 0.0001,
+			"generic limb reset rebuilds each segment from the Core's current world transform"
+		)
+	_expect(
+		chain.segments[0].global_position.distance_to(old_segment_position) > 1.0,
+		"a teleported drone/host cannot reset its arm back to the construction-time world position"
+	)
+	chain.queue_free()
+	core.queue_free()
+	await process_frame
 
 
 func _test_duplicate_action_mapping_is_rejected() -> void:

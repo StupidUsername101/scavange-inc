@@ -86,6 +86,7 @@ var deterministic_forwarded_power_w := 0.0
 var has_installed_attachments_cache := false
 var ground_effect_refresh_cursor := 0
 var ground_effect_cache_initialized := false
+var ml_degraded_propeller_slots: Dictionary[int, bool] = {}
 var ai_fire_requested := false
 var ai_combat_target_id := -1
 var ai_combat_target_kind := &""
@@ -297,6 +298,40 @@ func install_propeller(
 	return installed
 
 
+func _propeller_array_index_for_slot(slot_index: int) -> int:
+	for array_index: int in range(propeller_slots.size()):
+		if propeller_slots[array_index].slot_index == slot_index:
+			return array_index
+	return -1
+
+
+func set_ml_propeller_degraded(slot_index: int, degraded: bool) -> bool:
+	if slot_index < 0 or slot_index >= propeller_slots.size():
+		return false
+	if degraded:
+		ml_degraded_propeller_slots[slot_index] = true
+		var array_index: int = _propeller_array_index_for_slot(slot_index)
+		if array_index >= 0 and array_index < ai_motor_thrust_targets.size():
+			ai_motor_thrust_targets[array_index] = 0.0
+		if array_index >= 0 and array_index < last_propeller_requested_power_w.size():
+			last_propeller_requested_power_w[array_index] = 0.0
+		if array_index >= 0 and array_index < last_propeller_applied_power_w.size():
+			last_propeller_applied_power_w[array_index] = 0.0
+		if array_index >= 0 and array_index < last_propeller_realized_thrust_n.size():
+			last_propeller_realized_thrust_n[array_index] = 0.0
+	else:
+		ml_degraded_propeller_slots.erase(slot_index)
+	return true
+
+
+func is_ml_propeller_degraded(slot_index: int) -> bool:
+	return bool(ml_degraded_propeller_slots.get(slot_index, false))
+
+
+func clear_ml_propeller_degradation() -> void:
+	ml_degraded_propeller_slots.clear()
+
+
 func remove_propeller(slot_index: int) -> void:
 	if loadout == null:
 		return
@@ -433,10 +468,7 @@ func can_submit_model_attachment_slot_commands(slot_index: int, command_count: i
 		return false
 	if attachment is DroneLimbAttachmentDefinition:
 		var assembly: GenericLimbAssembly3D = limb_attachment_assemblies_by_slot.get(slot_index) as GenericLimbAssembly3D
-		return (
-			is_instance_valid(assembly)
-			and assembly.required_action_count() == command_count
-		)
+		return is_instance_valid(assembly) and assembly.can_submit_commands(command_count)
 	var runtime_node: Node = get_node_or_null("ModelAttachmentRuntime%d" % slot_index)
 	if runtime_node == null or not runtime_node.has_method("submit_model_commands"):
 		return command_count == 0
@@ -771,6 +803,16 @@ func set_limb_attachments_runtime_active(
 		var assembly = assembly_value as GenericLimbAssembly3D
 		if is_instance_valid(assembly):
 			assembly.set_runtime_active(value, release_grip_on_deactivate)
+
+
+func holds_instance_id(instance_id: int) -> bool:
+	if instance_id <= 0:
+		return false
+	for assembly_value: Variant in limb_attachment_assemblies_by_slot.values():
+		var assembly: GenericLimbAssembly3D = assembly_value as GenericLimbAssembly3D
+		if is_instance_valid(assembly) and assembly.holds_instance_id(instance_id):
+			return true
+	return false
 
 
 func release_limb_attachment_grips() -> void:
@@ -1187,6 +1229,7 @@ func reset_ml_episode(
 	battery_spike_time_remaining = 0.0
 	battery_spike_multiplier = 1.0
 	power_rng.seed = random_seed
+	clear_ml_propeller_degradation()
 	ai_motor_thrust_targets = _create_zero_propeller_targets()
 	last_propeller_requested_power_w = _create_zero_propeller_targets()
 	last_propeller_applied_power_w = _create_zero_propeller_targets()
@@ -1451,6 +1494,9 @@ func _apply_propeller_forces(available_power_input: float) -> float:
 		var disk_area := propeller_disk_area_by_slot[array_index]
 		if disk_area <= 0.0:
 			continue
+		var demand_slot: DronePropellerSlot = propeller_slots[array_index]
+		if is_ml_propeller_degraded(demand_slot.slot_index):
+			continue
 		var target_thrust := (
 			ai_motor_thrust_targets[array_index]
 			if array_index < ai_motor_thrust_targets.size()
@@ -1482,7 +1528,9 @@ func _apply_propeller_forces(available_power_input: float) -> float:
 		var disk_area := propeller_disk_area_by_slot[array_index]
 		if disk_area <= 0.0:
 			continue
-		var slot := propeller_slots[array_index]
+		var slot: DronePropellerSlot = propeller_slots[array_index]
+		if is_ml_propeller_degraded(slot.slot_index):
+			continue
 		var power_share := requested_power_workspace[array_index] * power_scale
 		last_propeller_applied_power_w[array_index] = power_share
 

@@ -5910,6 +5910,19 @@ func _training_item_is_held_by_paused_limb(item: TrainingItem3D) -> bool:
 	if not is_instance_valid(item):
 		return false
 	var item_instance_id: int = int(item.get_instance_id())
+	# Drone-mounted generic limbs share the same physical grip implementation. Preserve a held
+	# cargo object's simulation state while that drone group is paused, just as we already do for
+	# four-limb workers, so pausing cannot stretch/break an articulated attachment's grip.
+	for group: Dictionary in worker_groups:
+		if bool(group.get("active", false)):
+			continue
+		for trial_value: Variant in group.get("trials", []):
+			if not (trial_value is Dictionary):
+				continue
+			var trial: Dictionary = trial_value
+			var drone: ServerDrone = trial.get("drone") as ServerDrone
+			if is_instance_valid(drone) and drone.holds_instance_id(item_instance_id):
+				return true
 	for group: Dictionary in limb_training.groups:
 		if bool(group.get("active", false)):
 			continue
@@ -13865,6 +13878,11 @@ func _spawn_training_worker(group: Dictionary, worker_index: int) -> bool:
 			)
 		else:
 			status_label.text = "Drone worker rejected before episode start: runtime body topology changed after the policy body was accepted."
+		return false
+	var runtime_validation_error: String = DroneMLBodyInterfaceFactory.training_runtime_validation_error(drone)
+	if not runtime_validation_error.is_empty():
+		drone.queue_free()
+		status_label.text = "Drone worker rejected before episode start: %s" % runtime_validation_error
 		return false
 	DroneTrainingRoomPresentation.add_drone_visual(drone, group["color"])
 	var trial: Dictionary = {

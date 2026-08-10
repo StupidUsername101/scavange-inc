@@ -111,10 +111,18 @@ func _test_model_body_creator_fits_realized_content_to_viewport() -> void:
 		"model creator clamps its realized content size to the visible game viewport"
 	)
 	_expect(
+		panel.content_scroll != null
+		and panel.content_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO
+		and panel.content_scroll.follow_focus
+		and panel.root_content != null,
+		"the complete creator dialog owns one vertical scroll surface so every setting stays reachable"
+	)
+	_expect(
 		panel.slots_scroll != null
+		and panel.slots_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED
 		and panel.slots_scroll.custom_minimum_size.y
 			>= MLBodyCreatorPanel.SLOT_SCROLL_MINIMUM_HEIGHT_PX,
-		"model creator reserves a real parts-list region instead of clipping attached-part cards"
+		"attached-part cards contribute their natural height to the creator instead of trapping wheel input in a nested scroller"
 	)
 	panel.free()
 

@@ -329,6 +329,110 @@ func _init() -> void:
 		"generic hardware snapshots preserve creator Core slot topology without forcing quad defaults"
 	)
 
+	var drone_scene: PackedScene = load("res://scenes/server/server_drone.tscn") as PackedScene
+	var degraded_drone: ServerDrone = null
+	if drone_scene != null:
+		degraded_drone = drone_scene.instantiate() as ServerDrone
+	if degraded_drone != null:
+		degraded_drone.loadout = DroneTrainingLoadoutConfig.duplicate_loadout(baseline)
+		get_root().add_child(degraded_drone)
+		var topology_signature: String = degraded_drone.model_body_contract_signature()
+		_expect(
+			degraded_drone.set_ml_propeller_degraded(2, true)
+			and degraded_drone.loadout.get_propeller(2) != null
+			and degraded_drone.model_body_contract_signature() == topology_signature,
+			"degraded-propeller evaluation disables thrust without deleting the accepted rotor slot/body contract"
+		)
+		var degraded_states: Array[Dictionary] = DroneMLObservation.capture_ppo_propeller_states(degraded_drone)
+		_expect(
+			degraded_states.size() == 4
+			and not bool(degraded_states[2].get("installed", true))
+			and is_zero_approx(float(degraded_states[2].get("realized_thrust_n", 1.0)))
+			and is_zero_approx(float(degraded_states[2].get("maximum_static_thrust_n", 1.0))),
+			"degraded rotor remains a stable policy slot while observations report it as failed"
+		)
+		degraded_drone.free()
+
+	# Exercise the creator/factory -> real ServerDrone -> controller path with a serialized articulated
+	# attachment. The accepted body must not merely count the arm channels; the instantiated worker
+	# must expose their observations and consume every routed command in the same local order.
+	var arm_drone: ServerDrone = null
+	if drone_scene != null:
+		arm_drone = drone_scene.instantiate() as ServerDrone
+	var utility_arm: DroneLimbAttachmentDefinition = load(
+		"res://resources/drones/attachments/utility_arm.tres"
+	) as DroneLimbAttachmentDefinition
+	var arm_loadout: DroneLoadout = DroneTrainingLoadoutConfig.duplicate_loadout(baseline)
+	var arm_slot: int = -1
+	if arm_loadout != null and arm_loadout.core != null:
+		for slot_index: int in range(arm_loadout.core.attachment_slot_count):
+			if arm_loadout.get_attachment(slot_index) == null:
+				arm_slot = slot_index
+				break
+	var arm_installed: bool = (
+		arm_slot >= 0
+		and utility_arm != null
+		and arm_loadout.install_attachment(
+			arm_slot,
+			MLBodyPartContract.deep_duplicate_resource(utility_arm) as DroneLimbAttachmentDefinition
+		)
+	)
+	_expect(arm_installed, "serialized Utility Manipulator Arm installs into a normal creator attachment slot")
+	if arm_drone != null and arm_installed:
+		arm_drone.loadout = arm_loadout
+		get_root().add_child(arm_drone)
+		var arm_manifest: MLBodyInterfaceManifest = arm_drone.model_body_interface()
+		var arm_runtime_error: String = DroneMLBodyInterfaceFactory.training_runtime_validation_error(arm_drone, arm_manifest)
+		_expect(
+			arm_manifest != null
+			and arm_manifest.control_count() == 8
+			and arm_runtime_error.is_empty(),
+			"factory-created articulated drone resolves all 8 policy controls to real worker actuators"
+		)
+		var arm_features: PackedFloat64Array = arm_drone.model_body_observation_features()
+		_expect(
+			arm_manifest != null
+			and arm_features.size() == arm_manifest.observation_count()
+			and arm_features.size() > 8,
+			"real articulated worker emits the complete finalized body-observation block"
+		)
+		if arm_manifest != null and arm_drone.ml_controller != null:
+			var commands: PackedFloat64Array = PackedFloat64Array()
+			commands.resize(arm_manifest.control_count())
+			for control_index: int in range(commands.size()):
+				commands[control_index] = 0.5 if control_index < 4 else 0.0
+			var control_names: Array[String] = arm_manifest.control_names()
+			var local_arm_values: Array[float] = [0.25, -0.5, 0.75, 1.0]
+			var local_cursor: int = 0
+			for control_index: int in range(control_names.size()):
+				if control_names[control_index].begins_with("attachment_%d." % arm_slot):
+					if local_cursor < local_arm_values.size():
+						commands[control_index] = local_arm_values[local_cursor]
+						local_cursor += 1
+			arm_drone.ml_controller.enable()
+			arm_drone.ml_controller.submit_external_action({
+				"body_interface_signature": arm_manifest.contract_signature,
+				"body_commands": commands,
+			})
+			var assembly: GenericLimbAssembly3D = arm_drone.get_limb_attachment_assembly(arm_slot)
+			var routed_correctly: bool = (
+				local_cursor == 4
+				and is_instance_valid(assembly)
+				and is_instance_valid(assembly.controller)
+				and assembly.controller.desired_commands.size() == 4
+			)
+			if routed_correctly:
+				for local_index: int in range(local_arm_values.size()):
+					routed_correctly = routed_correctly and is_equal_approx(
+						assembly.controller.desired_commands[local_index],
+						local_arm_values[local_index]
+					)
+			_expect(
+				routed_correctly and arm_drone.ml_controller.latest_action_error.is_empty(),
+				"body action router delivers shoulder X/Z, elbow Z and grip to the live arm controller in manifest order"
+			)
+		arm_drone.free()
+
 	var core_presets = DroneTrainingLoadoutConfig.core_presets()
 	_expect(not core_presets.is_empty(), "compatible core presets are discovered")
 	for preset in core_presets:

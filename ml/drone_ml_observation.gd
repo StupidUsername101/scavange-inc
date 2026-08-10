@@ -137,16 +137,21 @@ static func capture_ppo_propeller_states(drone) -> Array[Dictionary]:
 			if drone.loadout != null
 			else null
 		)
+		var degraded: bool = (
+			drone.has_method("is_ml_propeller_degraded")
+			and bool(drone.call("is_ml_propeller_degraded", int(slot.slot_index)))
+		)
 		result.append({
 			"slot_index": int(slot.slot_index),
-			"installed": propeller != null,
+			"installed": propeller != null and not degraded,
 			"realized_thrust_n": _array_value(
 				drone.last_propeller_realized_thrust_n,
 				array_index
 			),
-			"maximum_static_thrust_n": _array_value(
-				maximum_thrusts,
-				array_index
+			"maximum_static_thrust_n": (
+				0.0
+				if degraded
+				else _array_value(maximum_thrusts, array_index)
 			),
 		})
 	return result

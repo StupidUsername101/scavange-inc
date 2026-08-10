@@ -92,8 +92,18 @@ func _configure_self_collision_exceptions() -> void:
 			second.add_collision_exception_with(first)
 
 
+func can_submit_commands(command_count: int) -> bool:
+	return (
+		command_count >= 0
+		and is_instance_valid(controller)
+		and controller.action_mapping_valid
+		and controller.action_count == command_count
+		and required_action_count() == command_count
+	)
+
+
 func submit_commands(commands: PackedFloat64Array) -> bool:
-	return is_instance_valid(controller) and controller.submit_commands(commands)
+	return can_submit_commands(commands.size()) and controller.submit_commands(commands)
 
 
 func neutralize() -> void:
