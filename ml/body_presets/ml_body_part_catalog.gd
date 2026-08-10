@@ -9,6 +9,9 @@ extends RefCounted
 
 const RESOURCE_ROOT: String = "res://resources"
 const LEGACY_AI_CHIP_ROOT: String = "res://resources/drones/ai_chips"
+const CREATOR_ARTICULATED_LIMB_PATH: String = (
+	"res://resources/model_forge/attachments/configurable_articulated_limb.tres"
+)
 
 static var _cached_parts: Array[Resource] = []
 static var _cache_ready: bool = false
@@ -33,8 +36,16 @@ static func compatible_parts(slot: MLBodySlotDefinition) -> Array[Resource]:
 static func creator_compatibility_error(part: Resource) -> String:
 	if part == null:
 		return ""
+	var source_path: String = MLBodyPartContract.resource_source_path(part)
+	# GenericLimbDefinition resources are nested anatomy, not alternative top-level hardware. The
+	# creator exposes exactly one articulated attachment and edits its nested limb in place. Legacy
+	# utility/grabber limb attachments stay loadable for existing presets but do not compete with the
+	# generic model-forge limb in the picker.
+	if part is GenericLimbDefinition:
+		return "Nested limb definitions are edited through the articulated-limb attachment."
+	if part is DroneLimbAttachmentDefinition and source_path != CREATOR_ARTICULATED_LIMB_PATH:
+		return "Legacy articulated attachments are not separate creator limb variants."
 	if part is DroneCameraAttachmentDefinition:
-		var source_path: String = MLBodyPartContract.resource_source_path(part)
 		if source_path.ends_with("/training_observer_camera.tres"):
 			return "The training observer is instrumentation, not authored model hardware."
 	# Passive attachments are allowed: they can intentionally change mass/shape without consuming

@@ -23,7 +23,7 @@ Current work is capability expansion rather than collapse repair:
 2. Use the **Item Pickup** cardset for carry training; pickup objects must not exist in unrelated cardsets.
 3. Add a separately versioned Climbing/Grip cardset once live wall attachment and breakaway behavior are observed.
 4. Keep future model-forge anatomy variable, but give every released topology an explicit observation/action profile.
-5. Build the Spore-like body creator later on top of generic definitions and assemblies; do not mix editor UI into the present runtime layer.
+5. Continue the Spore-like creator on top of generic definitions and assemblies; creator-authored Core attachment mounts now support arbitrary articulated-limb counts and segment topology.
 
 ## Current profile-v9 control contract
 
@@ -85,6 +85,28 @@ The four-limb worker is an adapter over the reusable model-forge stack:
 Future creature-editor bodies may have arbitrary limb/segment/end-effector combinations. Each released
 topology still needs an explicit policy profile or a padded/set/graph contract; never silently feed
 variable anatomy into the fixed 398→16 network.
+
+## Creator articulated-limb baseline — 2026-08-10
+
+The model-forge creator exposes one top-level articulated limb hardware choice: **Articulated Limb**.
+The legacy utility manipulator and raw nested `GenericLimbDefinition` resources remain loadable for
+existing presets/runtime code but are intentionally hidden from creator part pickers. Limb variation
+comes from editing the one generic part's segment count, per-segment geometry/mass, and terminal
+end-effector instead of selecting parallel limb presets.
+
+Creator-mounted articulated limbs use a mount-adaptive neutral pose derived from Core-local gravity
+and the slot's outward radial direction. The two-segment default intentionally matches the useful
+shape of the established walker: a proximal down-and-out reach followed by a nearly vertical distal
+segment. Additional segments interpolate toward gravity rather than extending as one straight radial
+chain. Joint frames are derived from the same radial/vertical plane so mirrored mounts bend correctly
+even when their serialized mount-frame tangents have opposite polarity.
+
+Default creator joint tuning now follows the proven four-limb walker envelope instead of the earlier
+stiffer prototype: 130 passive stiffness, the walker hip/knee active authority, asymmetric knee
+travel, progressive hardening, and commanded passive yield on bend axes. This preserves passive
+load-bearing support while preventing the neutral spring from unnecessarily fighting policy-commanded
+bending. Do not reintroduce separate creator limb presets unless they represent genuinely different
+hardware capabilities rather than geometry/tuning that the generic limb editor can author directly.
 
 ## Input and grip telemetry — 2026-08-06
 
@@ -433,7 +455,7 @@ Runtime status: Godot is intentionally not installed. Run static parsing/consist
 - Drone Core attachment mounts no longer have a creator or `DroneCoreDefinition` hard ceiling. Step 1 may author any number of typed attachment transforms; the Core stores that exact count, `DroneLoadout` keeps every transform, and `ServerDrone` creates attachment collision shapes dynamically beyond the four legacy scene placeholders. Propellers remain separately capped at four by the current flight runtime.
 - A Core may intentionally have zero propeller mounts. PPO accepts zero-to-four propeller feedback entries and may train a leg-only body as long as some installed hardware contributes model controls; SAC/SAC-HER remain stock-quad-only. This is the generic spider path rather than a special spider body class. Fixed-seed evaluation derives this from the frozen hardware contract and omits the impossible degraded-propeller scenario for zero-rotor bodies; loadout summaries likewise report them as articulated ground bodies rather than incomplete drones.
 - The hardware stage exposes the actual nested `GenericLimbDefinition` inside a `DroneLimbAttachmentDefinition`. Segment count edits resize the serialized segment array, per-segment length/radius/mass edits mutate the physical `LimbSegmentDefinition`, and terminal selection swaps the real `LimbEndEffectorDefinition`; control/observation topology is therefore regenerated from the edited body rather than mirrored in UI-only state.
-- `Configurable Articulated Limb` is a resource-backed creator part with a two-axis proximal joint, a distal articulated segment, and a normal-sized plain foot. Additional segments are cloned from the generic articulated-segment `.tres` template and receive dense action mappings when the attachment is assembled.
+- `Articulated Limb` is the single resource-backed creator limb part, with a two-axis proximal joint, a distal articulated segment, and a normal-sized plain foot. Additional segments are cloned from the generic articulated-segment `.tres` template and receive dense action mappings when the attachment is assembled.
 - Terminal hardware templates are resource-backed and currently include no effector, Plain Foot Pad, Passive Grip, and Controlled Grip. A controlled grip adds its own policy output through the existing generic limb contract.
 - The old standalone Four-Limb Walker remains a two-segment compatibility adapter. Its direct `GenericLimbDefinition` slots are not exposed through the new arbitrary geometry editor because that adapter would average/drop authored per-segment data. Arbitrary serial limb topology is authoritative on generic Core-mounted articulated attachments.
 - Regression coverage now includes an eight-attachment, zero-propeller creator layout and a five-segment edited drone limb with independent dimensions and terminal-control topology. Godot is not installed in this workspace, so these tests are authored but not executed here.
@@ -445,3 +467,10 @@ Runtime status: Godot is intentionally not installed. Run static parsing/consist
 - Plain/no-grip terminal hardware does not instantiate `GenericGrip3D`; controlled/passive grip hardware keeps the existing physical candidate-query and breakaway behavior.
 - `ServerDrone` caches its articulated attachment slot order, bypasses descriptor reconstruction during limb action preflight, caches aggregate non-weapon idle attachment power, and skips weapon cooldown/fire bookkeeping when the body has no weapon attachment. Articulated limbs keep their authored electrical draw without forcing an eight-slot Resource scan every physics frame.
 - Current regression target is two PPO workers with eight articulated attachment limbs each at 1x simulation speed. Godot is intentionally unavailable in this workspace, so this pass removes verified hot-path allocations/physics bookkeeping and authors regressions, but the actual frame-time improvement must be measured in the user's Godot 4.6 training room.
+
+### Pass 48 single creator limb / neutral-pose invariant
+- The creator exposes exactly one top-level articulated limb choice, `Articulated Limb`. Legacy `Utility Manipulator Arm` and raw/nested `GenericLimbDefinition` resources remain valid backing resources for old presets and gameplay code but are not creator alternatives. Geometry/topology differences belong in the generic limb editor.
+- Creator `Articulated Limb` mounts opt into a gravity/radial adaptive neutral pose. The proximal segment starts down-and-out and later segments progressively turn toward Core-local down, so mirrored side mounts and arbitrary segment counts do not spawn as straight radial/T-pose chains.
+- The adaptive mount path also derives joint frames from the radial/vertical bend plane. Serialized left/right mount tangent polarity therefore cannot flip one mirrored leg upward while its counterpart bends downward.
+- Default creator joint tuning is aligned with the established Four-Limb Walker envelope: walker-scale segment geometry, broad hip limits, asymmetric knee limits, 130 passive stiffness, progressive hardening, and commanded passive yield on bend axes. Passive load-bearing remains active, but policy-commanded bending is no longer opposed by the earlier prototype's unnecessarily rigid neutral spring.
+- Do not add parallel creator limb presets merely for different segment counts, lengths, radii, masses, or terminal hardware; those are editable properties of the one generic limb. A separate creator limb entry should represent genuinely different actuator/physics capability.

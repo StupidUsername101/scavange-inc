@@ -6,7 +6,7 @@
 
 [resource]
 script = ExtResource("1_attachment")
-display_name = "Configurable Articulated Limb"
+display_name = "Articulated Limb"
 quality = 1
 visual_color = Color(0.38, 0.43, 0.48, 1)
 mass = 0.12
@@ -21,3 +21,4 @@ auto_pack_action_indices = true
 limb_collision_layer = 4
 limb_collision_mask = 1
 exclude_self_collision = true
+mount_adaptive_neutral_pose = true

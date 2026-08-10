@@ -17,6 +17,7 @@ func _init() -> void:
 	_test_interface_signature_tracks_topology_not_tuning()
 	_test_regular_articulated_drone_limb()
 	_test_creator_attachment_catalog_exposes_real_model_channels()
+	_test_creator_limb_neutral_pose_matches_walker_character()
 	_test_arbitrary_generic_limb_topology()
 	_test_creator_limb_editor_mutates_generic_runtime_parts()
 	_test_existing_limb_mapping_order()
@@ -737,14 +738,14 @@ func _test_regular_articulated_drone_limb() -> void:
 
 
 func _test_creator_attachment_catalog_exposes_real_model_channels() -> void:
-	var utility_arm: DroneLimbAttachmentDefinition = load(
-		"res://resources/drones/attachments/utility_arm.tres"
+	var configurable_limb: DroneLimbAttachmentDefinition = load(
+		"res://resources/model_forge/attachments/configurable_articulated_limb.tres"
 	) as DroneLimbAttachmentDefinition
 	_expect(
-		utility_arm != null
-		and MLBodyPartContract.control_descriptors(utility_arm).size() == 4
-		and MLBodyPartContract.observation_descriptors(utility_arm).size() > 0,
-		"Utility Manipulator Arm is real articulated ML hardware instead of a zero-channel legacy attachment"
+		configurable_limb != null
+		and MLBodyPartContract.control_descriptors(configurable_limb).size() == 3
+		and MLBodyPartContract.observation_descriptors(configurable_limb).size() > 0,
+		"the single creator articulated limb exposes real generic ML channels"
 	)
 	var draft: MLBodyBuildDraft = MLBodyPresetLibrary.instantiate_draft(MLBodyPresetLibrary.DRONE_QUAD)
 	var attachment_slot: MLBodySlotDefinition = null
@@ -758,20 +759,114 @@ func _test_creator_attachment_catalog_exposes_real_model_channels() -> void:
 	var utility_present: bool = false
 	var configurable_limb_present: bool = false
 	var training_observer_present: bool = false
-	var articulated_arm_count: int = 0
+	var articulated_limb_count: int = 0
 	for part: Resource in compatible:
 		var path: String = MLBodyPartContract.resource_source_path(part)
 		utility_present = utility_present or path.ends_with("/utility_arm.tres")
 		configurable_limb_present = configurable_limb_present or path.ends_with("/configurable_articulated_limb.tres")
 		training_observer_present = training_observer_present or path.ends_with("/training_observer_camera.tres")
 		if part is DroneLimbAttachmentDefinition:
-			articulated_arm_count += 1
+			articulated_limb_count += 1
 	_expect(
-		utility_present
-		and configurable_limb_present
+		configurable_limb_present
+		and not utility_present
 		and not training_observer_present
-		and articulated_arm_count == 2,
-		"creator exposes the manipulator and configurable articulated limb while excluding evaluator instrumentation/duplicate wrappers"
+		and articulated_limb_count == 1,
+		"creator exposes one generic articulated limb instead of competing legacy limb variants"
+	)
+	var catalog_has_nested_limb: bool = false
+	for part: Resource in MLBodyPartCatalog.all_parts():
+		catalog_has_nested_limb = catalog_has_nested_limb or part is GenericLimbDefinition
+	_expect(
+		not catalog_has_nested_limb,
+		"nested GenericLimbDefinition resources stay inside the articulated attachment editor instead of appearing as top-level parts"
+	)
+
+
+func _test_creator_limb_neutral_pose_matches_walker_character() -> void:
+	var attachment: DroneLimbAttachmentDefinition = load(
+		"res://resources/model_forge/attachments/configurable_articulated_limb.tres"
+	) as DroneLimbAttachmentDefinition
+	_expect(attachment != null and attachment.mount_adaptive_neutral_pose, "creator limb enables mount-aware neutral posing")
+	if attachment == null:
+		return
+	# Reproduce both side-mount frame polarities used by creator layouts, including the older left
+	# frame whose local X axis pointed down. The adaptive pose must still bend downward on both.
+	var right_mount: Transform3D = Transform3D(
+		Basis(Vector3.UP, Vector3.LEFT, Vector3.BACK),
+		Vector3(0.5, 0.0, 0.0)
+	)
+	var left_mount: Transform3D = Transform3D(
+		Basis(Vector3.DOWN, Vector3.RIGHT, Vector3.BACK),
+		Vector3(-0.5, 0.0, 0.0)
+	)
+	var right_limbs: Array[GenericLimbDefinition] = attachment.mounted_limb_definitions(right_mount)
+	var left_limbs: Array[GenericLimbDefinition] = attachment.mounted_limb_definitions(left_mount)
+	var pose_valid: bool = right_limbs.size() == 1 and left_limbs.size() == 1
+	if pose_valid:
+		var right_limb: GenericLimbDefinition = right_limbs[0]
+		var left_limb: GenericLimbDefinition = left_limbs[0]
+		pose_valid = right_limb.segments.size() == 2 and left_limb.segments.size() == 2
+		if pose_valid:
+			var right_upper: Vector3 = (right_limb.mount_basis_local * right_limb.segments[0].rest_direction_local).normalized()
+			var right_lower: Vector3 = (right_limb.mount_basis_local * right_limb.segments[1].rest_direction_local).normalized()
+			var left_upper: Vector3 = (left_limb.mount_basis_local * left_limb.segments[0].rest_direction_local).normalized()
+			var left_lower: Vector3 = (left_limb.mount_basis_local * left_limb.segments[1].rest_direction_local).normalized()
+			pose_valid = (
+				right_upper.x > 0.70
+				and right_upper.y < -0.40
+				and right_lower.y < -0.95
+				and left_upper.x < -0.70
+				and left_upper.y < -0.40
+				and left_lower.y < -0.95
+			)
+	_expect(
+		pose_valid,
+		"creator limbs use a mirrored down-and-out neutral stance instead of straight surface-normal T poses"
+	)
+	var extended: DroneLimbAttachmentDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(attachment) as DroneLimbAttachmentDefinition
+	)
+	var extended_error: String = MLBodyLimbEditor.set_segment_count(extended, 0, 5)
+	var extended_mounted: Array[GenericLimbDefinition] = []
+	if extended != null:
+		extended_mounted = extended.mounted_limb_definitions(right_mount)
+	var extended_pose_valid: bool = extended_error.is_empty() and extended_mounted.size() == 1
+	if extended_pose_valid:
+		var extended_limb: GenericLimbDefinition = extended_mounted[0]
+		extended_pose_valid = extended_limb.segments.size() == 5
+		var previous_horizontal: float = INF
+		for segment: LimbSegmentDefinition in extended_limb.segments:
+			var core_direction: Vector3 = (
+				extended_limb.mount_basis_local * segment.rest_direction_local
+			).normalized()
+			var horizontal: float = Vector2(core_direction.x, core_direction.z).length()
+			extended_pose_valid = (
+				extended_pose_valid
+				and core_direction.y < -0.40
+				and horizontal <= previous_horizontal + 0.001
+			)
+			previous_horizontal = horizontal
+	_expect(
+		extended_pose_valid,
+		"arbitrary creator segment counts progressively turn toward gravity instead of cloning a straight distal direction"
+	)
+	var proximal_joint: LimbJointDefinition = load(
+		"res://resources/model_forge/limbs/proximal_joint.tres"
+	) as LimbJointDefinition
+	var articulated_joint: LimbJointDefinition = load(
+		"res://resources/model_forge/limbs/articulated_joint.tres"
+	) as LimbJointDefinition
+	_expect(
+		proximal_joint != null
+		and articulated_joint != null
+		and is_equal_approx(proximal_joint.passive_stiffness.z, 130.0)
+		and is_equal_approx(articulated_joint.passive_stiffness.z, 130.0)
+		and proximal_joint.commanded_passive_yield.z > 0.99
+		and articulated_joint.commanded_passive_yield.z > 0.99
+		and articulated_joint.lower_limit_degrees.z >= -8.01
+		and articulated_joint.upper_limit_degrees.z <= 72.01,
+		"creator limb joint defaults reuse the proven walker support/yield envelope instead of the stiffer symmetric prototype"
 	)
 
 
@@ -801,7 +896,7 @@ func _test_arbitrary_generic_limb_topology() -> void:
 
 func _test_creator_limb_editor_mutates_generic_runtime_parts() -> void:
 	var source: DroneLimbAttachmentDefinition = load(
-		"res://resources/drones/attachments/utility_arm.tres"
+		"res://resources/model_forge/attachments/configurable_articulated_limb.tres"
 	) as DroneLimbAttachmentDefinition
 	var edited: DroneLimbAttachmentDefinition = (
 		MLBodyPartContract.deep_duplicate_resource(source) as DroneLimbAttachmentDefinition

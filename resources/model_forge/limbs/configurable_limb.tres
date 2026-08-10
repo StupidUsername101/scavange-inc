@@ -8,7 +8,7 @@
 
 [resource]
 script = ExtResource("1_limb")
-limb_name = "Configurable Limb"
+limb_name = "Articulated Limb"
 installed = true
 mount_offset_local = Vector3(0, 0, 0)
 segments = Array[ExtResource("2_segment_type")]([ExtResource("3_proximal"), ExtResource("4_distal")])

@@ -1482,7 +1482,7 @@ func _rebuild_limb_editor(slot_id: String) -> void:
 	host.add_child(heading)
 	var hint: Label = Label.new()
 	if current_body_kind == "articulated_body" and part is GenericLimbDefinition:
-		hint.text = "This legacy four-limb trainer still converts each limb through its two-segment compatibility rig. Use Core attachment mounts with Configurable Articulated Limb parts for arbitrary serial chains. The compatibility limb remains visible here but is not exposed as a lossy geometry editor."
+		hint.text = "This legacy four-limb trainer still converts each limb through its two-segment compatibility rig. Use Core attachment mounts with the Articulated Limb part for arbitrary serial chains. The compatibility limb remains visible here but is not exposed as a lossy geometry editor."
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		hint.add_theme_color_override("font_color", MUTED)
 		host.add_child(hint)

@@ -16,6 +16,10 @@ extends DroneAttachmentDefinition
 @export_flags_3d_physics var limb_collision_layer := 4
 @export_flags_3d_physics var limb_collision_mask := 1
 @export var exclude_self_collision := true
+# Creator limbs can opt into a gravity-aware neutral stance. The stored slot transform still owns
+# placement; this only derives a useful bent rest pose from that mount at runtime. Legacy/gameplay
+# manipulators keep their authored segment directions by leaving this disabled.
+@export var mount_adaptive_neutral_pose: bool = false
 
 
 func _init() -> void:
@@ -67,6 +71,8 @@ func mounted_limb_definitions(slot_mount_local: Variant) -> Array[GenericLimbDef
 			mounted.mount_basis_local = (
 				slot_transform.basis * mounted.mount_basis_local
 			).orthonormalized()
+		if mount_adaptive_neutral_pose and slot_mount_local is Transform3D:
+			_apply_mount_adaptive_neutral_pose(mounted, slot_transform)
 		mounted.sanitize()
 		result.append(mounted)
 	if auto_pack_action_indices:
@@ -74,6 +80,73 @@ func mounted_limb_definitions(slot_mount_local: Variant) -> Array[GenericLimbDef
 		for packed_definition: GenericLimbDefinition in result:
 			action_cursor = packed_definition.pack_action_indices(action_cursor)
 	return result
+
+
+func _apply_mount_adaptive_neutral_pose(
+	limb: GenericLimbDefinition,
+	slot_transform: Transform3D
+) -> void:
+	if limb == null or limb.segments.is_empty():
+		return
+	# Creator attachment mounts encode their outward surface normal as local -Y. Derive a
+	# horizontal radial direction from it, then fall back to mount position/orientation for top or
+	# bottom mounts where the surface normal itself has no horizontal component.
+	var outward: Vector3 = (slot_transform.basis * Vector3.DOWN).normalized()
+	var radial: Vector3 = Vector3(outward.x, 0.0, outward.z)
+	if radial.length_squared() <= 0.000001:
+		radial = Vector3(slot_transform.origin.x, 0.0, slot_transform.origin.z)
+	if radial.length_squared() <= 0.000001:
+		var tangent: Vector3 = slot_transform.basis.z
+		radial = Vector3(tangent.x, 0.0, tangent.z)
+	if radial.length_squared() <= 0.000001:
+		radial = Vector3.FORWARD
+	radial = radial.normalized()
+
+	var mount_inverse: Basis = limb.mount_basis_local.transposed()
+	var previous_direction: Vector3 = Vector3.ZERO
+	var segment_count: int = limb.segments.size()
+	for segment_index: int in range(segment_count):
+		var segment: LimbSegmentDefinition = limb.segments[segment_index]
+		if segment == null:
+			continue
+		var t: float = (
+			float(segment_index) / float(segment_count - 1)
+			if segment_count > 1
+			else 0.5
+		)
+		# Match the useful neutral shape of the established walker: the proximal part reaches
+		# strongly outward while descending, and later parts progressively turn toward gravity.
+		var horizontal_weight: float = lerpf(0.85, 0.02, t)
+		var down_weight: float = sqrt(maxf(1.0 - horizontal_weight * horizontal_weight, 0.0))
+		var desired_direction: Vector3 = (
+			radial * horizontal_weight + Vector3.DOWN * down_weight
+		).normalized()
+		segment.rest_direction_local = (mount_inverse * desired_direction).normalized()
+
+		if segment.joint != null:
+			var joint_basis_core: Basis = Basis.IDENTITY
+			if segment_index == 0:
+				var yaw_axis: Vector3 = Vector3.UP
+				var pitch_axis: Vector3 = radial.cross(yaw_axis).normalized()
+				if pitch_axis.length_squared() <= 0.000001:
+					pitch_axis = Vector3.RIGHT
+				var locked_axis: Vector3 = pitch_axis.cross(yaw_axis).normalized()
+				joint_basis_core = Basis(yaw_axis, locked_axis, pitch_axis).orthonormalized()
+			else:
+				var hinge_axis: Vector3 = previous_direction.cross(desired_direction).normalized()
+				if hinge_axis.length_squared() <= 0.000001:
+					hinge_axis = radial.cross(Vector3.DOWN).normalized()
+				if hinge_axis.length_squared() <= 0.000001:
+					hinge_axis = Vector3.FORWARD
+				var x_axis: Vector3 = desired_direction.normalized()
+				var y_axis: Vector3 = hinge_axis.cross(x_axis).normalized()
+				if y_axis.length_squared() <= 0.000001:
+					y_axis = Vector3.UP
+				joint_basis_core = Basis(x_axis, y_axis, hinge_axis).orthonormalized()
+			segment.joint.joint_basis_local = (
+				mount_inverse * joint_basis_core
+			).orthonormalized()
+		previous_direction = desired_direction
 
 
 func ml_control_descriptors() -> Array[Dictionary]:
@@ -112,4 +185,5 @@ func ml_contract_dictionary() -> Dictionary:
 		})
 	result["limbs"] = limbs
 	result["auto_pack_action_indices"] = auto_pack_action_indices
+	result["mount_adaptive_neutral_pose"] = mount_adaptive_neutral_pose
 	return result

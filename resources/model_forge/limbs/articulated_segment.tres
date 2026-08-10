@@ -6,10 +6,10 @@
 [resource]
 script = ExtResource("1_segment")
 segment_name = "Articulated Segment"
-rest_direction_local = Vector3(0, -1, 0)
-length = 0.75
+rest_direction_local = Vector3(-0.9997, -0.023, 0)
+length = 1.10
 radius = 0.075
-mass = 0.35
+mass = 0.38
 maximum_health = 100.0
 friction = 0.95
 bounce = 0.01
