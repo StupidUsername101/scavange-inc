@@ -213,7 +213,9 @@ static func add_drone_visual(drone: ServerDrone, color: Color) -> void:
 		rotor_mesh.bottom_radius = rotor_radius
 		rotor_mesh.height = 0.035
 		rotor.mesh = rotor_mesh
-		rotor.position = slot.position
+		# Custom creator slots own a full transform. Position-only rendering made an angled rotor
+		# look upright even while physics correctly applied force along the authored +Y axis.
+		rotor.transform = drone.global_transform.affine_inverse() * slot.global_transform
 		rotor.material_override = drone_material
 		rotor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		drone.add_child(rotor)

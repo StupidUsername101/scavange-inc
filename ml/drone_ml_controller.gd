@@ -63,10 +63,12 @@ func disable() -> void:
 	static_thrust_cache_valid = false
 
 
-func submit_external_action(action: Dictionary) -> void:
+func submit_external_action(action: Dictionary) -> bool:
 	# PPO actions are intentionally held until the next decision. Keeping the validated
 	# command removes a full snapshot, deep copy, and validation pass on every physics tick.
-	_validate_and_cache_action(action)
+	# Propagate validation to the caller so trainer telemetry cannot graph a command that never
+	# reached the physical actuator cache.
+	return _validate_and_cache_action(action)
 
 
 func step(delta: float) -> Array[float]:

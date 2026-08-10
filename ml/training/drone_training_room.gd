@@ -663,12 +663,41 @@ func _drone_action_names(group: Dictionary = {}) -> Array[String]:
 				continue
 			var descriptor: Dictionary = descriptor_value
 			var name: String = str(descriptor.get("name", "")).strip_edges()
-			labels.append(name if not name.is_empty() else "Action %d" % (labels.size() + 1))
+			if name.is_empty():
+				name = "Action %d" % (labels.size() + 1)
+			if str(descriptor.get("kind", "")) == "propeller_throttle":
+				name += " (policy cmd)"
+			labels.append(name)
 	if not labels.is_empty():
 		return labels
 	for action_index in range(QUAD_PROPELLER_COUNT):
 		labels.append("P%d thrust" % action_index)
 	return labels
+
+
+func _drone_realized_actuator_status(drone: ServerDrone) -> String:
+	if not is_instance_valid(drone):
+		return ""
+	var applied_power: float = 0.0
+	for power_value: float in drone.last_propeller_applied_power_w:
+		applied_power += maxf(power_value, 0.0)
+	var realized_upward_thrust: float = 0.0
+	for array_index: int in range(mini(
+		drone.propeller_slots.size(),
+		drone.last_propeller_realized_thrust_n.size()
+	)):
+		var axis: Vector3 = drone.propeller_slots[array_index].global_basis.y
+		if axis.length_squared() <= 0.000001:
+			continue
+		realized_upward_thrust += maxf(
+			drone.last_propeller_realized_thrust_n[array_index],
+			0.0
+		) * maxf(axis.normalized().dot(Vector3.UP), 0.0)
+	return "Motors applied %.1f W · realized upward thrust %.1f N · bus spool %.0f%%" % [
+		applied_power,
+		realized_upward_thrust,
+		clampf(drone.power_spool_ratio, 0.0, 1.0) * 100.0,
+	]
 
 
 func _four_limb_action_names(group: Dictionary = {}) -> Array[String]:
@@ -11344,6 +11373,10 @@ func _create_worker_group(
 	if str(algorithm_id) == "ppo_clip":
 		trainer_config["body_interface"] = accepted_body.to_dictionary()
 		trainer_config["action_count"] = accepted_body.control_count()
+		trainer_config["initial_control_values"] = LOADOUT_CONFIG.recommended_initial_control_values(
+			group_loadout,
+			accepted_body
+		)
 	trainer_setup["config"] = trainer_config
 	var trainer = _create_group_training_algorithm(
 		str(algorithm_id),
@@ -11371,7 +11404,7 @@ func _create_worker_group(
 	# intentionally copies the source configuration along with its weights, so branch-dialog
 	# overrides such as control rate/exploration have to win after that copy.
 	for config_key in requested_config:
-		if str(config_key) in ["hidden_layer_width", "hidden_layer_depth", "action_count", "body_interface"]:
+		if str(config_key) in ["hidden_layer_width", "hidden_layer_depth", "action_count", "body_interface", "initial_control_values"]:
 			continue
 		trainer.set_config_value(str(config_key), requested_config[config_key])
 	var source_trainer = source.get("trainer") as DroneTrainingAlgorithm
@@ -15873,7 +15906,7 @@ func _apply_group_action_sample(
 	sample: Dictionary
 ) -> void:
 	if sample.is_empty():
-		status_label.text = "%s could not sample a valid quad action." % group["name"]
+		status_label.text = "%s could not sample a valid body action." % group["name"]
 		action_trace_buffer.mark_invalid(
 			int(group.get("group_id", -1)),
 			int(trial.get("instance_id", -1)),
@@ -15881,9 +15914,24 @@ func _apply_group_action_sample(
 		)
 		drone.submit_ml_action({})
 		return
+	var held_action: Dictionary = sample.get("action", {})
+	if not drone.submit_ml_action(held_action):
+		# Never graph an action that the physical runtime rejected. Previously this trace was written
+		# first, which could make a dead actuator path look healthy in the plots.
+		action_trace_buffer.mark_invalid(
+			int(group.get("group_id", -1)),
+			int(trial.get("instance_id", -1)),
+			int(trial.get("worker_index", trial.get("sensor_phase_index", -1)))
+		)
+		trial["held_action"] = {}
+		status_label.text = "%s runtime rejected its body action: %s" % [
+			group["name"],
+			drone.ml_controller.latest_action_error if drone.ml_controller != null else "unknown action error",
+		]
+		return
 	_record_action_trace_sample(group, trial, drone, sample)
 	trial["action_sample"] = sample
-	trial["held_action"] = sample.get("action", {})
+	trial["held_action"] = held_action
 	trial["interval_reward"] = 0.0
 	trial["interval_delta_seconds"] = 0.0
 	trial["interval_reward_trace"] = _new_interval_reward_trace(
@@ -15891,7 +15939,6 @@ func _apply_group_action_sample(
 		trial.get("episode") as DroneTrainingEpisode
 	)
 	trial["reward_trace_previous_position_world"] = drone.global_position
-	drone.submit_ml_action(trial["held_action"])
 
 
 func _sample_new_group_actions(group: Dictionary) -> void:
@@ -17745,6 +17792,7 @@ func _append_drone_action_trace_rows(group_rows: Array[Dictionary]) -> void:
 			var status = "paused"
 			if not trial.is_empty():
 				status = "finished" if bool(trial.get("episode_finished", false)) else "live"
+			var live_drone: ServerDrone = trial.get("drone") as ServerDrone
 			workers.append({
 				"source_id": source_id,
 				"group_name": str(group.get("name", "Worker group")),
@@ -17757,6 +17805,7 @@ func _append_drone_action_trace_rows(group_rows: Array[Dictionary]) -> void:
 				"action_names": action_names,
 				"action_minimum": 0.0,
 				"action_maximum": 1.0,
+				"runtime_actuator_status": _drone_realized_actuator_status(live_drone),
 				"record": record,
 			})
 		group_rows.append({

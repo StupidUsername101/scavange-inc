@@ -606,9 +606,37 @@ func _refresh_main_part_collisions(has_core: bool) -> Vector3:
 	$BatteryCollision.position = battery_position
 	$CoreCollision.disabled = not is_edit_preview and not has_core
 	$BatteryCollision.disabled = not is_edit_preview and not has_battery
-	$ArmCollisionA.disabled = is_edit_preview
-	$ArmCollisionB.disabled = is_edit_preview
+	# These cross-arm boxes belong to the old fixed quad frame. Creator-authored bodies have
+	# explicit Core geometry and mount transforms, so retaining invisible legacy arms adds collision
+	# geometry the user never authored (especially harmful for flat/wide chassis).
+	var legacy_cross_arms: bool = _uses_legacy_cross_arm_collisions()
+	$ArmCollisionA.disabled = is_edit_preview or not legacy_cross_arms
+	$ArmCollisionB.disabled = is_edit_preview or not legacy_cross_arms
 	return core_size
+
+
+func _uses_legacy_cross_arm_collisions() -> bool:
+	if loadout == null or loadout.core == null:
+		return false
+	if loadout.core.editable_mesh != null and loadout.core.editable_mesh.has_geometry():
+		return false
+	if loadout.core.propeller_slot_count != MAX_PROPELLER_SLOTS:
+		return false
+	for slot_index: int in range(MAX_PROPELLER_SLOTS):
+		var actual: Transform3D = loadout.get_propeller_slot_transform(slot_index)
+		var expected: Transform3D = Transform3D(
+			Basis.IDENTITY,
+			SLOT_LAYOUT.get_propeller_position(slot_index, loadout.core.body_size)
+		)
+		if actual.origin.distance_to(expected.origin) > 0.0001:
+			return false
+		if (actual.basis.x - expected.basis.x).length() > 0.0001:
+			return false
+		if (actual.basis.y - expected.basis.y).length() > 0.0001:
+			return false
+		if (actual.basis.z - expected.basis.z).length() > 0.0001:
+			return false
+	return true
 
 
 func _refresh_propeller_collisions() -> void:
@@ -1281,8 +1309,7 @@ func set_ml_objective(objective: Dictionary) -> bool:
 func submit_ml_action(action: Dictionary) -> bool:
 	if not is_ml_control_enabled():
 		return false
-	ml_controller.submit_external_action(action)
-	return true
+	return ml_controller.submit_external_action(action)
 
 
 func reset_ml_episode(
@@ -1313,7 +1340,11 @@ func reset_ml_episode(
 	remaining_battery_energy_wh = loadout.battery.energy_capacity_wh
 	current_power_output = 0.0
 	current_bus_voltage_v = 0.0
-	power_spool_ratio = 0.0
+	# Training episodes reset an already-powered vehicle, not a freshly switched-on battery bus.
+	# Starting at zero spool creates an unavoidable artificial fall whose duration depends on the
+	# selected Core, and arbitrary/heavy creator bodies can hit the floor before the policy has
+	# access to their authored thrust. Gameplay activation still retains normal spool dynamics.
+	power_spool_ratio = 1.0
 	battery_fluctuation_phase = 0.0
 	core_fluctuation_phase = 0.0
 	battery_spike_time_remaining = 0.0

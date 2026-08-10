@@ -52,7 +52,8 @@ func _init(
 	configured_action_count: int = ACTION_COUNT,
 	configured_body_feature_count: int = 0,
 	configured_control_descriptors: Array[Dictionary] = [],
-	configured_body_interface_signature: String = ""
+	configured_body_interface_signature: String = "",
+	configured_initial_control_values: Array = []
 ) -> void:
 	hidden_size = clampi(
 		configured_hidden_size,
@@ -76,7 +77,11 @@ func _init(
 		action_count
 	)
 	_initialize_workspaces()
-	_configure_networks(random_seed, int(configured_observation_schema_version))
+	_configure_networks(
+		random_seed,
+		int(configured_observation_schema_version),
+		configured_initial_control_values
+	)
 
 
 func _initialize_workspaces() -> void:
@@ -92,7 +97,11 @@ func _initialize_workspaces() -> void:
 	log_standard_deviation_second_moment.fill(0.0)
 
 
-func _configure_networks(random_seed: int, schema_version: int) -> bool:
+func _configure_networks(
+	random_seed: int,
+	schema_version: int,
+	configured_initial_control_values: Array = []
+) -> bool:
 	if not DronePPOObservationEncoder.supports_schema(schema_version):
 		return false
 	observation_schema_version = schema_version
@@ -106,8 +115,9 @@ func _configure_networks(random_seed: int, schema_version: int) -> bool:
 		initial_actor_bias,
 		hidden_layer_count
 	)
-	# Each serialized part declares its physical command range and neutral value. Rotor throttles keep
-	# the established hover-biased start; every other part starts at its declared neutral command.
+	# Each serialized part declares its physical command range and neutral value. Fresh creator bodies
+	# may provide body-specific startup targets (for example a mass/power-aware rotor hover bias);
+	# otherwise rotors retain the legacy 70% fallback and other controls start at neutral.
 	var output_bias_offset = actor.output_bias_offset()
 	for index in range(action_count):
 		var descriptor: Dictionary = control_descriptors[index]
@@ -117,6 +127,10 @@ func _configure_networks(random_seed: int, schema_version: int) -> bool:
 		var target: float = neutral
 		if str(descriptor.get("kind", "")) == "propeller_throttle":
 			target = minimum + (maximum - minimum) * INITIAL_COMMAND
+		if index < configured_initial_control_values.size():
+			var configured_value: Variant = configured_initial_control_values[index]
+			if (configured_value is int or configured_value is float) and is_finite(float(configured_value)):
+				target = clampf(float(configured_value), minimum, maximum)
 		var normalized: float = clampf(
 			(target - minimum) / maxf(maximum - minimum, 0.000001),
 			0.001,

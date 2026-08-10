@@ -14,6 +14,7 @@ var assertion_count = 0
 func _init() -> void:
 	var observation = _observation(0.25)
 	_test_network_capacity()
+	_test_configured_initial_control_bias()
 	_test_observation_tensor(observation)
 	_test_feature_audit()
 	_test_policy_and_checkpoint(observation)
@@ -38,6 +39,40 @@ func _init() -> void:
 			assertion_count,
 		])
 		quit(1)
+
+
+func _test_configured_initial_control_bias() -> void:
+	var descriptors: Array[Dictionary] = []
+	for index: int in range(4):
+		descriptors.append({
+			"name": "propeller_%d.throttle" % index,
+			"kind": "propeller_throttle",
+			"minimum": 0.0,
+			"maximum": 1.0,
+			"neutral": 0.0,
+		})
+	var configured: Array = [0.81, 0.81, 0.81, 0.81]
+	var network: DronePPOActorCritic = DronePPOActorCritic.new(
+		7711,
+		DronePPOObservationEncoder.SCHEMA_VERSION,
+		DronePPOActorCritic.HIDDEN_SIZE,
+		DronePPOActorCritic.HIDDEN_LAYER_COUNT,
+		4,
+		0,
+		descriptors,
+		"startup-bias-test",
+		configured
+	)
+	var bias_offset: int = network.actor.output_bias_offset()
+	var all_match: bool = true
+	for index: int in range(4):
+		var bias: float = network.actor.parameters[bias_offset + index]
+		var decoded: float = 1.0 / (1.0 + exp(-bias))
+		all_match = all_match and absf(decoded - float(configured[index])) < 0.000001
+	_expect(
+		all_match,
+		"fresh PPO actor honors body-specific initial control targets instead of forcing every rotor to the stock 70% bias"
+	)
 
 
 func _test_network_capacity() -> void:

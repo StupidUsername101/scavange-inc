@@ -10,6 +10,8 @@ const CURRENT_TRAINING_PROPELLER_COUNT: int = 4
 const STANDARD_GRAVITY_MPS2 := 9.8
 const DEFAULT_AIR_DENSITY_KG_M3 := 1.225
 const MINIMUM_DENOMINATOR := 0.000001
+const INITIAL_HOVER_LIFT_MARGIN: float = 1.12
+const MINIMUM_USEFUL_UP_COMPONENT: float = 0.05
 
 #######################################################
 # Owns training-room hardware templates without mutating the shared gameplay resources.
@@ -474,13 +476,13 @@ static func physical_summary(
 		return {}
 	var installed: Array[DronePropellerDefinition] = []
 	var propeller_count: int = _propeller_slot_count(loadout)
-	for slot_index in range(propeller_count):
-		var propeller = loadout.get_propeller(slot_index)
+	for slot_index: int in range(propeller_count):
+		var propeller: DronePropellerDefinition = loadout.get_propeller(slot_index)
 		if propeller != null:
 			installed.append(propeller)
 	if installed.size() != propeller_count:
 		return {}
-	var total_mass = loadout.get_total_mass() + _external_limb_body_mass(loadout)
+	var total_mass: float = loadout.get_total_mass() + _external_limb_body_mass(loadout)
 	if propeller_count == 0:
 		return {
 			"mass_kg": total_mass,
@@ -492,73 +494,252 @@ static func physical_summary(
 			"nominal_hover_power_margin": 0.0,
 			"nominal_static_thrust_n": 0.0,
 			"maximum_static_thrust_n": 0.0,
+			"nominal_upward_thrust_n": 0.0,
+			"maximum_upward_thrust_n": 0.0,
 			"nominal_lift_to_weight": 0.0,
 			"maximum_lift_to_weight": 0.0,
+			"initial_propeller_command": 0.0,
 			"core_name": loadout.core.display_name,
 			"battery_name": loadout.battery.display_name,
 			"propeller_name": "No propellers",
 		}
-	var requested_rotor_power = 0.0
-	for propeller in installed:
+	var requested_rotor_power: float = 0.0
+	for propeller: DronePropellerDefinition in installed:
 		requested_rotor_power += maxf(propeller.max_power_draw, 0.0)
-	var nominal_bus_power = maxf(minf(
+	var nominal_bus_power: float = maxf(minf(
 		minf(
 			loadout.battery.nominal_power_output,
 			loadout.battery.maximum_power_output
 		),
 		loadout.core.max_power_throughput
 	), 0.0)
-	var maximum_bus_power = maxf(minf(
+	var maximum_bus_power: float = maxf(minf(
 		loadout.battery.maximum_power_output,
 		loadout.core.max_power_throughput
 	), 0.0)
-	var nominal_power_scale = minf(
-		nominal_bus_power / maxf(requested_rotor_power, MINIMUM_DENOMINATOR),
+	var attachment_idle_power: float = _attachment_idle_power(loadout)
+	var nominal_rotor_power: float = maxf(nominal_bus_power - attachment_idle_power, 0.0)
+	var maximum_rotor_power: float = maxf(maximum_bus_power - attachment_idle_power, 0.0)
+	var nominal_power_scale: float = minf(
+		nominal_rotor_power / maxf(requested_rotor_power, MINIMUM_DENOMINATOR),
 		1.0
 	)
-	var maximum_power_scale = minf(
-		maximum_bus_power / maxf(requested_rotor_power, MINIMUM_DENOMINATOR),
+	var maximum_power_scale: float = minf(
+		maximum_rotor_power / maxf(requested_rotor_power, MINIMUM_DENOMINATOR),
 		1.0
 	)
-	var nominal_static_thrust = 0.0
-	var maximum_static_thrust = 0.0
-	var hover_power = 0.0
-	var hover_thrust_per_rotor = (
-		total_mass * STANDARD_GRAVITY_MPS2 / float(installed.size())
-	)
-	for propeller in installed:
-		nominal_static_thrust += _rotor_thrust(
+	var nominal_static_thrust: float = 0.0
+	var maximum_static_thrust: float = 0.0
+	var nominal_upward_thrust: float = 0.0
+	var maximum_upward_thrust: float = 0.0
+	for slot_index: int in range(installed.size()):
+		var propeller: DronePropellerDefinition = installed[slot_index]
+		var nominal_thrust: float = _rotor_thrust(
 			propeller.max_power_draw * nominal_power_scale,
 			propeller,
 			air_density
 		)
-		maximum_static_thrust += _rotor_thrust(
+		var maximum_thrust: float = _rotor_thrust(
 			propeller.max_power_draw * maximum_power_scale,
 			propeller,
 			air_density
 		)
-		hover_power += _rotor_power(
-			hover_thrust_per_rotor,
-			propeller,
-			air_density
-		)
-	var weight = maxf(total_mass * STANDARD_GRAVITY_MPS2, MINIMUM_DENOMINATOR)
+		var upward_component: float = _propeller_up_component(loadout, slot_index)
+		nominal_static_thrust += nominal_thrust
+		maximum_static_thrust += maximum_thrust
+		nominal_upward_thrust += nominal_thrust * upward_component
+		maximum_upward_thrust += maximum_thrust * upward_component
+	# Lift-to-weight is a world-up capability, not total rotor-force magnitude. This matters for
+	# creator bodies whose authored rotor axes are tilted or mounted on side faces. Compute the
+	# usable upward capacity with non-upward rotors idle so they do not steal bus power.
+	nominal_upward_thrust = _upward_thrust_for_uniform_command(
+		loadout, 1.0, nominal_rotor_power, air_density
+	)
+	maximum_upward_thrust = _upward_thrust_for_uniform_command(
+		loadout, 1.0, maximum_rotor_power, air_density
+	)
+	var weight: float = maxf(total_mass * STANDARD_GRAVITY_MPS2, MINIMUM_DENOMINATOR)
+	var hover_command: float = _uniform_upward_command_for_force(
+		loadout,
+		weight,
+		requested_rotor_power,
+		air_density
+	)
+	var hover_power: float = _requested_power_for_uniform_upward_command(
+		loadout,
+		hover_command,
+		air_density
+	)
+	var initial_command: float = _uniform_upward_command_for_force(
+		loadout,
+		weight * INITIAL_HOVER_LIFT_MARGIN,
+		nominal_rotor_power,
+		air_density
+	)
 	return {
 		"mass_kg": total_mass,
 		"propeller_count": installed.size(),
 		"requested_rotor_power_w": requested_rotor_power,
 		"nominal_bus_power_w": nominal_bus_power,
 		"maximum_bus_power_w": maximum_bus_power,
+		"nominal_rotor_power_w": nominal_rotor_power,
+		"maximum_rotor_power_w": maximum_rotor_power,
 		"hover_power_w": hover_power,
-		"nominal_hover_power_margin": nominal_bus_power / maxf(hover_power, MINIMUM_DENOMINATOR),
+		"nominal_hover_power_margin": nominal_rotor_power / maxf(hover_power, MINIMUM_DENOMINATOR),
 		"nominal_static_thrust_n": nominal_static_thrust,
 		"maximum_static_thrust_n": maximum_static_thrust,
-		"nominal_lift_to_weight": nominal_static_thrust / weight,
-		"maximum_lift_to_weight": maximum_static_thrust / weight,
+		"nominal_upward_thrust_n": nominal_upward_thrust,
+		"maximum_upward_thrust_n": maximum_upward_thrust,
+		"nominal_lift_to_weight": nominal_upward_thrust / weight,
+		"maximum_lift_to_weight": maximum_upward_thrust / weight,
+		"initial_propeller_command": initial_command,
 		"core_name": loadout.core.display_name,
 		"battery_name": loadout.battery.display_name,
 		"propeller_name": installed[0].display_name,
 	}
+
+
+static func recommended_initial_control_values(
+	loadout: DroneLoadout,
+	manifest: MLBodyInterfaceManifest,
+	air_density: float = DEFAULT_AIR_DENSITY_KG_M3
+) -> Array:
+	var result: Array = []
+	if manifest == null:
+		return result
+	for descriptor: Dictionary in manifest.control_descriptors:
+		result.append(float(descriptor.get("neutral", 0.0)))
+	if loadout == null or loadout.core == null or loadout.battery == null:
+		return result
+	var summary: Dictionary = physical_summary(loadout, air_density)
+	var command: float = clampf(float(summary.get("initial_propeller_command", 0.0)), 0.0, 1.0)
+	for control_index: int in range(manifest.control_descriptors.size()):
+		var descriptor: Dictionary = manifest.control_descriptors[control_index]
+		if str(descriptor.get("kind", "")) != "propeller_throttle":
+			continue
+		var slot_id: String = str(descriptor.get("slot_id", ""))
+		if not slot_id.begins_with("propeller_"):
+			continue
+		var suffix: String = slot_id.trim_prefix("propeller_")
+		if not suffix.is_valid_int():
+			continue
+		var slot_index: int = int(suffix)
+		var minimum: float = float(descriptor.get("minimum", 0.0))
+		var maximum: float = float(descriptor.get("maximum", 1.0))
+		var normalized_command: float = (
+			command
+			if _propeller_up_component(loadout, slot_index) >= MINIMUM_USEFUL_UP_COMPONENT
+			else 0.0
+		)
+		result[control_index] = minimum + (maximum - minimum) * normalized_command
+	return result
+
+
+static func _attachment_idle_power(loadout: DroneLoadout) -> float:
+	if loadout == null or loadout.core == null:
+		return 0.0
+	var result: float = 0.0
+	for slot_index: int in range(loadout.core.attachment_slot_count):
+		var attachment: DroneAttachmentDefinition = loadout.get_attachment(slot_index)
+		if attachment != null and not (attachment is DroneCameraAttachmentDefinition):
+			result += maxf(attachment.idle_power_draw, 0.0)
+	return result
+
+
+static func _propeller_up_component(loadout: DroneLoadout, slot_index: int) -> float:
+	if loadout == null or slot_index < 0 or slot_index >= _propeller_slot_count(loadout):
+		return 0.0
+	var axis: Vector3 = loadout.get_propeller_slot_transform(slot_index).basis.y
+	if axis.length_squared() <= MINIMUM_DENOMINATOR:
+		return 0.0
+	return maxf(axis.normalized().dot(Vector3.UP), 0.0)
+
+
+static func _requested_power_for_uniform_upward_command(
+	loadout: DroneLoadout,
+	command: float,
+	air_density: float
+) -> float:
+	if loadout == null or loadout.core == null:
+		return 0.0
+	var result: float = 0.0
+	var clamped_command: float = clampf(command, 0.0, 1.0)
+	for slot_index: int in range(_propeller_slot_count(loadout)):
+		if _propeller_up_component(loadout, slot_index) < MINIMUM_USEFUL_UP_COMPONENT:
+			continue
+		var propeller: DronePropellerDefinition = loadout.get_propeller(slot_index)
+		if propeller == null:
+			continue
+		var maximum_thrust: float = _rotor_thrust(propeller.max_power_draw, propeller, air_density)
+		result += minf(
+			_rotor_power(maximum_thrust * clamped_command, propeller, air_density),
+			maxf(propeller.max_power_draw, 0.0)
+		)
+	return result
+
+
+static func _upward_thrust_for_uniform_command(
+	loadout: DroneLoadout,
+	command: float,
+	available_power: float,
+	air_density: float
+) -> float:
+	if loadout == null or loadout.core == null or available_power <= 0.0:
+		return 0.0
+	var clamped_command: float = clampf(command, 0.0, 1.0)
+	var requested_powers: Array[float] = []
+	requested_powers.resize(_propeller_slot_count(loadout))
+	requested_powers.fill(0.0)
+	var total_requested_power: float = 0.0
+	for slot_index: int in range(_propeller_slot_count(loadout)):
+		if _propeller_up_component(loadout, slot_index) < MINIMUM_USEFUL_UP_COMPONENT:
+			continue
+		var propeller: DronePropellerDefinition = loadout.get_propeller(slot_index)
+		if propeller == null:
+			continue
+		var maximum_thrust: float = _rotor_thrust(propeller.max_power_draw, propeller, air_density)
+		var requested_power: float = minf(
+			_rotor_power(maximum_thrust * clamped_command, propeller, air_density),
+			maxf(propeller.max_power_draw, 0.0)
+		)
+		requested_powers[slot_index] = requested_power
+		total_requested_power += requested_power
+	var power_scale: float = minf(
+		available_power / maxf(total_requested_power, MINIMUM_DENOMINATOR),
+		1.0
+	)
+	var upward_thrust: float = 0.0
+	for slot_index: int in range(requested_powers.size()):
+		if requested_powers[slot_index] <= 0.0:
+			continue
+		var propeller: DronePropellerDefinition = loadout.get_propeller(slot_index)
+		upward_thrust += _rotor_thrust(
+			requested_powers[slot_index] * power_scale,
+			propeller,
+			air_density
+		) * _propeller_up_component(loadout, slot_index)
+	return upward_thrust
+
+
+static func _uniform_upward_command_for_force(
+	loadout: DroneLoadout,
+	target_upward_force: float,
+	available_power: float,
+	air_density: float
+) -> float:
+	if target_upward_force <= 0.0:
+		return 0.0
+	if _upward_thrust_for_uniform_command(loadout, 1.0, available_power, air_density) <= target_upward_force:
+		return 1.0
+	var low: float = 0.0
+	var high: float = 1.0
+	for _iteration: int in range(24):
+		var middle: float = (low + high) * 0.5
+		if _upward_thrust_for_uniform_command(loadout, middle, available_power, air_density) < target_upward_force:
+			low = middle
+		else:
+			high = middle
+	return high
 
 
 static func _part_presets(

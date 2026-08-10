@@ -260,10 +260,14 @@ func _update_tree_item(item: TreeItem, worker_row: Dictionary) -> void:
 		record.get("latest_commands", PackedFloat64Array()),
 		action_names
 	))
-	item.set_tooltip_text(1, _named_commands(
+	var command_tooltip: String = _named_commands(
 		_packed_array(record.get("latest_commands", PackedFloat64Array())),
 		action_names
-	))
+	)
+	var runtime_actuator_status: String = str(worker_row.get("runtime_actuator_status", "")).strip_edges()
+	if not runtime_actuator_status.is_empty():
+		command_tooltip += "\n\n" + runtime_actuator_status
+	item.set_tooltip_text(1, command_tooltip)
 	var status_color = Color("70e8b2")
 	if status_text == "finished":
 		status_color = Color("a8b8b1")
@@ -357,6 +361,9 @@ func _refresh_detail() -> void:
 		total_decisions,
 		invalid_samples,
 	]
+	var runtime_actuator_status: String = str(row.get("runtime_actuator_status", "")).strip_edges()
+	if not runtime_actuator_status.is_empty():
+		detail_status.text += "\n" + runtime_actuator_status
 	var action_minimum = float(row.get("action_minimum", record.get("action_minimum", -1.0)))
 	var action_maximum = float(row.get("action_maximum", record.get("action_maximum", 1.0)))
 	action_contract_label.text = "%d model controls · range %.2f … %.2f\n%s" % [

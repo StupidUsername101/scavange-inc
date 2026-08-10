@@ -435,7 +435,110 @@ func _init() -> void:
 		"generic hardware snapshots preserve creator Core slot topology without forcing quad defaults"
 	)
 
+	# Creator flight regression: a flat/wide Core with heavy-lift propellers must preserve real
+	# upward rotor axes, start PPO near a body-specific hover command, and must not inherit the
+	# invisible legacy X-arm collisions from the stock quad scene.
+	var flat_lift_loadout: DroneLoadout = DroneLoadout.new()
+	var flat_core_source: DroneCoreDefinition = load(
+		"res://resources/drones/cores/large_standard_core.tres"
+	) as DroneCoreDefinition
+	var lift_battery_source: DroneBatteryDefinition = load(
+		"res://resources/drones/batteries/industrial_battery.tres"
+	) as DroneBatteryDefinition
+	var heavy_propeller_source: DronePropellerDefinition = load(
+		"res://resources/drones/propellers/heavy_lift_propeller.tres"
+	) as DronePropellerDefinition
+	var flat_core: DroneCoreDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(flat_core_source) as DroneCoreDefinition
+	)
+	var lift_battery: DroneBatteryDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(lift_battery_source) as DroneBatteryDefinition
+	)
+	if flat_core != null:
+		flat_core.set_editable_body_size(Vector3(2.4, 0.14, 1.8))
+	flat_lift_loadout.install_core(flat_core)
+	flat_lift_loadout.install_battery(lift_battery)
+	var flat_mounts: Array[Vector3] = [
+		Vector3(-0.95, 0.17, -0.68),
+		Vector3(0.95, 0.17, -0.68),
+		Vector3(-0.95, 0.17, 0.68),
+		Vector3(0.95, 0.17, 0.68),
+	]
+	for slot_index: int in range(4):
+		flat_lift_loadout.install_propeller(
+			slot_index,
+			MLBodyPartContract.deep_duplicate_resource(heavy_propeller_source) as DronePropellerDefinition
+		)
+		flat_lift_loadout.set_propeller_slot_transform(
+			slot_index,
+			Transform3D(Basis.IDENTITY, flat_mounts[slot_index])
+		)
+	var flat_summary: Dictionary = DroneTrainingLoadoutConfig.physical_summary(flat_lift_loadout)
+	var flat_manifest: MLBodyInterfaceManifest = DroneMLBodyInterfaceFactory.finalize_loadout(
+		flat_lift_loadout
+	)
+	var flat_initial_controls: Array = DroneTrainingLoadoutConfig.recommended_initial_control_values(
+		flat_lift_loadout,
+		flat_manifest
+	)
+	_expect(
+		flat_manifest != null
+		and float(flat_summary.get("nominal_lift_to_weight", 0.0)) > 1.0
+		and flat_initial_controls.size() == flat_manifest.control_count()
+		and float(flat_summary.get("initial_propeller_command", 0.0)) > 0.70,
+		"flat/wide heavy-lift creator body keeps upward lift authority and receives a mass-aware PPO startup command"
+	)
+
 	var drone_scene: PackedScene = load("res://scenes/server/server_drone.tscn") as PackedScene
+	var air_environment: AirEnvironment = AirEnvironment.new()
+	get_root().add_child(air_environment)
+	var flat_lift_drone: ServerDrone = null
+	if drone_scene != null:
+		flat_lift_drone = drone_scene.instantiate() as ServerDrone
+	if flat_lift_drone != null:
+		flat_lift_drone.loadout = DroneTrainingLoadoutConfig.duplicate_loadout(flat_lift_loadout)
+		get_root().add_child(flat_lift_drone)
+		_expect(
+			(flat_lift_drone.get_node("ArmCollisionA") as CollisionShape3D).disabled
+			and (flat_lift_drone.get_node("ArmCollisionB") as CollisionShape3D).disabled,
+			"creator-authored Core disables the invisible legacy quad X-arm collision boxes"
+		)
+		var reset_started: bool = flat_lift_drone.reset_ml_episode(Transform3D.IDENTITY, 44191, null)
+		_expect(
+			reset_started and is_equal_approx(flat_lift_drone.power_spool_ratio, 1.0),
+			"ML episode reset starts with the already-powered training bus fully spooled"
+		)
+		_expect(
+			not flat_lift_drone.submit_ml_action({}),
+			"ServerDrone propagates ML action validation failure instead of reporting rejected commands as accepted"
+		)
+		_expect(
+			not flat_lift_drone.ml_controller.latest_action_error.is_empty(),
+			"rejected ML action exposes the controller validation reason to training diagnostics"
+		)
+		var initial_command: float = float(flat_summary.get("initial_propeller_command", 1.0))
+		flat_lift_drone.ai_motor_thrust_targets.resize(flat_lift_drone.propeller_slots.size())
+		for array_index: int in range(flat_lift_drone.propeller_slots.size()):
+			var propeller: DronePropellerDefinition = flat_lift_drone.loadout.get_propeller(array_index)
+			flat_lift_drone.ai_motor_thrust_targets[array_index] = air_environment.calculate_rotor_thrust(
+				propeller.max_power_draw,
+				propeller.get_disk_area(),
+				propeller.aerodynamic_efficiency
+			) * initial_command
+		var available_power: float = float(flat_summary.get("nominal_rotor_power_w", 0.0))
+		flat_lift_drone._apply_propeller_forces(available_power)
+		var realized_upward_force: float = 0.0
+		for array_index: int in range(flat_lift_drone.propeller_slots.size()):
+			realized_upward_force += flat_lift_drone.last_propeller_realized_thrust_n[array_index] * maxf(
+				flat_lift_drone.propeller_slots[array_index].global_basis.y.normalized().dot(Vector3.UP),
+				0.0
+			)
+		_expect(
+			realized_upward_force > flat_lift_loadout.get_total_mass() * 9.8,
+			"heavy-lift creator rotor commands reach the real force path with enough realized upward thrust to exceed body weight"
+		)
+		flat_lift_drone.free()
+	air_environment.free()
 	var degraded_drone: ServerDrone = null
 	if drone_scene != null:
 		degraded_drone = drone_scene.instantiate() as ServerDrone

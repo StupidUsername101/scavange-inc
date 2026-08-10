@@ -32,6 +32,9 @@ const DEFAULT_CONFIG = {
 	"hidden_layer_width": DronePPOActorCritic.HIDDEN_SIZE,
 	"hidden_layer_depth": DronePPOActorCritic.HIDDEN_LAYER_COUNT,
 	"action_count": DronePPOActorCritic.ACTION_COUNT,
+	# Fresh creator bodies can supply per-control startup targets. They affect only initialization;
+	# trained/checkpointed weights remain the policy authority afterward.
+	"initial_control_values": [],
 }
 
 #######################################################
@@ -142,7 +145,8 @@ func _init(custom_config: Dictionary = {}, initialization_seed = 4194301) -> voi
 		int(config["action_count"]),
 		body_feature_count,
 		body_control_descriptors,
-		body_interface_signature
+		body_interface_signature,
+		(config.get("initial_control_values", []) as Array)
 	)
 	behavior_actor_critic = DronePPOActorCritic.new(
 		random_seed + 500003,
@@ -152,7 +156,8 @@ func _init(custom_config: Dictionary = {}, initialization_seed = 4194301) -> voi
 		int(config["action_count"]),
 		body_feature_count,
 		body_control_descriptors,
-		body_interface_signature
+		body_interface_signature,
+		(config.get("initial_control_values", []) as Array)
 	)
 	_sync_behavior_from_optimizer(true)
 	shuffle_rng.seed = random_seed + 101
@@ -206,7 +211,7 @@ func config_values() -> Dictionary:
 
 
 func set_config_value(key: String, value: Variant) -> bool:
-	if key in ["hidden_layer_width", "hidden_layer_depth", "action_count"]:
+	if key in ["hidden_layer_width", "hidden_layer_depth", "action_count", "initial_control_values"]:
 		return false
 	if not config.has(key):
 		return false
