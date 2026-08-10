@@ -78,6 +78,11 @@ static func _drone_loadout(draft: MLBodyBuildDraft) -> DroneLoadout:
 					return _fail("Could not install %s." % slot.display_name) as DroneLoadout
 			"attachment":
 				var attachment_index: int = _slot_suffix_index(slot_id)
+				if attachment_index < 0 or not result.set_attachment_slot_transform(
+					attachment_index,
+					slot.mount_transform
+				):
+					return _fail("Could not apply the mount transform for %s." % slot.display_name) as DroneLoadout
 				if part == null:
 					result.remove_attachment(attachment_index)
 				elif not (part is DroneAttachmentDefinition) or not result.install_attachment(

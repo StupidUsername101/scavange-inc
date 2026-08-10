@@ -19,6 +19,7 @@ func _init() -> void:
 	_test_fresh_drone_model_architecture_reaches_constructor()
 	_test_model_body_creator_carries_training_setup()
 	_test_model_body_creator_fits_realized_content_to_viewport()
+	_test_model_body_creator_staged_core_layout()
 	_test_paused_drone_candidate_keeps_frozen_hardware()
 	_test_room_episode_status_is_one_shared_line()
 	_test_room_ready_does_not_create_default_worker_group()
@@ -125,11 +126,73 @@ func _test_model_body_creator_fits_realized_content_to_viewport() -> void:
 		"creator Cancel/Create actions stay pinned outside the scrolling form"
 	)
 	_expect(
-		panel.slots_scroll != null
-		and panel.slots_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED
-		and panel.slots_scroll.custom_minimum_size.y
-			>= MLBodyCreatorPanel.SLOT_SCROLL_MINIMUM_HEIGHT_PX,
-		"attached-part cards contribute their natural height to the creator instead of trapping wheel input in a nested scroller"
+		panel.hardware_stage != null
+		and panel.slots_content != null
+		and panel.content_scroll.is_ancestor_of(panel.hardware_stage)
+		and panel.content_scroll.is_ancestor_of(panel.slots_content),
+		"hardware assignment shares the creator's one outer scroll surface instead of nesting another wheel trap"
+	)
+	_expect(
+		panel.layout_preview != null
+		and panel.layout_preview.mouse_filter == Control.MOUSE_FILTER_PASS,
+		"3D Core preview passes unhandled wheel input to the creator scroller"
+	)
+	panel.free()
+
+
+func _test_model_body_creator_staged_core_layout() -> void:
+	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
+	get_root().add_child(panel)
+	panel._load_preset_at(0)
+	_expect(
+		panel.creator_stage == MLBodyCreatorPanel.STAGE_CORE_LAYOUT
+		and panel.layout_attachment_capacity == 2
+		and panel.layout_attachment_transforms.is_empty(),
+		"drone creator begins with the selected Core and an empty authored attachment-slot layout"
+	)
+	panel.mirror_next_checkbox.button_pressed = true
+	panel._on_layout_surface_clicked(Transform3D(
+		panel._slot_basis_from_surface_normal(Vector3.UP),
+		Vector3(0.0, 0.22, 0.0)
+	))
+	_expect(
+		panel.layout_attachment_transforms.is_empty(),
+		"mirror-next placement is atomic and rejects center-plane clicks instead of leaving an unmatched slot"
+	)
+	panel.mirror_next_checkbox.button_pressed = false
+	var first_mount: Transform3D = Transform3D(
+		panel._slot_basis_from_surface_normal(Vector3.RIGHT),
+		Vector3(0.425, 0.0, 0.0)
+	)
+	panel._on_layout_surface_clicked(first_mount)
+	panel._mirror_selected_layout_slot()
+	_expect(
+		panel.layout_attachment_transforms.size() == 2
+		and is_equal_approx(panel.layout_attachment_transforms[0].origin.x, 0.425)
+		and is_equal_approx(panel.layout_attachment_transforms[1].origin.x, -0.425),
+		"creator can mirror the selected Core attachment slot across the local X axis"
+	)
+	var frozen_mounts: Array[Transform3D] = panel.layout_attachment_transforms.duplicate()
+	panel._accept_core_layout()
+	_expect(
+		panel.creator_stage == MLBodyCreatorPanel.STAGE_HARDWARE
+		and panel.current_draft != null
+		and panel.current_draft.equipped_part(&"battery") == null
+		and panel.current_draft.equipped_part(&"propeller_0") == null
+		and panel.current_draft.equipped_part(&"attachment_0") == null
+		and panel.current_draft.equipped_part(&"attachment_1") == null,
+		"accepting the Core layout advances to hardware assignment with every new drone slot empty"
+	)
+	var first_slot: MLBodySlotDefinition = panel.current_draft.slot_definition(&"attachment_0")
+	var second_slot: MLBodySlotDefinition = panel.current_draft.slot_definition(&"attachment_1")
+	_expect(
+		first_slot != null
+		and second_slot != null
+		and panel._slot_is_required(first_slot)
+		and panel._slot_is_required(second_slot)
+		and DroneMLBodyInterfaceFactory._transforms_match(first_slot.mount_transform, frozen_mounts[0])
+		and DroneMLBodyInterfaceFactory._transforms_match(second_slot.mount_transform, frozen_mounts[1]),
+		"hardware-assignment keeps the accepted 3D mounts and requires hardware for every attachment slot the user explicitly placed"
 	)
 	panel.free()
 

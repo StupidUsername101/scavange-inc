@@ -132,12 +132,12 @@ func _test_creator_presets_are_editable_templates() -> void:
 	for record: Dictionary in records:
 		ids.append(str(record.get("preset_id", "")))
 	_expect(
-		records.size() == 4
+		records.size() == 3
 		and ids.has(str(MLBodyPresetLibrary.DRONE_QUAD))
-		and ids.has(str(MLBodyPresetLibrary.DRONE_QUAD_GRABBER))
+		and not ids.has(str(MLBodyPresetLibrary.DRONE_QUAD_GRABBER))
 		and ids.has(str(MLBodyPresetLibrary.FOUR_LIMB_WALKER))
 		and ids.has(str(MLBodyPresetLibrary.STATIONARY_TURRET)),
-		"body creator exposes the four built-in bodies as named presets"
+		"creator exposes one drone body family; the articulated arm is selectable hardware rather than a second drone preset"
 	)
 
 	for preset_id: StringName in [
@@ -469,7 +469,7 @@ func _test_body_factories_keep_resource_backing() -> void:
 		and drone_attachment != null
 		and drone_draft_attachment != drone_attachment
 		and MLBodyPartContract.resource_source_path(drone_attachment)
-		== "res://resources/drones/attachments/training_belly_grabber.tres"
+		== "res://resources/drones/attachments/utility_arm.tres"
 		and MLBodyPartContract.resource_source_path(drone_draft_attachment)
 		== MLBodyPartContract.resource_source_path(drone_attachment),
 		"drone body factory creates an isolated creator copy of saved articulated hardware while retaining .tres backing"
@@ -756,13 +756,16 @@ func _test_creator_attachment_catalog_exposes_real_model_channels() -> void:
 	var compatible: Array[Resource] = MLBodyPartCatalog.compatible_parts(attachment_slot)
 	var utility_present: bool = false
 	var training_observer_present: bool = false
+	var articulated_arm_count: int = 0
 	for part: Resource in compatible:
 		var path: String = MLBodyPartContract.resource_source_path(part)
 		utility_present = utility_present or path.ends_with("/utility_arm.tres")
 		training_observer_present = training_observer_present or path.ends_with("/training_observer_camera.tres")
+		if part is DroneLimbAttachmentDefinition:
+			articulated_arm_count += 1
 	_expect(
-		utility_present and not training_observer_present,
-		"creator attachment catalogue includes controllable arms but excludes evaluator instrumentation"
+		utility_present and not training_observer_present and articulated_arm_count == 1,
+		"creator exposes one canonical articulated arm and excludes evaluator instrumentation/duplicate training wrappers"
 	)
 
 

@@ -1,7 +1,7 @@
 class_name DroneTrainingLoadoutConfig
 extends RefCounted
 
-const TRAINING_BELLY_GRABBER_PATH = "res://resources/drones/attachments/training_belly_grabber.tres"
+const TRAINING_BELLY_GRABBER_PATH = "res://resources/drones/attachments/utility_arm.tres"
 const TRAINING_BELLY_GRABBER_CAPABILITY: StringName = &"training_belly_grabber"
 const CORE_DIRECTORY := "res://resources/drones/cores"
 const BATTERY_DIRECTORY := "res://resources/drones/batteries"
@@ -39,6 +39,10 @@ static func duplicate_loadout(source: DroneLoadout) -> DroneLoadout:
 			attachment_copy = MLBodyPartContract.deep_duplicate_resource(attachment) as DroneAttachmentDefinition
 			_set_source_path(attachment_copy, source_path(attachment))
 		result.attachments.append(attachment_copy)
+	var source_mounts: Array[Transform3D] = source.get_attachment_slot_transforms()
+	for slot_index: int in range(source_mounts.size()):
+		if not result.set_attachment_slot_transform(slot_index, source_mounts[slot_index]):
+			return DroneLoadout.new()
 	return result
 
 
@@ -273,12 +277,16 @@ static func to_record(loadout: DroneLoadout) -> Dictionary:
 		or attachment_snapshots.size() != maxi(loadout.core.attachment_slot_count, 0)
 	):
 		return {}
+	var attachment_mounts: Array[Dictionary] = []
+	for slot_transform: Transform3D in loadout.get_attachment_slot_transforms():
+		attachment_mounts.append(_transform_to_record(slot_transform))
 	return {
-		"schema_version": 4,
+		"schema_version": 5,
 		"core": core_snapshot,
 		"battery": battery_snapshot,
 		"propellers": propeller_snapshots,
 		"attachments": attachment_snapshots,
+		"attachment_mounts": attachment_mounts,
 		"summary": physical_summary(loadout),
 	}
 
@@ -314,7 +322,10 @@ static func frozen_loadout(record: Dictionary, live_loadout: DroneLoadout) -> Dr
 static func from_record(record: Dictionary) -> DroneLoadout:
 	# Serialized hardware is either complete or invalid. Stock hardware is selected explicitly via
 	# MLBodyPresetLibrary; malformed checkpoint data must never turn into an implicit preset.
-	if record.is_empty() or int(record.get("schema_version", -1)) != 4:
+	if record.is_empty():
+		return null
+	var schema_version: int = int(record.get("schema_version", -1))
+	if schema_version != 4 and schema_version != 5:
 		return null
 	var core_value: Variant = record.get("core", {})
 	var battery_value: Variant = record.get("battery", {})
@@ -335,7 +346,76 @@ static func from_record(record: Dictionary) -> DroneLoadout:
 		return null
 	if not _restore_part_slots(result, record.get("attachments", []), &"attachment"):
 		return null
+	if schema_version >= 5:
+		var mounts_value: Variant = record.get("attachment_mounts", [])
+		if not (mounts_value is Array):
+			return null
+		var mounts: Array = mounts_value as Array
+		if mounts.size() != result.core.attachment_slot_count:
+			return null
+		for slot_index: int in range(mounts.size()):
+			var mount_value: Variant = mounts[slot_index]
+			if not (mount_value is Dictionary):
+				return null
+			var decoded_mount: Dictionary = _transform_from_record(mount_value as Dictionary)
+			if not bool(decoded_mount.get("valid", false)):
+				return null
+			var slot_transform: Transform3D = decoded_mount.get("transform", Transform3D.IDENTITY)
+			if not result.set_attachment_slot_transform(slot_index, slot_transform):
+				return null
 	return result
+
+
+static func _transform_to_record(value: Transform3D) -> Dictionary:
+	return {
+		"origin": [value.origin.x, value.origin.y, value.origin.z],
+		"basis": [
+			[value.basis.x.x, value.basis.x.y, value.basis.x.z],
+			[value.basis.y.x, value.basis.y.y, value.basis.y.z],
+			[value.basis.z.x, value.basis.z.y, value.basis.z.z],
+		],
+	}
+
+
+static func _transform_from_record(value: Dictionary) -> Dictionary:
+	var origin_value: Variant = value.get("origin", [])
+	var basis_value: Variant = value.get("basis", [])
+	if not (origin_value is Array) or not (basis_value is Array):
+		return {}
+	var origin_array: Array = origin_value as Array
+	var basis_array: Array = basis_value as Array
+	if origin_array.size() != 3 or basis_array.size() != 3:
+		return {}
+	var columns: Array[Vector3] = []
+	for column_value: Variant in basis_array:
+		if not (column_value is Array):
+			return {}
+		var column: Array = column_value as Array
+		if column.size() != 3:
+			return {}
+		for component: Variant in column:
+			if not (component is int or component is float):
+				return {}
+		columns.append(Vector3(float(column[0]), float(column[1]), float(column[2])))
+	for component: Variant in origin_array:
+		if not (component is int or component is float):
+			return {}
+	var origin: Vector3 = Vector3(
+		float(origin_array[0]), float(origin_array[1]), float(origin_array[2])
+	)
+	var basis: Basis = Basis(columns[0], columns[1], columns[2])
+	if (
+		not origin.is_finite()
+		or not basis.x.is_finite()
+		or not basis.y.is_finite()
+		or not basis.z.is_finite()
+		or absf(basis.determinant()) <= 0.000001
+	):
+		return {}
+	return {
+		"valid": true,
+		"transform": Transform3D(basis.orthonormalized(), origin),
+	}
 
 
 static func _external_limb_body_mass(loadout: DroneLoadout) -> float:

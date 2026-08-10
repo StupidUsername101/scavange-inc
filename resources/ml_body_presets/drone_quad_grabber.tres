@@ -6,7 +6,7 @@
 [ext_resource type="Resource" path="res://resources/drones/propellers/standard_propeller.tres" id="4_propeller"]
 [ext_resource type="Resource" path="res://resources/drones/batteries/standard_battery.tres" id="5_battery"]
 [ext_resource type="Script" path="res://scripts/drones/drone_attachment_definition.gd" id="9_attachment_type"]
-[ext_resource type="Resource" path="res://resources/drones/attachments/training_belly_grabber.tres" id="10_grabber"]
+[ext_resource type="Resource" path="res://resources/drones/attachments/utility_arm.tres" id="10_grabber"]
 
 [resource]
 script = ExtResource("1_loadout")

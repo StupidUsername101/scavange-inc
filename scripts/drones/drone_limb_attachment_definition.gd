@@ -46,7 +46,12 @@ func required_limb_action_count() -> int:
 	return result
 
 
-func mounted_limb_definitions(slot_offset_local: Vector3) -> Array[GenericLimbDefinition]:
+func mounted_limb_definitions(slot_mount_local: Variant) -> Array[GenericLimbDefinition]:
+	var slot_transform: Transform3D = Transform3D.IDENTITY
+	if slot_mount_local is Transform3D:
+		slot_transform = slot_mount_local as Transform3D
+	elif slot_mount_local is Vector3:
+		slot_transform.origin = slot_mount_local as Vector3
 	var result: Array[GenericLimbDefinition] = []
 	for source: GenericLimbDefinition in limb_definitions:
 		if source == null:
@@ -55,7 +60,13 @@ func mounted_limb_definitions(slot_offset_local: Vector3) -> Array[GenericLimbDe
 		if mounted == null:
 			continue
 		if mount_at_attachment_slot:
-			mounted.mount_offset_local += slot_offset_local
+			mounted.mount_offset_local = (
+				slot_transform.origin
+				+ slot_transform.basis * mounted.mount_offset_local
+			)
+			mounted.mount_basis_local = (
+				slot_transform.basis * mounted.mount_basis_local
+			).orthonormalized()
 		mounted.sanitize()
 		result.append(mounted)
 	if auto_pack_action_indices:

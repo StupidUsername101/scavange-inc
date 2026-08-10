@@ -57,15 +57,16 @@ func _build() -> void:
 		push_error("Generic limb build rejected: %s" % validation_error)
 		return
 	built = true
-	var start_local := definition.mount_offset_local
+	var mount_basis: Basis = definition.mount_basis_local.orthonormalized()
+	var start_local: Vector3 = definition.mount_offset_local
 	var parent_body: RigidBody3D = core_body
-	var parent_rest_basis := Basis.IDENTITY
+	var parent_rest_basis: Basis = mount_basis
 	for segment_index_value in range(definition.segments.size()):
 		var segment_definition: LimbSegmentDefinition = definition.segments[segment_index_value]
 		if segment_definition == null:
 			continue
 		segment_definition.sanitize()
-		var direction := segment_definition.rest_direction_local.normalized()
+		var direction: Vector3 = (mount_basis * segment_definition.rest_direction_local).normalized()
 		var end_local := start_local + direction * segment_definition.length
 		var segment_basis := basis_from_y(direction)
 		var segment_transform_local := Transform3D(
@@ -82,11 +83,12 @@ func _build() -> void:
 			parent_body,
 			segment,
 			joint_definition,
-			Transform3D(joint_definition.joint_basis_local, start_local)
+			Transform3D(mount_basis * joint_definition.joint_basis_local, start_local)
 		)
 		var rest_relative := (parent_rest_basis.inverse() * segment_basis).orthonormalized()
+		var joint_basis_core: Basis = (mount_basis * joint_definition.joint_basis_local).orthonormalized()
 		var joint_basis_parent := (
-			parent_rest_basis.inverse() * joint_definition.joint_basis_local
+			parent_rest_basis.inverse() * joint_basis_core
 		).orthonormalized()
 		joint_records.append({
 			"joint_index": segment_index_value,
@@ -99,7 +101,7 @@ func _build() -> void:
 			"rest_start_local": start_local,
 			"rest_end_local": end_local,
 			"rest_joint_transform_core_local": Transform3D(
-				joint_definition.joint_basis_local,
+				joint_basis_core,
 				start_local
 			),
 			"smoothed_target_angles": Vector3.ZERO,

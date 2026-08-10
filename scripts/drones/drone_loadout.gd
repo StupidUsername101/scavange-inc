@@ -2,6 +2,8 @@
 class_name DroneLoadout
 extends Resource
 
+const SLOT_LAYOUT = preload("res://scripts/drones/drone_slot_layout.gd")
+
 #######################################################
 # Implements the drone loadout subsystem and keeps its gameplay data and behavior in one
 # focused script.
@@ -12,19 +14,27 @@ extends Resource
 @export var propellers: Array[DronePropellerDefinition] = []
 @export var ai_chips: Array[DroneAIChipDefinition] = []
 @export var attachments: Array[DroneAttachmentDefinition] = []
+@export var attachment_slot_transforms: Array[Transform3D] = []
 
 
 func install_core(value: DroneCoreDefinition) -> void:
+	# Attachment transforms are authored in Core-local coordinates and are only meaningful for the
+	# Core geometry they were created against. Replacing a Core therefore starts from that Core's
+	# default slot layout. Exact creator/frozen-body copies deliberately reapply their serialized
+	# custom transforms after installing the Core.
 	core = value
+	attachment_slot_transforms.clear()
 	_trim_unsupported_propellers()
 	_trim_unsupported_ai_chips()
 	_trim_unsupported_attachments()
+	_ensure_attachment_slot_transforms()
 
 
 func remove_core() -> void:
 	core = null
 	ai_chips.clear()
 	attachments.clear()
+	attachment_slot_transforms.clear()
 
 
 func install_battery(value: DroneBatteryDefinition) -> void:
@@ -130,6 +140,30 @@ func get_attachment(slot_index: int) -> DroneAttachmentDefinition:
 		return null
 	return attachments[slot_index]
 
+
+func set_attachment_slot_transform(slot_index: int, value: Transform3D) -> bool:
+	if core == null or slot_index < 0 or slot_index >= core.attachment_slot_count:
+		return false
+	if not _attachment_transform_is_valid(value):
+		return false
+	_ensure_attachment_slot_transforms()
+	attachment_slot_transforms[slot_index] = Transform3D(
+		value.basis.orthonormalized(),
+		value.origin
+	)
+	return true
+
+
+func get_attachment_slot_transform(slot_index: int) -> Transform3D:
+	if core == null or slot_index < 0 or slot_index >= core.attachment_slot_count:
+		return Transform3D.IDENTITY
+	_ensure_attachment_slot_transforms()
+	return attachment_slot_transforms[slot_index]
+
+
+func get_attachment_slot_transforms() -> Array[Transform3D]:
+	_ensure_attachment_slot_transforms()
+	return attachment_slot_transforms.duplicate()
 
 func get_attachment_presence() -> Array[bool]:
 	var result: Array[bool] = []
@@ -260,3 +294,42 @@ func _trim_unsupported_attachments() -> void:
 	var supported_count = core.attachment_slot_count if core != null else 0
 	if attachments.size() > supported_count:
 		attachments.resize(supported_count)
+
+
+func _ensure_attachment_slot_transforms() -> void:
+	var supported_count: int = core.attachment_slot_count if core != null else 0
+	if attachment_slot_transforms.size() > supported_count:
+		attachment_slot_transforms.resize(supported_count)
+	while attachment_slot_transforms.size() < supported_count:
+		var slot_index: int = attachment_slot_transforms.size()
+		attachment_slot_transforms.append(_default_attachment_transform(slot_index))
+	for slot_index: int in range(attachment_slot_transforms.size()):
+		attachment_slot_transforms[slot_index] = _sanitized_attachment_transform(
+			slot_index,
+			attachment_slot_transforms[slot_index]
+		)
+
+
+func _default_attachment_transform(slot_index: int) -> Transform3D:
+	if core == null:
+		return Transform3D.IDENTITY
+	return Transform3D(
+		Basis.IDENTITY,
+		SLOT_LAYOUT.get_attachment_position(slot_index, core.body_size)
+	)
+
+
+func _sanitized_attachment_transform(slot_index: int, value: Transform3D) -> Transform3D:
+	if not _attachment_transform_is_valid(value):
+		return _default_attachment_transform(slot_index)
+	return Transform3D(value.basis.orthonormalized(), value.origin)
+
+
+func _attachment_transform_is_valid(value: Transform3D) -> bool:
+	return (
+		value.origin.is_finite()
+		and value.basis.x.is_finite()
+		and value.basis.y.is_finite()
+		and value.basis.z.is_finite()
+		and absf(value.basis.determinant()) > 0.000001
+	)

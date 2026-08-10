@@ -82,6 +82,7 @@ var battery_definition_path := ""
 var propeller_definition_paths: Array[String] = ["", "", "", ""]
 var ai_chip_definition_paths: Array[String] = ["", "", "", "", "", "", "", ""]
 var attachment_definition_paths: Array[String] = ["", "", "", ""]
+var attachment_slot_transforms: Array[Transform3D] = []
 var current_core_size := DEFAULT_CORE_SIZE
 var current_battery_size := DEFAULT_BATTERY_SIZE
 
@@ -97,6 +98,7 @@ func apply_server_state(state: Dictionary) -> void:
 	_apply_ai_chip_state(state, edit_preview)
 	_apply_attachment_state(state, edit_preview)
 	_update_modular_slot_layout()
+	_apply_attachment_weapon_aims(state)
 
 
 func _apply_primary_state(state: Dictionary) -> bool:
@@ -186,10 +188,11 @@ func _apply_attachment_state(
 		"attachment_definition_paths",
 		[]
 	)
-	var weapon_aim_directions: Array = state.get(
-		"weapon_aim_directions",
-		[]
-	)
+	attachment_slot_transforms.clear()
+	var mount_values: Array = state.get("attachment_slot_transforms", [])
+	for mount_value: Variant in mount_values:
+		if mount_value is Transform3D:
+			attachment_slot_transforms.append(mount_value as Transform3D)
 	for slot_index in range(attachment_visuals.size()):
 		var attachment_path := (
 			str(attachment_paths[slot_index])
@@ -209,6 +212,11 @@ func _apply_attachment_state(
 		attachment_guides[slot_index].visible = (
 			edit_preview and attachment_supported and attachment_path.is_empty()
 		)
+
+
+func _apply_attachment_weapon_aims(state: Dictionary) -> void:
+	var weapon_aim_directions: Array = state.get("weapon_aim_directions", [])
+	for slot_index: int in range(attachment_visuals.size()):
 		_apply_weapon_aim(
 			slot_index,
 			(
@@ -374,12 +382,16 @@ func _update_modular_slot_layout() -> void:
 		ai_chip_visuals[slot_index].position = chip_position
 		ai_chip_guides[slot_index].position = chip_position
 	for slot_index in range(attachment_visuals.size()):
-		var attachment_position := SLOT_LAYOUT.get_attachment_position(
-			slot_index,
-			current_core_size
+		var attachment_transform: Transform3D = (
+			attachment_slot_transforms[slot_index]
+			if slot_index < attachment_slot_transforms.size()
+			else Transform3D(
+				Basis.IDENTITY,
+				SLOT_LAYOUT.get_attachment_position(slot_index, current_core_size)
+			)
 		)
-		attachment_visuals[slot_index].position = attachment_position
-		attachment_guides[slot_index].position = attachment_position
+		attachment_visuals[slot_index].transform = attachment_transform
+		attachment_guides[slot_index].transform = attachment_transform
 
 
 func _apply_weapon_aim(
@@ -394,11 +406,12 @@ func _apply_weapon_aim(
 		return
 	var path := attachment_definition_paths[slot_index]
 	if path.is_empty():
-		attachment_visuals[slot_index].basis = Basis.IDENTITY
 		return
 	var definition := load(path) as DroneWeaponDefinition
 	if definition == null:
-		attachment_visuals[slot_index].basis = Basis.IDENTITY
+		# Non-weapon attachments keep the authored Core-slot basis applied by
+		# _update_modular_slot_layout(). In particular, side-mounted articulated arms must not be
+		# visually snapped back to identity orientation by the weapon-aim pass.
 		return
 	var direction := local_direction.normalized()
 	var up := (

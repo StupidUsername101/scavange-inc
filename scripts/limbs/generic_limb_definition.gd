@@ -9,6 +9,7 @@ extends Resource
 @export var limb_name := "Limb"
 @export var installed := true
 @export var mount_offset_local := Vector3.ZERO
+@export var mount_basis_local: Basis = Basis.IDENTITY
 @export var segments: Array[LimbSegmentDefinition] = []
 @export var end_effector: LimbEndEffectorDefinition
 
@@ -27,6 +28,15 @@ func sanitize() -> void:
 func ml_validation_error() -> String:
 	if not installed:
 		return ""
+	if not mount_offset_local.is_finite():
+		return "Limb mount offset must be finite."
+	if (
+		not mount_basis_local.x.is_finite()
+		or not mount_basis_local.y.is_finite()
+		or not mount_basis_local.z.is_finite()
+		or absf(mount_basis_local.determinant()) <= 0.000001
+	):
+		return "Limb mount orientation must be a finite, non-degenerate basis."
 	if segments.is_empty():
 		return "An installed limb requires at least one saved segment definition."
 	for segment_index: int in range(segments.size()):
@@ -102,11 +112,12 @@ func maximum_reach() -> float:
 
 
 func rest_endpoint_local() -> Vector3:
-	var point := mount_offset_local
-	var distal_basis := Basis.IDENTITY
+	var safe_mount_basis: Basis = mount_basis_local.orthonormalized()
+	var point: Vector3 = mount_offset_local
+	var distal_basis: Basis = safe_mount_basis
 	for segment: LimbSegmentDefinition in segments:
 		if segment != null:
-			var direction := segment.rest_direction_local.normalized()
+			var direction: Vector3 = (safe_mount_basis * segment.rest_direction_local).normalized()
 			point += direction * segment.length
 			distal_basis = _basis_from_y(direction)
 	if end_effector != null and end_effector.is_physically_present():

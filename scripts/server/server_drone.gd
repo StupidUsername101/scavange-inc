@@ -546,7 +546,7 @@ func _refresh_part_collisions() -> void:
 	var core_size := _refresh_main_part_collisions(has_core)
 	_refresh_propeller_collisions()
 	_refresh_ai_chip_collisions(core_size, has_core)
-	_refresh_attachment_collisions(core_size, has_core)
+	_refresh_attachment_collisions(has_core)
 	_refresh_camera_attachment_nodes()
 	_refresh_limb_attachment_nodes()
 
@@ -641,19 +641,17 @@ func _refresh_ai_chip_collisions(
 		)
 
 
-func _refresh_attachment_collisions(
-	core_size: Vector3,
-	has_core: bool
-) -> void:
+func _refresh_attachment_collisions(has_core: bool) -> void:
 	for slot_index in range(SLOT_LAYOUT.MAX_ATTACHMENT_SLOTS):
 		var attachment_collision := get_node_or_null(
 			"Attachment%dCollision" % slot_index
 		) as CollisionShape3D
 		if attachment_collision == null:
 			continue
-		attachment_collision.position = SLOT_LAYOUT.get_attachment_position(
-			slot_index,
-			core_size
+		attachment_collision.transform = (
+			loadout.get_attachment_slot_transform(slot_index)
+			if loadout != null
+			else Transform3D.IDENTITY
 		)
 		var attachment := (
 			loadout.get_attachment(slot_index)
@@ -690,11 +688,8 @@ func _refresh_limb_attachment_nodes() -> void:
 		var definition := loadout.get_attachment(slot_index) as DroneLimbAttachmentDefinition
 		if definition == null:
 			continue
-		var slot_offset := SLOT_LAYOUT.get_attachment_position(
-			slot_index,
-			loadout.core.body_size
-		)
-		var mounted_definitions := definition.mounted_limb_definitions(slot_offset)
+		var slot_transform: Transform3D = loadout.get_attachment_slot_transform(slot_index)
+		var mounted_definitions: Array[GenericLimbDefinition] = definition.mounted_limb_definitions(slot_transform)
 		if mounted_definitions.is_empty():
 			continue
 		var assembly := GenericLimbAssembly3D.new()
@@ -1340,11 +1335,8 @@ func _process_powered_weapon_fire() -> void:
 		var weapon := loadout.get_attachment(slot_index) as DroneWeaponDefinition
 		if weapon == null:
 			continue
-		var local_mount := SLOT_LAYOUT.get_attachment_position(
-			slot_index,
-			loadout.core.body_size
-		)
-		var mount_origin := to_global(local_mount)
+		var local_mount: Transform3D = loadout.get_attachment_slot_transform(slot_index)
+		var mount_origin: Vector3 = to_global(local_mount.origin)
 		var profile := weapon.get_ballistic_profile()
 		var target_velocity := _get_combat_target_velocity(
 			intended_target
@@ -1811,10 +1803,7 @@ func _calculate_loadout_inertia() -> Vector3:
 		var attachment := loadout.get_attachment(slot_index)
 		if attachment == null:
 			continue
-		var attachment_offset := SLOT_LAYOUT.get_attachment_position(
-			slot_index,
-			size
-		)
+		var attachment_offset: Vector3 = loadout.get_attachment_slot_transform(slot_index).origin
 		result += _calculate_box_inertia(
 			attachment.get_mass(),
 			attachment.body_size,
@@ -2350,6 +2339,11 @@ func to_state_dict() -> Dictionary:
 		"attachment_slot_count": attachment_slot_count,
 		"attachment_definition_paths": (
 			loadout.get_attachment_definition_paths()
+			if loadout != null
+			else []
+		),
+		"attachment_slot_transforms": (
+			loadout.get_attachment_slot_transforms()
 			if loadout != null
 			else []
 		),

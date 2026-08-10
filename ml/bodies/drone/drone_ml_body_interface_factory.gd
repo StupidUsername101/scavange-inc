@@ -1,8 +1,6 @@
 class_name DroneMLBodyInterfaceFactory
 extends RefCounted
 
-const SLOT_LAYOUT = preload("res://scripts/drones/drone_slot_layout.gd")
-
 #######################################################
 # Adapts the existing gameplay DroneLoadout slot system into the shared model-forge body draft.
 # Nothing is finalized while the loadout is being edited. Training/group creation calls
@@ -51,10 +49,7 @@ static func create_draft(loadout: DroneLoadout) -> MLBodyBuildDraft:
 		slot.display_name = "Attachment %d" % (slot_index + 1)
 		slot.slot_type = &"attachment"
 		slot.accepted_part_tags.append(&"attachment")
-		slot.mount_transform = Transform3D(
-			Basis.IDENTITY,
-			SLOT_LAYOUT.get_attachment_position(slot_index, safe_loadout.core.body_size)
-		)
+		slot.mount_transform = safe_loadout.get_attachment_slot_transform(slot_index)
 		if not draft.add_slot(slot, safe_loadout.get_attachment(slot_index)):
 			return draft
 	return draft
@@ -134,6 +129,12 @@ static func training_runtime_validation_error(
 		return "Drone runtime body no longer matches the accepted creator body contract."
 	if drone.loadout == null or drone.loadout.core == null:
 		return "Drone runtime has no Core/loadout."
+	var accepted_manifest: MLBodyInterfaceManifest = (
+		expected_manifest if expected_manifest != null else manifest
+	)
+	var mount_error: String = _attachment_mount_validation_error(drone, accepted_manifest)
+	if not mount_error.is_empty():
+		return mount_error
 
 	# Validate observations from the real instantiated worker, not only from Resource metadata. This
 	# catches an attachment that advertises sensor channels but failed to build its runtime node.
@@ -194,6 +195,41 @@ static func training_runtime_validation_error(
 			return "%s advertises controls but the drone runtime has no consumer for them." % slot_id
 
 	return ""
+
+
+static func _attachment_mount_validation_error(
+	drone: ServerDrone,
+	accepted_manifest: MLBodyInterfaceManifest
+) -> String:
+	if not is_instance_valid(drone) or drone.loadout == null or accepted_manifest == null:
+		return "Drone attachment mount validation has no accepted runtime body."
+	for record: Dictionary in accepted_manifest.slot_records:
+		var slot_id: String = str(record.get("slot_id", ""))
+		if not slot_id.begins_with("attachment_"):
+			continue
+		var suffix: String = slot_id.trim_prefix("attachment_")
+		if not suffix.is_valid_int():
+			return "Malformed finalized attachment slot %s." % slot_id
+		var slot_index: int = int(suffix)
+		var slot_definition: MLBodySlotDefinition = record.get("slot_definition") as MLBodySlotDefinition
+		if slot_definition == null:
+			return "%s has no frozen mount definition." % slot_id
+		if not _transforms_match(
+			slot_definition.mount_transform,
+			drone.loadout.get_attachment_slot_transform(slot_index)
+		):
+			return "%s live mount transform differs from the accepted creator layout." % slot_id
+	return ""
+
+
+static func _transforms_match(first: Transform3D, second: Transform3D) -> bool:
+	if not first.origin.is_equal_approx(second.origin):
+		return false
+	return (
+		first.basis.x.is_equal_approx(second.basis.x)
+		and first.basis.y.is_equal_approx(second.basis.y)
+		and first.basis.z.is_equal_approx(second.basis.z)
+	)
 
 
 static func _descriptor_topology_matches(expected: Array[Dictionary], actual: Array[Dictionary]) -> bool:

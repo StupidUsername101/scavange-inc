@@ -128,9 +128,44 @@ func _init() -> void:
 		"summary has a finite positive lift-to-weight ratio"
 	)
 
+	var custom_mount_basis: Basis = Basis(
+		Vector3(0.0, 0.0, -1.0),
+		Vector3(-1.0, 0.0, 0.0),
+		Vector3(0.0, 1.0, 0.0)
+	)
+	var custom_mount: Transform3D = Transform3D(custom_mount_basis, Vector3(0.425, 0.01, -0.08))
+	_expect(
+		private_copy.set_attachment_slot_transform(0, custom_mount),
+		"creator-authored attachment mount can be stored on a training loadout"
+	)
+	var copied_with_mounts: DroneLoadout = DroneTrainingLoadoutConfig.duplicate_loadout(private_copy)
+	_expect(
+		copied_with_mounts != null
+		and DroneMLBodyInterfaceFactory._transforms_match(
+			copied_with_mounts.get_attachment_slot_transform(0),
+			custom_mount
+		),
+		"deep loadout copies preserve creator-authored attachment position and orientation"
+	)
+
+	var replacement_core: DroneCoreDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(copied_with_mounts.core) as DroneCoreDefinition
+	)
+	if replacement_core != null:
+		replacement_core.body_size.x += 0.35
+		copied_with_mounts.install_core(replacement_core)
+	_expect(
+		replacement_core != null
+		and not DroneMLBodyInterfaceFactory._transforms_match(
+			copied_with_mounts.get_attachment_slot_transform(0),
+			custom_mount
+		),
+		"replacing the physical Core invalidates attachment coordinates authored for the previous chassis"
+	)
+
 	var record = DroneTrainingLoadoutConfig.to_record(private_copy)
 	_expect(not record.is_empty(), "checkpoint hardware record is produced")
-	_expect(int(record.get("schema_version", -1)) == 4, "hardware record uses chip-free generic Resource snapshots")
+	_expect(int(record.get("schema_version", -1)) == 5, "hardware record persists generic Resource snapshots plus creator mount transforms")
 	_expect(not record.has("ai_chips"), "training hardware persistence no longer serializes legacy AI chips")
 	var json_text = JSON.stringify(record)
 	_expect(not json_text.is_empty(), "checkpoint hardware record is JSON serializable")
@@ -198,6 +233,32 @@ func _init() -> void:
 	_expect(
 		is_equal_approx(restored.get_total_mass(), private_copy.get_total_mass()),
 		"checkpoint round-trip preserves exact installed-part mass"
+	)
+	_expect(
+		DroneMLBodyInterfaceFactory._transforms_match(
+			restored.get_attachment_slot_transform(0),
+			custom_mount
+		),
+		"checkpoint round-trip preserves creator-authored attachment mount transforms"
+	)
+	var legacy_v4_record: Dictionary = record.duplicate(true)
+	legacy_v4_record["schema_version"] = 4
+	legacy_v4_record.erase("attachment_mounts")
+	var legacy_v4_restored: DroneLoadout = DroneTrainingLoadoutConfig.from_record(legacy_v4_record)
+	_expect(
+		legacy_v4_restored != null
+		and legacy_v4_restored.get_attachment_slot_transforms().size()
+			== legacy_v4_restored.core.attachment_slot_count,
+		"pre-layout version-4 hardware records still restore using authored Core default mounts"
+	)
+	var malformed_mount_record: Dictionary = record.duplicate(true)
+	var malformed_mounts: Array = (malformed_mount_record.get("attachment_mounts", []) as Array).duplicate(true)
+	if not malformed_mounts.is_empty():
+		malformed_mounts[0] = {"origin": [0.0, 0.0], "basis": []}
+	malformed_mount_record["attachment_mounts"] = malformed_mounts
+	_expect(
+		DroneTrainingLoadoutConfig.from_record(malformed_mount_record) == null,
+		"malformed creator mount records fail closed instead of silently snapping to an unrelated default"
 	)
 
 	var grabber_loadout = MLBodyPresetLibrary.drone_quad_loadout(false)
@@ -373,9 +434,18 @@ func _init() -> void:
 			if arm_loadout.get_attachment(slot_index) == null:
 				arm_slot = slot_index
 				break
+	var side_arm_mount: Transform3D = Transform3D(
+		Basis(
+			Vector3(0.0, 0.0, -1.0),
+			Vector3(-1.0, 0.0, 0.0),
+			Vector3(0.0, 1.0, 0.0)
+		),
+		Vector3(0.425, 0.0, 0.0)
+	)
 	var arm_installed: bool = (
 		arm_slot >= 0
 		and utility_arm != null
+		and arm_loadout.set_attachment_slot_transform(arm_slot, side_arm_mount)
 		and arm_loadout.install_attachment(
 			arm_slot,
 			MLBodyPartContract.deep_duplicate_resource(utility_arm) as DroneLimbAttachmentDefinition
@@ -393,6 +463,18 @@ func _init() -> void:
 			and arm_runtime_error.is_empty(),
 			"factory-created articulated drone resolves all 8 policy controls to real worker actuators"
 		)
+		var shifted_mount: Transform3D = side_arm_mount
+		shifted_mount.origin.z += 0.11
+		arm_drone.loadout.set_attachment_slot_transform(arm_slot, shifted_mount)
+		var mismatched_mount_error: String = DroneMLBodyInterfaceFactory.training_runtime_validation_error(
+			arm_drone,
+			arm_manifest
+		)
+		_expect(
+			mismatched_mount_error.contains("mount transform differs"),
+			"worker preflight rejects a live attachment mount that differs from the accepted creator layout"
+		)
+		arm_drone.loadout.set_attachment_slot_transform(arm_slot, side_arm_mount)
 		var arm_features: PackedFloat64Array = arm_drone.model_body_observation_features()
 		_expect(
 			arm_manifest != null
@@ -419,6 +501,27 @@ func _init() -> void:
 				"body_commands": commands,
 			})
 			var assembly: GenericLimbAssembly3D = arm_drone.get_limb_attachment_assembly(arm_slot)
+			var mounted_limb: GenericLimbDefinition = (
+				assembly.limb_definitions[0]
+				if is_instance_valid(assembly) and not assembly.limb_definitions.is_empty()
+				else null
+			)
+			var authored_limb: GenericLimbDefinition = (
+				utility_arm.limb_definitions[0]
+				if utility_arm != null and not utility_arm.limb_definitions.is_empty()
+				else null
+			)
+			_expect(
+				mounted_limb != null
+				and authored_limb != null
+				and mounted_limb.mount_offset_local.is_equal_approx(
+					side_arm_mount.origin + side_arm_mount.basis * authored_limb.mount_offset_local
+				)
+				and mounted_limb.mount_basis_local.x.is_equal_approx(side_arm_mount.basis.x)
+				and mounted_limb.mount_basis_local.y.is_equal_approx(side_arm_mount.basis.y)
+				and mounted_limb.mount_basis_local.z.is_equal_approx(side_arm_mount.basis.z),
+				"freely placed articulated attachment reaches the live worker with its Core-local position and surface orientation"
+			)
 			var routed_correctly: bool = (
 				local_cursor == 4
 				and is_instance_valid(assembly)

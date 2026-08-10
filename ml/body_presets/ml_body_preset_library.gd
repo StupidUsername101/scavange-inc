@@ -22,7 +22,6 @@ static func built_in_presets() -> Array[MLBodyPreset]:
 	var result: Array[MLBodyPreset] = []
 	for preset_id: StringName in [
 		DRONE_QUAD,
-		DRONE_QUAD_GRABBER,
 		FOUR_LIMB_WALKER,
 		STATIONARY_TURRET,
 	]:
