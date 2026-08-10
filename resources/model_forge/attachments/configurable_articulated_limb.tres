@@ -1,0 +1,23 @@
+[gd_resource type="Resource" script_class="DroneLimbAttachmentDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_limb_attachment_definition.gd" id="1_attachment"]
+[ext_resource type="Script" path="res://scripts/limbs/generic_limb_definition.gd" id="2_limb_type"]
+[ext_resource type="Resource" path="res://resources/model_forge/limbs/configurable_limb.tres" id="3_limb"]
+
+[resource]
+script = ExtResource("1_attachment")
+display_name = "Configurable Articulated Limb"
+quality = 1
+visual_color = Color(0.38, 0.43, 0.48, 1)
+mass = 0.12
+rated_voltage_v = 12.0
+capability_tags = Array[StringName]([&"limb_host", &"articulated_limb", &"model_forge_limb"])
+idle_power_draw = 0.25
+active_power_draw = 8.0
+body_size = Vector3(0.2, 0.14, 0.2)
+limb_definitions = Array[ExtResource("2_limb_type")]([ExtResource("3_limb")])
+mount_at_attachment_slot = true
+auto_pack_action_indices = true
+limb_collision_layer = 4
+limb_collision_mask = 1
+exclude_self_collision = true

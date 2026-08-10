@@ -14,7 +14,7 @@ const DEFAULT_CASE_DURATION_SECONDS = 8.0
 
 
 static func default_plan(body_kind: String, seed_base: int = DEFAULT_SEED_BASE) -> Dictionary:
-	return _build_plan(body_kind, [], "", seed_base, false, false)
+	return _build_plan(body_kind, [], "", seed_base, false, false, true)
 
 
 static func plan_for_contract(
@@ -26,6 +26,7 @@ static func plan_for_contract(
 	var active_target_kinds: Array[String] = []
 	var item_pickup_enabled: bool = false
 	var item_delivery_enabled: bool = false
+	var include_degraded_propeller: bool = not _contract_has_zero_propellers(evaluation_contract)
 	if RLEvaluationContract.is_valid(evaluation_contract, body_kind):
 		var environment: Dictionary = evaluation_contract.get("environment", {})
 		var active_target_kinds_value: Variant = environment.get("active_target_kinds", [])
@@ -64,7 +65,8 @@ static func plan_for_contract(
 		contract_hash,
 		seed_base,
 		item_pickup_enabled,
-		item_delivery_enabled
+		item_delivery_enabled,
+		include_degraded_propeller
 	)
 
 
@@ -74,9 +76,12 @@ static func _build_plan(
 	contract_hash: String,
 	seed_base: int,
 	item_pickup_enabled: bool,
-	item_delivery_enabled: bool
+	item_delivery_enabled: bool,
+	include_degraded_propeller: bool
 ) -> Dictionary:
 	var scenarios: Array[String] = _scenario_ids(body_kind)
+	if body_kind == "drone" and not include_degraded_propeller:
+		scenarios.erase("degraded_propeller")
 	if body_kind == "four_limb" and item_pickup_enabled:
 		scenarios.append("item_pickup")
 	if body_kind == "four_limb" and item_delivery_enabled:
@@ -107,6 +112,19 @@ static func _build_plan(
 	}
 	plan["suite_hash"] = JSON.stringify(plan, "", true, true).sha256_text()
 	return plan
+
+
+static func _contract_has_zero_propellers(evaluation_contract: Dictionary) -> bool:
+	if not RLEvaluationContract.is_valid(evaluation_contract, "drone"):
+		return false
+	var environment_value: Variant = evaluation_contract.get("environment", {})
+	if not (environment_value is Dictionary):
+		return false
+	var hardware_value: Variant = (environment_value as Dictionary).get("hardware", {})
+	if not (hardware_value is Dictionary):
+		return false
+	var propellers_value: Variant = (hardware_value as Dictionary).get("propellers", null)
+	return propellers_value is Array and (propellers_value as Array).is_empty()
 
 
 static func aggregate_complete_suite(

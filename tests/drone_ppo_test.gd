@@ -416,6 +416,13 @@ func _test_observation_tensor(observation: Dictionary) -> void:
 		and DronePPOObservationEncoder.has_valid_propeller_topology(wrong_topology),
 		"legacy quad validation stays exact while generic PPO accepts a stable three-propeller topology"
 	)
+	var leg_only_observation: Dictionary = observation.duplicate(true)
+	leg_only_observation["propellers"] = []
+	_expect(
+		DronePPOObservationEncoder.has_valid_propeller_topology(leg_only_observation)
+		and not DronePPOObservationEncoder.is_valid_quad_observation(leg_only_observation),
+		"generic PPO accepts a stable zero-propeller topology for leg-only articulated bodies"
+	)
 	var custom_geometry: Array = (observation["propellers"] as Array).duplicate(true)
 	var custom_positions: Array[Vector3] = [
 		Vector3(0.45, 0.0, 0.0),

@@ -12,7 +12,7 @@ extends DronePartDefinition
 @export_range(0.0, 1000000.0, 1.0, "or_greater") var max_power_throughput := 120.0
 @export_range(0, 32, 1, "or_greater") var propeller_slot_count := 4
 @export_range(0, 8, 1) var ai_chip_slot_count := 2
-@export_range(0, 4, 1) var attachment_slot_count := 2
+@export_range(0, 32, 1, "or_greater") var attachment_slot_count: int = 2
 @export var body_size := Vector3(0.65, 0.24, 0.65)
 
 @export_group("AI Flight Authority")

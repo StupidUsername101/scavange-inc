@@ -177,8 +177,8 @@ func begin() -> bool:
 	drone.visible = false
 	drone.set_ml_training_performance_mode(true)
 	drone.set_ml_episode_unlimited_battery(unlimited_battery)
-	if drone.propeller_slots.is_empty() or drone.propeller_slots.size() > MAXIMUM_PROPELLER_COUNT:
-		return _fail_start("candidate evaluator requires between one and four propeller slots")
+	if drone.propeller_slots.size() > MAXIMUM_PROPELLER_COUNT:
+		return _fail_start("candidate evaluator supports at most four propeller slots")
 	if not DroneMLBodyInterfaceFactory.matches_runtime_contract(
 		drone.model_body_interface(),
 		expected_body_runtime_contract

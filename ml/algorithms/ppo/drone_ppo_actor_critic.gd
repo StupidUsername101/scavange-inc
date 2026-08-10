@@ -696,7 +696,7 @@ func _observation_matches_body_interface(observation: Dictionary) -> bool:
 	for descriptor: Dictionary in control_descriptors:
 		if str(descriptor.get("kind", "")) == "propeller_throttle":
 			expected_propeller_count += 1
-	if expected_propeller_count > 0 and (observation.get("propellers", []) as Array).size() != expected_propeller_count:
+	if (observation.get("propellers", []) as Array).size() != expected_propeller_count:
 		return false
 	if observation_schema_version < DronePPOObservationEncoder.BODY_INTERFACE_SCHEMA_VERSION:
 		return true

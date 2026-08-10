@@ -181,13 +181,18 @@ func _collect_propeller_slots() -> void:
 			chip_collision.set_meta("edit_slot_kind", &"ai_chip")
 			chip_collision.set_meta("edit_slot_index", slot_index)
 
-	for slot_index in range(SLOT_LAYOUT.MAX_ATTACHMENT_SLOTS):
-		var attachment_collision := get_node_or_null(
-			"Attachment%dCollision" % slot_index
-		) as CollisionShape3D
-		if attachment_collision != null:
-			attachment_collision.set_meta("edit_slot_kind", &"attachment")
-			attachment_collision.set_meta("edit_slot_index", slot_index)
+	for child: Node in get_children():
+		if not (child is CollisionShape3D):
+			continue
+		var child_name: String = str(child.name)
+		if not child_name.begins_with("Attachment") or not child_name.ends_with("Collision"):
+			continue
+		var suffix: String = child_name.trim_prefix("Attachment").trim_suffix("Collision")
+		if not suffix.is_valid_int():
+			continue
+		var attachment_collision: CollisionShape3D = child as CollisionShape3D
+		attachment_collision.set_meta("edit_slot_kind", &"attachment")
+		attachment_collision.set_meta("edit_slot_index", int(suffix))
 
 
 func _apply_loadout(
@@ -671,36 +676,49 @@ func _refresh_ai_chip_collisions(
 
 
 func _refresh_attachment_collisions(has_core: bool) -> void:
-	for slot_index in range(SLOT_LAYOUT.MAX_ATTACHMENT_SLOTS):
-		var attachment_collision := get_node_or_null(
+	var supported_count: int = (
+		maxi(loadout.core.attachment_slot_count, 0)
+		if has_core and loadout != null and loadout.core != null
+		else 0
+	)
+	var collision_count: int = supported_count
+	for child: Node in get_children():
+		if not (child is CollisionShape3D):
+			continue
+		var child_name: String = str(child.name)
+		if not child_name.begins_with("Attachment") or not child_name.ends_with("Collision"):
+			continue
+		var suffix: String = child_name.trim_prefix("Attachment").trim_suffix("Collision")
+		if suffix.is_valid_int():
+			collision_count = maxi(collision_count, int(suffix) + 1)
+	for slot_index: int in range(collision_count):
+		var attachment_collision: CollisionShape3D = get_node_or_null(
 			"Attachment%dCollision" % slot_index
 		) as CollisionShape3D
+		if attachment_collision == null and slot_index < supported_count:
+			attachment_collision = CollisionShape3D.new()
+			attachment_collision.name = "Attachment%dCollision" % slot_index
+			attachment_collision.set_meta("edit_slot_kind", &"attachment")
+			attachment_collision.set_meta("edit_slot_index", slot_index)
+			add_child(attachment_collision)
 		if attachment_collision == null:
 			continue
-		attachment_collision.transform = (
-			loadout.get_attachment_slot_transform(slot_index)
-			if loadout != null
-			else Transform3D.IDENTITY
-		)
-		var attachment := (
-			loadout.get_attachment(slot_index)
-			if loadout != null
-			else null
-		)
-		var is_camera_attachment := attachment is DroneCameraAttachmentDefinition
-		var attachment_shape := BoxShape3D.new()
+		var attachment_supported: bool = has_core and slot_index < supported_count
+		if not attachment_supported:
+			attachment_collision.disabled = true
+			continue
+		attachment_collision.transform = loadout.get_attachment_slot_transform(slot_index)
+		var attachment: DroneAttachmentDefinition = loadout.get_attachment(slot_index)
+		var is_camera_attachment: bool = attachment is DroneCameraAttachmentDefinition
+		var attachment_shape: BoxShape3D = BoxShape3D.new()
 		attachment_shape.size = (
 			attachment.body_size
 			if attachment != null
 			else DEFAULT_ATTACHMENT_SIZE
 		)
 		attachment_collision.shape = attachment_shape
-		var attachment_supported := (
-			has_core and slot_index < loadout.core.attachment_slot_count
-		)
 		attachment_collision.disabled = (
-			not attachment_supported
-			or is_camera_attachment
+			is_camera_attachment
 			or (not is_edit_preview and attachment == null)
 		)
 

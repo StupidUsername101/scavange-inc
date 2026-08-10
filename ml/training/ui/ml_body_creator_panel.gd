@@ -14,7 +14,6 @@ const STAGE_CORE_LAYOUT: int = 0
 const STAGE_HARDWARE: int = 1
 const MINIMUM_SLOT_SPACING_M: float = 0.075
 const MAX_CREATOR_PROPELLER_SLOTS: int = 4
-const MAX_CREATOR_ATTACHMENT_SLOTS: int = 4
 const CREATOR_SCROLL_STEP_PX: int = 72
 
 var root_panel: PanelContainer
@@ -56,6 +55,7 @@ var current_draft: MLBodyBuildDraft
 var current_body_kind: String = ""
 var slot_pickers: Dictionary = {}
 var slot_parts: Dictionary = {}
+var slot_editor_hosts: Dictionary = {}
 var initial_slot_keys: Dictionary = {}
 var changed_slot_ids: Dictionary = {}
 var core_parts: Dictionary = {}
@@ -325,7 +325,7 @@ func _build_ui() -> void:
 	slot_controls.add_child(reset_view_button)
 	mirror_next_checkbox = CheckBox.new()
 	mirror_next_checkbox.text = "Mirror next placement"
-	mirror_next_checkbox.tooltip_text = "Places a second slot mirrored across the Core's local X axis when capacity allows."
+	mirror_next_checkbox.tooltip_text = "Places a second slot mirrored across the Core's local X axis when the selected mount kind allows it."
 	slot_controls.add_child(mirror_next_checkbox)
 
 	layout_slot_count_label = Label.new()
@@ -369,7 +369,7 @@ func _build_ui() -> void:
 	parts_heading.add_theme_color_override("font_color", ORANGE)
 	hardware_stage.add_child(parts_heading)
 	var parts_note: Label = Label.new()
-	parts_note.text = "The Core layout is frozen for this step. Newly created slots begin empty; choose a compatible saved part for every required slot."
+	parts_note.text = "The Core layout is frozen for this step. Newly created slots begin empty; choose compatible hardware. Articulated limb parts expose their segment topology, dimensions and foot-end attachment directly below the picker."
 	parts_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	parts_note.add_theme_color_override("font_color", MUTED)
 	hardware_stage.add_child(parts_note)
@@ -468,20 +468,17 @@ func _initialize_layout_for_current_core() -> void:
 	var physical_core: Resource = _current_physical_core()
 	if physical_core is DroneCoreDefinition:
 		var drone_core: DroneCoreDefinition = physical_core as DroneCoreDefinition
-		# Existing Core resources describe a total physical mounting budget. In the model creator the
-		# non-intrinsic mounts are universal: the user decides which become rotors vs attachments.
-		layout_slot_capacity = clampi(
-			maxi(drone_core.propeller_slot_count, 0) + maxi(drone_core.attachment_slot_count, 0),
-			0,
-			MAX_CREATOR_PROPELLER_SLOTS + MAX_CREATOR_ATTACHMENT_SLOTS
-		)
+		# Creator-authored attachment mounts are intentionally unbounded. The Core's saved slot
+		# counts describe a stock/default layout, not a physical ceiling. Rotor count remains bounded
+		# by the current ServerDrone flight runtime; articulated attachments do not.
+		layout_slot_capacity = -1
 	if layout_slot_kind_picker != null:
-		layout_slot_kind_picker.disabled = current_body_kind != "drone" or layout_slot_capacity <= 0
+		layout_slot_kind_picker.disabled = current_body_kind != "drone"
 		if layout_slot_kind_picker.item_count > 0 and layout_slot_kind_picker.selected < 0:
 			layout_slot_kind_picker.select(0)
 	if layout_preview != null:
 		layout_preview.set_core_resource(physical_core)
-		layout_preview.placement_enabled = current_body_kind == "drone" and layout_slot_capacity > 0
+		layout_preview.placement_enabled = current_body_kind == "drone"
 	_refresh_layout_preview()
 
 
@@ -490,10 +487,10 @@ func _refresh_layout_preview() -> void:
 		layout_preview.set_slots(layout_slot_transforms, layout_slot_kinds, layout_selected_slot_index)
 	if layout_slot_count_label != null:
 		if current_body_kind == "drone":
-			layout_slot_count_label.text = "Placed mounts: %d / %d   •   %d propeller   •   %d attachment   •   battery is intrinsic" % [
+			layout_slot_count_label.text = "Placed mounts: %d   •   %d / %d propeller   •   %d attachments (unlimited)   •   battery is intrinsic" % [
 				layout_slot_transforms.size(),
-				layout_slot_capacity,
 				_layout_slot_kind_count(&"propeller"),
+				MAX_CREATOR_PROPELLER_SLOTS,
 				_layout_slot_kind_count(&"attachment"),
 			]
 		else:
@@ -539,25 +536,16 @@ func _layout_kind_ordinal(layout_index: int) -> int:
 	return ordinal
 
 
-func _layout_kind_limit(kind: StringName) -> int:
-	if kind == &"propeller":
-		return MAX_CREATOR_PROPELLER_SLOTS
-	if kind == &"attachment":
-		return MAX_CREATOR_ATTACHMENT_SLOTS
-	return 0
-
-
 func _layout_capacity_error(kind: StringName, additional_count: int) -> String:
 	if additional_count <= 0:
 		return ""
-	if layout_slot_transforms.size() + additional_count > layout_slot_capacity:
-		return "This Core has room for at most %d user-authored mounts." % layout_slot_capacity
-	var kind_limit: int = _layout_kind_limit(kind)
-	if kind_limit <= 0:
-		return "Slot kind '%s' is not supported by the drone runtime." % str(kind)
-	if _layout_slot_kind_count(kind) + additional_count > kind_limit:
-		return "The current drone runtime supports at most %d %s mounts." % [kind_limit, str(kind)]
-	return ""
+	if kind == &"attachment":
+		return ""
+	if kind == &"propeller":
+		if _layout_slot_kind_count(kind) + additional_count > MAX_CREATOR_PROPELLER_SLOTS:
+			return "The current flight runtime supports at most %d propeller mounts." % MAX_CREATOR_PROPELLER_SLOTS
+		return ""
+	return "Slot kind '%s' is not supported by the drone runtime." % str(kind)
 
 
 func _on_layout_slot_kind_selected(_picker_index: int) -> void:
@@ -709,9 +697,6 @@ func _accept_core_layout() -> void:
 			return
 		var propeller_count: int = _layout_slot_kind_count(&"propeller")
 		var attachment_count: int = _layout_slot_kind_count(&"attachment")
-		if propeller_count <= 0:
-			_set_error("Place at least one propeller slot before accepting the drone Core layout.")
-			return
 		var core_copy: DroneCoreDefinition = (
 			MLBodyPartContract.deep_duplicate_resource(source_core) as DroneCoreDefinition
 		)
@@ -1263,6 +1248,7 @@ func _rebuild_slot_rows() -> void:
 	for child: Node in slots_content.get_children():
 		child.queue_free()
 	slot_pickers.clear()
+	slot_editor_hosts.clear()
 	if current_draft == null:
 		return
 	for entry: Dictionary in current_draft.slots:
@@ -1373,6 +1359,269 @@ func _build_slot_row(slot: MLBodySlotDefinition, current_part: Resource) -> void
 		detail.tooltip_text = "This slot is represented by the generic creator contract, but the current four-limb runtime does not yet install arbitrary Core attachments."
 	body.add_child(detail)
 
+	var editor_host: VBoxContainer = VBoxContainer.new()
+	editor_host.add_theme_constant_override("separation", 7)
+	body.add_child(editor_host)
+	slot_editor_hosts[slot_id] = editor_host
+	_rebuild_limb_editor(slot_id)
+
+
+func _rebuild_limb_editor(slot_id: String) -> void:
+	if current_draft == null or not slot_editor_hosts.has(slot_id):
+		return
+	var host: VBoxContainer = slot_editor_hosts.get(slot_id) as VBoxContainer
+	if host == null:
+		return
+	for child: Node in host.get_children():
+		child.queue_free()
+	var part: Resource = current_draft.equipped_part(StringName(slot_id))
+	var limbs: Array[GenericLimbDefinition] = MLBodyLimbEditor.editable_limbs(part)
+	if limbs.is_empty():
+		return
+
+	var separator: HSeparator = HSeparator.new()
+	host.add_child(separator)
+	var heading: Label = Label.new()
+	heading.text = "LIMB DESIGN  ·  edit the actual GenericLimbDefinition used by runtime"
+	heading.add_theme_color_override("font_color", ORANGE)
+	host.add_child(heading)
+	var hint: Label = Label.new()
+	if current_body_kind == "articulated_body" and part is GenericLimbDefinition:
+		hint.text = "This legacy four-limb trainer still converts each limb through its two-segment compatibility rig. Use Core attachment mounts with Configurable Articulated Limb parts for arbitrary serial chains. The compatibility limb remains visible here but is not exposed as a lossy geometry editor."
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint.add_theme_color_override("font_color", MUTED)
+		host.add_child(hint)
+		return
+	hint.text = "Segment count is topology, not a preset choice. Every segment can have its own length, thickness and mass; the terminal attachment is optional."
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_color_override("font_color", MUTED)
+	host.add_child(hint)
+
+	for limb_index: int in range(limbs.size()):
+		var limb: GenericLimbDefinition = limbs[limb_index]
+		if limb == null:
+			continue
+		_build_single_limb_editor(host, slot_id, limb_index, limb)
+
+
+func _build_single_limb_editor(
+	parent: VBoxContainer,
+	slot_id: String,
+	limb_index: int,
+	limb: GenericLimbDefinition
+) -> void:
+	var title: Label = Label.new()
+	title.text = "%s  ·  %d segments  ·  %.2f m reach" % [
+		limb.limb_name if not limb.limb_name.strip_edges().is_empty() else "Limb %d" % (limb_index + 1),
+		limb.segments.size(),
+		limb.maximum_reach(),
+	]
+	title.add_theme_color_override("font_color", GREEN)
+	parent.add_child(title)
+
+	var topology_row: HBoxContainer = HBoxContainer.new()
+	topology_row.add_theme_constant_override("separation", 8)
+	parent.add_child(topology_row)
+	var count_label: Label = Label.new()
+	count_label.text = "Segments"
+	count_label.custom_minimum_size.x = 150.0
+	count_label.tooltip_text = "Number of rigid articulated parts in this serial limb. Values above the displayed range can be typed directly."
+	topology_row.add_child(count_label)
+	var count_input: SpinBox = SpinBox.new()
+	count_input.min_value = 1.0
+	count_input.max_value = 32.0
+	count_input.step = 1.0
+	count_input.allow_lesser = false
+	count_input.allow_greater = true
+	count_input.value = float(maxi(limb.segments.size(), 1))
+	count_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	count_input.tooltip_text = count_label.tooltip_text
+	count_input.value_changed.connect(_on_limb_segment_count_changed.bind(slot_id, limb_index))
+	topology_row.add_child(count_input)
+
+	for segment_index: int in range(limb.segments.size()):
+		var segment: LimbSegmentDefinition = limb.segments[segment_index]
+		if segment == null:
+			continue
+		var segment_box: VBoxContainer = VBoxContainer.new()
+		segment_box.add_theme_constant_override("separation", 4)
+		parent.add_child(segment_box)
+		var segment_label: Label = Label.new()
+		segment_label.text = "Part %d  ·  %s" % [
+			segment_index + 1,
+			segment.segment_name if not segment.segment_name.strip_edges().is_empty() else "Segment",
+		]
+		segment_label.add_theme_color_override("font_color", MUTED)
+		segment_box.add_child(segment_label)
+		var dimensions: HBoxContainer = HBoxContainer.new()
+		dimensions.add_theme_constant_override("separation", 6)
+		segment_box.add_child(dimensions)
+		_add_limb_segment_input(dimensions, "Length m", segment.length, 0.05, 10.0, 0.01, slot_id, limb_index, segment_index, "length")
+		_add_limb_segment_input(dimensions, "Radius m", segment.radius, 0.01, 2.0, 0.005, slot_id, limb_index, segment_index, "radius")
+		_add_limb_segment_input(dimensions, "Mass kg", segment.mass, 0.01, 500.0, 0.01, slot_id, limb_index, segment_index, "mass")
+
+	var effector_row: HBoxContainer = HBoxContainer.new()
+	effector_row.add_theme_constant_override("separation", 8)
+	parent.add_child(effector_row)
+	var effector_label: Label = Label.new()
+	effector_label.text = "Foot-end attachment"
+	effector_label.custom_minimum_size.x = 150.0
+	effector_label.tooltip_text = "Optional terminal hardware mounted after the last segment, such as a passive foot or a model-controlled grip."
+	effector_row.add_child(effector_label)
+	var effector_picker: OptionButton = OptionButton.new()
+	effector_picker.fit_to_longest_item = false
+	effector_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	effector_picker.tooltip_text = effector_label.tooltip_text
+	effector_picker.add_item("None")
+	effector_picker.set_item_metadata(0, "")
+	var selected_effector_index: int = 0 if limb.end_effector == null else -1
+	var templates: Array[LimbEndEffectorDefinition] = MLBodyLimbEditor.end_effector_templates()
+	var matching_template_index: int = MLBodyLimbEditor.matching_end_effector_template_index(
+		limb.end_effector,
+		templates
+	)
+	for template_index: int in range(templates.size()):
+		var template: LimbEndEffectorDefinition = templates[template_index]
+		var option_index: int = effector_picker.item_count
+		effector_picker.add_item(template.effector_name)
+		effector_picker.set_item_metadata(option_index, MLBodyLimbEditor.end_effector_template_key(template))
+		if template_index == matching_template_index:
+			selected_effector_index = option_index
+	if limb.end_effector != null and selected_effector_index < 0:
+		selected_effector_index = effector_picker.item_count
+		effector_picker.add_item("Current custom attachment")
+		effector_picker.set_item_metadata(selected_effector_index, "__current_effector__")
+	if selected_effector_index >= 0:
+		effector_picker.select(selected_effector_index)
+	effector_picker.item_selected.connect(
+		_on_limb_end_effector_selected.bind(slot_id, limb_index, effector_picker)
+	)
+	effector_row.add_child(effector_picker)
+
+
+func _add_limb_segment_input(
+	parent: HBoxContainer,
+	label_text: String,
+	initial_value: float,
+	minimum: float,
+	maximum: float,
+	step: float,
+	slot_id: String,
+	limb_index: int,
+	segment_index: int,
+	property_name: String
+) -> void:
+	var group: VBoxContainer = VBoxContainer.new()
+	group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(group)
+	var label: Label = Label.new()
+	label.text = label_text
+	label.add_theme_color_override("font_color", MUTED)
+	group.add_child(label)
+	var input: SpinBox = SpinBox.new()
+	input.min_value = minimum
+	input.max_value = maximum
+	input.step = step
+	input.allow_lesser = false
+	input.allow_greater = true
+	input.value = initial_value
+	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	input.value_changed.connect(
+		_on_limb_segment_dimension_changed.bind(slot_id, limb_index, segment_index, property_name)
+	)
+	group.add_child(input)
+
+
+func _on_limb_segment_count_changed(value: float, slot_id: String, limb_index: int) -> void:
+	if current_draft == null:
+		return
+	var part: Resource = current_draft.equipped_part(StringName(slot_id))
+	var error: String = MLBodyLimbEditor.set_segment_count(part, limb_index, int(round(value)))
+	if not error.is_empty():
+		_set_error(error)
+		return
+	_mark_limb_slot_edited(slot_id)
+	_rebuild_limb_editor(slot_id)
+
+
+func _on_limb_segment_dimension_changed(
+	value: float,
+	slot_id: String,
+	limb_index: int,
+	segment_index: int,
+	property_name: String
+) -> void:
+	if current_draft == null:
+		return
+	var part: Resource = current_draft.equipped_part(StringName(slot_id))
+	var limbs: Array[GenericLimbDefinition] = MLBodyLimbEditor.editable_limbs(part)
+	if limb_index < 0 or limb_index >= limbs.size():
+		return
+	var limb: GenericLimbDefinition = limbs[limb_index]
+	if limb == null or segment_index < 0 or segment_index >= limb.segments.size():
+		return
+	var segment: LimbSegmentDefinition = limb.segments[segment_index]
+	if segment == null:
+		return
+	var length: float = segment.length
+	var radius: float = segment.radius
+	var mass: float = segment.mass
+	match property_name:
+		"length":
+			length = value
+		"radius":
+			radius = value
+		"mass":
+			mass = value
+		_:
+			return
+	var error: String = MLBodyLimbEditor.set_segment_dimensions(
+		part,
+		limb_index,
+		segment_index,
+		length,
+		radius,
+		mass
+	)
+	if not error.is_empty():
+		_set_error(error)
+		return
+	_mark_limb_slot_edited(slot_id)
+
+
+func _on_limb_end_effector_selected(
+	index: int,
+	slot_id: String,
+	limb_index: int,
+	picker: OptionButton
+) -> void:
+	if current_draft == null or picker == null or index < 0 or index >= picker.item_count:
+		return
+	var key: String = str(picker.get_item_metadata(index))
+	if key == "__current_effector__":
+		return
+	var template: LimbEndEffectorDefinition = null
+	if not key.is_empty():
+		template = load(key) as LimbEndEffectorDefinition
+		if template == null:
+			_set_error("The selected foot-end attachment resource is no longer available.")
+			return
+	var part: Resource = current_draft.equipped_part(StringName(slot_id))
+	var error: String = MLBodyLimbEditor.set_end_effector(part, limb_index, template)
+	if not error.is_empty():
+		_set_error(error)
+		return
+	_mark_limb_slot_edited(slot_id)
+	_rebuild_limb_editor(slot_id)
+
+
+func _mark_limb_slot_edited(slot_id: String) -> void:
+	changed_slot_ids[slot_id] = true
+	status_label.text = "Custom limb geometry is stored in this body draft; model I/O will be rebuilt from the edited topology."
+	status_label.add_theme_color_override("font_color", MUTED)
+	_refresh_training_settings_for_body(false)
+	_refresh_summary()
+
 
 func _on_slot_part_selected(index: int, slot_id: String) -> void:
 	if current_draft == null or not slot_pickers.has(slot_id):
@@ -1400,6 +1649,7 @@ func _on_slot_part_selected(index: int, slot_id: String) -> void:
 			return
 	status_label.text = ""
 	status_label.add_theme_color_override("font_color", MUTED)
+	_rebuild_limb_editor(slot_id)
 	_refresh_training_settings_for_body(false)
 	_refresh_summary()
 
@@ -1413,11 +1663,11 @@ func _refresh_summary() -> void:
 	if creator_stage == STAGE_CORE_LAYOUT:
 		var core_name: String = MLBodyPartCatalog.display_name(_current_physical_core())
 		if current_body_kind == "drone":
-			summary_label.text = "Core: %s   •   %d/%d mounts placed   •   P %d / A %d   •   middle-drag orbit · RMB remove" % [
+			summary_label.text = "Core: %s   •   %d mounts placed   •   P %d/%d / A %d unlimited   •   middle-drag orbit · RMB remove" % [
 				core_name,
 				layout_slot_transforms.size(),
-				layout_slot_capacity,
 				_layout_slot_kind_count(&"propeller"),
+				MAX_CREATOR_PROPELLER_SLOTS,
 				_layout_slot_kind_count(&"attachment"),
 			]
 		else:

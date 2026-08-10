@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="GenericLimbDefinition" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/limbs/generic_limb_definition.gd" id="1_limb"]
+[ext_resource type="Script" path="res://scripts/limbs/limb_segment_definition.gd" id="2_segment_type"]
+[ext_resource type="Resource" path="res://resources/model_forge/limbs/proximal_segment.tres" id="3_proximal"]
+[ext_resource type="Resource" path="res://resources/model_forge/limbs/articulated_segment.tres" id="4_distal"]
+[ext_resource type="Resource" path="res://resources/model_forge/end_effectors/plain_foot.tres" id="5_effector"]
+
+[resource]
+script = ExtResource("1_limb")
+limb_name = "Configurable Limb"
+installed = true
+mount_offset_local = Vector3.ZERO
+segments = Array[ExtResource("2_segment_type")]([ExtResource("3_proximal"), ExtResource("4_distal")])
+end_effector = ExtResource("5_effector")

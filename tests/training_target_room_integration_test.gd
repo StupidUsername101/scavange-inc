@@ -20,6 +20,7 @@ func _init() -> void:
 	_test_model_body_creator_carries_training_setup()
 	_test_model_body_creator_fits_realized_content_to_viewport()
 	_test_model_body_creator_staged_core_layout()
+	_test_model_body_creator_unbounded_attachment_layout()
 	_test_paused_drone_candidate_keeps_frozen_hardware()
 	_test_room_episode_status_is_one_shared_line()
 	_test_room_ready_does_not_create_default_worker_group()
@@ -143,7 +144,7 @@ func _test_model_body_creator_staged_core_layout() -> void:
 	get_root().add_child(panel)
 	_expect(
 		panel.creator_stage == MLBodyCreatorPanel.STAGE_CORE_LAYOUT
-		and panel.layout_slot_capacity == 6
+		and panel.layout_slot_capacity == -1
 		and panel.layout_slot_transforms.is_empty()
 		and panel.layout_slot_kinds.is_empty(),
 		"drone creator infers body kind from the Core and begins with no non-intrinsic mounts"
@@ -227,6 +228,81 @@ func _test_model_body_creator_staged_core_layout() -> void:
 		and DroneMLBodyInterfaceFactory._transforms_match(second_propeller_slot.mount_transform, propeller_mounts[1])
 		and DroneMLBodyInterfaceFactory._transforms_match(attachment_slot.mount_transform, attachment_mounts[0]),
 		"hardware assignment preserves every accepted propeller/attachment mount transform"
+	)
+	panel.free()
+
+
+func _test_model_body_creator_unbounded_attachment_layout() -> void:
+	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
+	get_root().add_child(panel)
+	panel.mirror_next_checkbox.button_pressed = false
+	panel.layout_slot_kind_picker.select(1)
+	panel._on_layout_slot_kind_selected(1)
+	for index: int in range(8):
+		var x: float = -0.35 + float(index) * 0.10
+		panel._on_layout_surface_clicked(Transform3D(
+			panel._slot_basis_from_surface_normal(Vector3.FORWARD),
+			Vector3(x, 0.0, -0.425)
+		))
+	_expect(
+		panel.layout_slot_transforms.size() == 8
+		and panel._layout_slot_kind_count(&"attachment") == 8,
+		"creator attachment placement has no four-slot/body-default ceiling"
+	)
+	panel._accept_core_layout()
+	var runtime_core: DroneCoreDefinition = panel._current_physical_core() as DroneCoreDefinition
+	_expect(
+		panel.creator_stage == MLBodyCreatorPanel.STAGE_HARDWARE
+		and runtime_core != null
+		and runtime_core.propeller_slot_count == 0
+		and runtime_core.attachment_slot_count == 8
+		and panel.current_draft.slot_definition(&"propeller_0") == null
+		and panel.current_draft.slot_definition(&"attachment_7") != null,
+		"a propeller-free eight-limb/spider-style Core layout reaches hardware assignment intact"
+	)
+	var battery: DroneBatteryDefinition = load(
+		"res://resources/drones/batteries/standard_battery.tres"
+	) as DroneBatteryDefinition
+	var configurable_limb: DroneLimbAttachmentDefinition = load(
+		"res://resources/model_forge/attachments/configurable_articulated_limb.tres"
+	) as DroneLimbAttachmentDefinition
+	var equipped_all_limbs: bool = battery != null and configurable_limb != null
+	if equipped_all_limbs:
+		equipped_all_limbs = panel.current_draft.equip(
+			&"battery",
+			MLBodyPartContract.deep_duplicate_resource(battery)
+		)
+	for attachment_index: int in range(8):
+		if not equipped_all_limbs:
+			break
+		equipped_all_limbs = panel.current_draft.equip(
+			StringName("attachment_%d" % attachment_index),
+			MLBodyPartContract.deep_duplicate_resource(configurable_limb)
+		)
+	var spider_manifest: MLBodyInterfaceManifest = (
+		panel.current_draft.duplicate_editable().accept_build() if equipped_all_limbs else null
+	)
+	var spider_runtime: DroneLoadout = (
+		MLBodyCreatorRuntimeFactory.runtime_from_draft(
+			panel.current_preset_id,
+			panel.current_draft,
+			panel.changed_slot_ids
+		) as DroneLoadout
+		if equipped_all_limbs
+		else null
+	)
+	var runtime_limb_count: int = 0
+	if spider_runtime != null and spider_runtime.core != null:
+		for attachment_index: int in range(spider_runtime.core.attachment_slot_count):
+			if spider_runtime.get_attachment(attachment_index) is DroneLimbAttachmentDefinition:
+				runtime_limb_count += 1
+	_expect(
+		equipped_all_limbs
+		and spider_manifest != null
+		and spider_manifest.control_count() == 24
+		and spider_runtime != null
+		and runtime_limb_count == 8,
+		"eight configurable limbs survive accepted manifest and runtime loadout construction with all 24 joint controls"
 	)
 	panel.free()
 

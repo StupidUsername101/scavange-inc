@@ -15,6 +15,7 @@ func _init() -> void:
 	_test_drone_frozen_hardware_uses_identical_live_body_without_decode()
 	_test_contract_hash_detects_environment_changes()
 	_test_every_default_scenario_has_an_executor()
+	_test_leg_only_drone_plan_skips_degraded_propeller()
 	_test_routed_target_plan_is_deterministic()
 	_test_item_pickup_contract_adds_evaluation_case()
 	_test_item_delivery_contract_adds_evaluation_case()
@@ -106,6 +107,25 @@ func _test_every_default_scenario_has_an_executor() -> void:
 				"turret":
 					supported = TurretCandidateEvaluationJob.supports_scenario_id(scenario_id)
 			_expect(supported, "%s fixed-seed scenario %s has an evaluator implementation" % [body_kind, scenario_id])
+
+
+func _test_leg_only_drone_plan_skips_degraded_propeller() -> void:
+	var loadout: DroneLoadout = MLBodyPresetLibrary.drone_quad_loadout(false)
+	_expect(loadout != null and loadout.core != null, "leg-only evaluation test loads a drone Core")
+	if loadout == null or loadout.core == null:
+		return
+	loadout.core.propeller_slot_count = 0
+	loadout.propellers.clear()
+	loadout.propeller_slot_transforms.clear()
+	var hardware: Dictionary = DroneTrainingLoadoutConfig.to_record(loadout)
+	var contract: Dictionary = RLEvaluationContract.create("drone", {"hardware": hardware})
+	var plan: Dictionary = RLDeterministicEvaluationSuite.plan_for_contract("drone", contract, 4433)
+	var scenarios: Array = plan.get("scenario_ids", [])
+	_expect(
+		not scenarios.has("degraded_propeller")
+		and RLDeterministicEvaluationSuite.default_plan("drone", 4433).get("scenario_ids", []).has("degraded_propeller"),
+		"leg-only drone evaluation omits the impossible degraded-propeller case without changing the stock suite"
+	)
 
 
 func _test_routed_target_plan_is_deterministic() -> void:

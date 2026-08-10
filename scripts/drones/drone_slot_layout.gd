@@ -2,7 +2,6 @@ extends RefCounted
 
 const MAX_AI_CHIP_SLOTS := 8
 const MAX_PROPELLER_SLOTS: int = 4
-const MAX_ATTACHMENT_SLOTS := 4
 
 #######################################################
 # Implements the drone slot layout subsystem and keeps its gameplay data and behavior in one

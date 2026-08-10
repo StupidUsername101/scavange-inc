@@ -1,0 +1,28 @@
+[gd_resource type="Resource" script_class="LimbEndEffectorDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/limbs/limb_end_effector_definition.gd" id="1_effector"]
+
+[resource]
+script = ExtResource("1_effector")
+effector_name = "Controlled Grip"
+enabled = true
+effector_type_id = &"generic_grip"
+geometry_type = 2
+box_size = Vector3(0.18, 0.06, 0.18)
+added_mass = 0.08
+maximum_health = 100.0
+friction = 1.0
+bounce = 0.0
+rough = true
+grip_mode = 2
+grip_action_index = -1
+grip_activation_threshold = 0.55
+grip_acquisition_radius = 0.24
+grip_detection_radius = 1.1
+allow_static_grip = true
+allow_dynamic_grip = true
+maximum_held_mass = 25.0
+grip_stiffness = 1400.0
+grip_damping = 90.0
+maximum_normal_holding_force = 420.0
+maximum_shear_holding_force = 360.0

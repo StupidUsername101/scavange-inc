@@ -475,7 +475,7 @@ static func is_valid_quad_observation(observation: Dictionary) -> bool:
 
 static func has_valid_propeller_topology(observation: Dictionary) -> bool:
 	var propellers: Array = observation.get("propellers", [])
-	if propellers.is_empty() or propellers.size() > QUAD_PROPELLER_COUNT:
+	if propellers.size() > QUAD_PROPELLER_COUNT:
 		return false
 	for index: int in range(propellers.size()):
 		if not (propellers[index] is Dictionary):

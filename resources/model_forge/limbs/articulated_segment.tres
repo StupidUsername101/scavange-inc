@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="LimbSegmentDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/limbs/limb_segment_definition.gd" id="1_segment"]
+[ext_resource type="Resource" path="res://resources/model_forge/limbs/articulated_joint.tres" id="2_joint"]
+
+[resource]
+script = ExtResource("1_segment")
+segment_name = "Articulated Segment"
+rest_direction_local = Vector3(0, -1, 0)
+length = 0.75
+radius = 0.075
+mass = 0.35
+maximum_health = 100.0
+friction = 0.95
+bounce = 0.01
+joint = ExtResource("2_joint")

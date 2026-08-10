@@ -7988,7 +7988,15 @@ func _select_picker_path(picker: OptionButton, resource_path: String) -> void:
 func _loadout_summary_text(loadout: DroneLoadout, editable: bool) -> String:
 	var summary: Dictionary = LOADOUT_CONFIG.physical_summary(loadout)
 	if summary.is_empty():
-		return "Incomplete loadout — install one core, battery and four propellers."
+		return "Incomplete loadout — fill every authored hardware slot."
+	var propeller_count: int = int(summary.get("propeller_count", 0))
+	if propeller_count == 0:
+		return "%s · %s · articulated ground body\nMass %s kg · no propellers / no flight-lift estimate\n%s" % [
+			str(summary.get("core_name", "Core")),
+			str(summary.get("battery_name", "Battery")),
+			String.num(float(summary.get("mass_kg", 0.0)), 2),
+			"Paused — hardware editing enabled." if editable else "Running — pause this group to edit hardware.",
+		]
 	var lift_ratio = float(summary.get("nominal_lift_to_weight", 0.0))
 	var lift_status = "cannot hover"
 	if lift_ratio >= 1.5:
@@ -7997,9 +8005,10 @@ func _loadout_summary_text(loadout: DroneLoadout, editable: bool) -> String:
 		lift_status = "usable lift margin"
 	elif lift_ratio >= 1.0:
 		lift_status = "barely able to hover"
-	return "%s · %s · 4× %s\nMass %s kg · nominal bus %s W · estimated hover %s W\nNominal lift %sx body weight · %s\n%s" % [
+	return "%s · %s · %d× %s\nMass %s kg · nominal bus %s W · estimated hover %s W\nNominal lift %sx body weight · %s\n%s" % [
 		str(summary.get("core_name", "Core")),
 		str(summary.get("battery_name", "Battery")),
+		propeller_count,
 		str(summary.get("propeller_name", "Propeller")),
 		String.num(float(summary.get("mass_kg", 0.0)), 2),
 		String.num(float(summary.get("nominal_bus_power_w", 0.0)), 1),
@@ -8014,6 +8023,11 @@ func _compact_loadout_text(loadout: DroneLoadout) -> String:
 	var summary: Dictionary = LOADOUT_CONFIG.physical_summary(loadout)
 	if summary.is_empty():
 		return "incomplete hardware"
+	if int(summary.get("propeller_count", 0)) == 0:
+		return "%s / articulated · %s kg · ground body" % [
+			str(summary.get("core_name", "Core")),
+			String.num(float(summary.get("mass_kg", 0.0)), 2),
+		]
 	return "%s / %s / %s · %s kg · %sx lift" % [
 		str(summary.get("core_name", "Core")),
 		str(summary.get("battery_name", "Battery")),
@@ -11209,8 +11223,11 @@ func _create_worker_group(
 	if accepted_body == null:
 		status_label.text = "Could not finalize the drone body interface."
 		return {}
-	if group_loadout.core == null or group_loadout.core.propeller_slot_count <= 0 or group_loadout.core.propeller_slot_count > QUAD_PROPELLER_COUNT:
-		status_label.text = "The current drone runtime requires between one and four propeller slots."
+	if group_loadout.core == null or group_loadout.core.propeller_slot_count > QUAD_PROPELLER_COUNT:
+		status_label.text = "The current flight runtime supports at most four propeller slots."
+		return {}
+	if str(algorithm_id) == "ppo_clip" and accepted_body.control_count() <= 0:
+		status_label.text = "The created body has no model-controlled hardware. Add a propeller or controlled articulated attachment."
 		return {}
 	if str(algorithm_id) != "ppo_clip" and not _manifest_is_legacy_four_propeller_body(accepted_body):
 		status_label.text = "%s currently supports only a plain four-propeller body; use PPO for custom rotor counts or controlled attachments." % str(algorithm_id)
@@ -13860,7 +13877,7 @@ func _spawn_training_worker(group: Dictionary, worker_index: int) -> bool:
 	drone.set_ml_training_performance_mode(true)
 	drone.set_ml_episode_unlimited_battery(unlimited_episode_battery)
 	var expected_propeller_slots: int = group_loadout.core.propeller_slot_count if group_loadout != null and group_loadout.core != null else 0
-	if expected_propeller_slots <= 0 or drone.propeller_slots.size() != expected_propeller_slots:
+	if expected_propeller_slots < 0 or drone.propeller_slots.size() != expected_propeller_slots:
 		drone.queue_free()
 		status_label.text = "Drone worker rejected: runtime propeller slots do not match the accepted Core layout."
 		return false
@@ -14163,7 +14180,7 @@ func _spawn_model_instance(version: Dictionary, policy: DroneMLModel) -> void:
 	drone.set_ml_training_performance_mode(true)
 	drone.set_ml_episode_unlimited_battery(unlimited_episode_battery)
 	var evaluator_propeller_count: int = drone.loadout.core.propeller_slot_count if drone.loadout != null and drone.loadout.core != null else 0
-	if evaluator_propeller_count <= 0 or drone.propeller_slots.size() != evaluator_propeller_count:
+	if evaluator_propeller_count < 0 or drone.propeller_slots.size() != evaluator_propeller_count:
 		drone.queue_free()
 		status_label.text = "Evaluator not spawned: runtime propeller slots do not match the saved body."
 		return

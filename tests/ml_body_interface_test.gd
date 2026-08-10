@@ -18,6 +18,7 @@ func _init() -> void:
 	_test_regular_articulated_drone_limb()
 	_test_creator_attachment_catalog_exposes_real_model_channels()
 	_test_arbitrary_generic_limb_topology()
+	_test_creator_limb_editor_mutates_generic_runtime_parts()
 	_test_existing_limb_mapping_order()
 	_test_turret_part_ownership()
 	_test_input_vector_builder()
@@ -755,17 +756,22 @@ func _test_creator_attachment_catalog_exposes_real_model_channels() -> void:
 				break
 	var compatible: Array[Resource] = MLBodyPartCatalog.compatible_parts(attachment_slot)
 	var utility_present: bool = false
+	var configurable_limb_present: bool = false
 	var training_observer_present: bool = false
 	var articulated_arm_count: int = 0
 	for part: Resource in compatible:
 		var path: String = MLBodyPartContract.resource_source_path(part)
 		utility_present = utility_present or path.ends_with("/utility_arm.tres")
+		configurable_limb_present = configurable_limb_present or path.ends_with("/configurable_articulated_limb.tres")
 		training_observer_present = training_observer_present or path.ends_with("/training_observer_camera.tres")
 		if part is DroneLimbAttachmentDefinition:
 			articulated_arm_count += 1
 	_expect(
-		utility_present and not training_observer_present and articulated_arm_count == 1,
-		"creator exposes one canonical articulated arm and excludes evaluator instrumentation/duplicate training wrappers"
+		utility_present
+		and configurable_limb_present
+		and not training_observer_present
+		and articulated_arm_count == 2,
+		"creator exposes the manipulator and configurable articulated limb while excluding evaluator instrumentation/duplicate wrappers"
 	)
 
 
@@ -790,6 +796,65 @@ func _test_arbitrary_generic_limb_topology() -> void:
 	_expect(
 		observations.size() > GenericLimbModelContract.observation_descriptors(source_array).size(),
 		"additional limb segments automatically contribute their declared body observations"
+	)
+
+
+func _test_creator_limb_editor_mutates_generic_runtime_parts() -> void:
+	var source: DroneLimbAttachmentDefinition = load(
+		"res://resources/drones/attachments/utility_arm.tres"
+	) as DroneLimbAttachmentDefinition
+	var edited: DroneLimbAttachmentDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(source) as DroneLimbAttachmentDefinition
+	)
+	_expect(source != null and edited != null, "creator limb editor test loads an isolated articulated attachment")
+	if source == null or edited == null:
+		return
+	var count_error: String = MLBodyLimbEditor.set_segment_count(edited, 0, 5)
+	var edited_limbs: Array[GenericLimbDefinition] = MLBodyLimbEditor.editable_limbs(edited)
+	var edited_limb: GenericLimbDefinition = edited_limbs[0] if not edited_limbs.is_empty() else null
+	_expect(
+		count_error.is_empty()
+		and edited_limb != null
+		and edited_limb.segments.size() == 5
+		and source.limb_definitions[0].segments.size() == 2,
+		"creator can extend a private generic limb to arbitrary serial segment counts without mutating the saved preset"
+	)
+	if edited_limb == null:
+		return
+	var dimension_error: String = MLBodyLimbEditor.set_segment_dimensions(
+		edited, 0, 4, 1.75, 0.16, 0.90
+	)
+	_expect(
+		dimension_error.is_empty()
+		and is_equal_approx(edited_limb.segments[4].length, 1.75)
+		and is_equal_approx(edited_limb.segments[4].radius, 0.16)
+		and is_equal_approx(edited_limb.segments[4].mass, 0.90),
+		"each creator-authored limb segment keeps independent length, radius and mass"
+	)
+	var templates: Array[LimbEndEffectorDefinition] = MLBodyLimbEditor.end_effector_templates()
+	var plain_foot: LimbEndEffectorDefinition = null
+	var controlled_grip: LimbEndEffectorDefinition = null
+	for template: LimbEndEffectorDefinition in templates:
+		if template.effector_type_id == &"plain_foot":
+			plain_foot = template
+		elif (
+			template.effector_type_id == &"generic_grip"
+			and template.grip_mode == LimbEndEffectorDefinition.GripMode.CONTROLLED
+		):
+			controlled_grip = template
+	var foot_error: String = MLBodyLimbEditor.set_end_effector(edited, 0, plain_foot)
+	var foot_control_count: int = MLBodyPartContract.control_descriptors(edited).size()
+	var grip_error: String = MLBodyLimbEditor.set_end_effector(edited, 0, controlled_grip)
+	var grip_control_count: int = MLBodyPartContract.control_descriptors(edited).size()
+	_expect(
+		plain_foot != null
+		and controlled_grip != null
+		and foot_error.is_empty()
+		and grip_error.is_empty()
+		and edited_limb.end_effector != null
+		and edited_limb.end_effector.effector_type_id == &"generic_grip"
+		and grip_control_count == foot_control_count + 1,
+		"foot-end attachment templates switch real terminal hardware and rebuild the model control topology"
 	)
 
 

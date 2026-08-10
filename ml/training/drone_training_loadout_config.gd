@@ -478,9 +478,26 @@ static func physical_summary(
 		var propeller = loadout.get_propeller(slot_index)
 		if propeller != null:
 			installed.append(propeller)
-	if propeller_count <= 0 or installed.size() != propeller_count:
+	if installed.size() != propeller_count:
 		return {}
 	var total_mass = loadout.get_total_mass() + _external_limb_body_mass(loadout)
+	if propeller_count == 0:
+		return {
+			"mass_kg": total_mass,
+			"propeller_count": 0,
+			"requested_rotor_power_w": 0.0,
+			"nominal_bus_power_w": 0.0,
+			"maximum_bus_power_w": 0.0,
+			"hover_power_w": 0.0,
+			"nominal_hover_power_margin": 0.0,
+			"nominal_static_thrust_n": 0.0,
+			"maximum_static_thrust_n": 0.0,
+			"nominal_lift_to_weight": 0.0,
+			"maximum_lift_to_weight": 0.0,
+			"core_name": loadout.core.display_name,
+			"battery_name": loadout.battery.display_name,
+			"propeller_name": "No propellers",
+		}
 	var requested_rotor_power = 0.0
 	for propeller in installed:
 		requested_rotor_power += maxf(propeller.max_power_draw, 0.0)

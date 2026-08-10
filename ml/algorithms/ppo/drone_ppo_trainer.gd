@@ -1144,7 +1144,7 @@ func load_checkpoint(checkpoint: Dictionary) -> bool:
 	if (
 		RLTrainingMath.finite_int_or(checkpoint.get("schema_version", 0), -1) != CHECKPOINT_SCHEMA_VERSION
 		or str(checkpoint.get("algorithm", "")) != ALGORITHM_NAME
-		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) < 1
+		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) < 0
 		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) > DronePPOObservationEncoder.QUAD_PROPELLER_COUNT
 		or not DronePPOObservationEncoder.is_trainable_schema(
 			RLTrainingMath.finite_int_or(network.get("observation_schema_version", 0), -1)
