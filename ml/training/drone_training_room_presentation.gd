@@ -8,6 +8,7 @@ extends RefCounted
 
 const SPINBOX_TARGET_ARROW_TICKS = 100.0
 const SPINBOX_MAX_ARROW_STEP_MULTIPLIER = 10
+const PART_GEOMETRY = preload("res://scripts/drones/drone_part_geometry.gd")
 
 
 static func spinbox_arrow_step(minimum: float, maximum: float, precision_step: float) -> float:
@@ -184,27 +185,20 @@ static func add_drone_visual(drone: ServerDrone, color: Color) -> void:
 	var drone_material = material(color)
 	var core = MeshInstance3D.new()
 	core.name = "TrainingVisualCore"
-	var core_mesh = BoxMesh.new()
-	core_mesh.size = (
-		drone.loadout.core.body_size
+	var core_definition: DroneCoreDefinition = (
+		drone.loadout.core
 		if drone.loadout != null and drone.loadout.core != null
-		else Vector3(0.65, 0.24, 0.65)
+		else null
 	)
+	var core_mesh: Mesh = PART_GEOMETRY.create_core_mesh(core_definition)
+	if core_mesh == null:
+		var fallback_core_mesh: BoxMesh = BoxMesh.new()
+		fallback_core_mesh.size = Vector3(0.65, 0.24, 0.65)
+		core_mesh = fallback_core_mesh
 	core.mesh = core_mesh
 	core.material_override = drone_material
 	core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	drone.add_child(core)
-	for angle in [45.0, -45.0]:
-		var arm = MeshInstance3D.new()
-		arm.name = "TrainingVisualArm"
-		var arm_mesh = BoxMesh.new()
-		arm_mesh.size = Vector3(1.35, 0.055, 0.075)
-		arm.mesh = arm_mesh
-		arm.rotation_degrees.y = angle
-		arm.position.y = 0.08
-		arm.material_override = drone_material
-		arm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		drone.add_child(arm)
 	for slot in drone.propeller_slots:
 		var rotor = MeshInstance3D.new()
 		rotor.name = "TrainingVisualRotor"

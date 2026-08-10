@@ -20,6 +20,7 @@ func _init() -> void:
 	_test_model_body_creator_carries_training_setup()
 	_test_model_body_creator_fits_realized_content_to_viewport()
 	_test_model_body_creator_staged_core_layout()
+	_test_model_body_creator_core_geometry_editing()
 	_test_model_body_creator_unbounded_attachment_layout()
 	_test_paused_drone_candidate_keeps_frozen_hardware()
 	_test_room_episode_status_is_one_shared_line()
@@ -228,6 +229,74 @@ func _test_model_body_creator_staged_core_layout() -> void:
 		and DroneMLBodyInterfaceFactory._transforms_match(second_propeller_slot.mount_transform, propeller_mounts[1])
 		and DroneMLBodyInterfaceFactory._transforms_match(attachment_slot.mount_transform, attachment_mounts[0]),
 		"hardware assignment preserves every accepted propeller/attachment mount transform"
+	)
+	panel.free()
+
+
+func _test_model_body_creator_core_geometry_editing() -> void:
+	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
+	get_root().add_child(panel)
+	var core: DroneCoreDefinition = panel._current_physical_core() as DroneCoreDefinition
+	_expect(
+		core != null
+		and core.editable_mesh != null
+		and core.editable_mesh.has_geometry()
+		and core.editable_mesh.face_count() == 6
+		and core.editable_mesh.edge_count() == 12,
+		"creator materializes saved Core dimensions into editable polygon topology with logical edges"
+	)
+	panel.layout_slot_kind_picker.select(1)
+	panel._on_layout_slot_kind_selected(1)
+	panel._on_layout_surface_clicked(Transform3D(
+		panel._slot_basis_from_surface_normal(Vector3.RIGHT),
+		Vector3(core.body_size.x * 0.5 + MLBodyCreatorPanel.CORE_MOUNT_OFFSET_M, 0.0, 0.0)
+	))
+	var old_mount: Transform3D = panel.layout_slot_transforms[0]
+	panel.suppress_core_geometry_callbacks = true
+	panel.core_width_input.value = 1.20
+	panel.core_height_input.value = 0.50
+	panel.core_depth_input.value = 0.90
+	panel.suppress_core_geometry_callbacks = false
+	panel._on_core_dimensions_changed(0.0)
+	_expect(
+		is_equal_approx(core.body_size.x, 1.20)
+		and is_equal_approx(core.body_size.y, 0.50)
+		and is_equal_approx(core.body_size.z, 0.90)
+		and panel.layout_slot_transforms[0].origin.x > old_mount.origin.x,
+		"live Core dimension edits rescale editable geometry and keep authored mounts attached to the resized surface"
+	)
+	panel.core_face_edit_toggle.button_pressed = true
+	panel._on_layout_face_selected(3)
+	var right_face_before: PackedInt32Array = core.editable_mesh.face_indices(3)
+	var first_vertex_before: Vector3 = core.editable_mesh.vertices[right_face_before[0]]
+	panel._expand_selected_core_face()
+	var first_vertex_after: Vector3 = core.editable_mesh.vertices[right_face_before[0]]
+	_expect(
+		panel.layout_selected_face_index == 3
+		and first_vertex_after.distance_to(first_vertex_before) > 0.001
+		and panel.layout_preview.selected_face_index == 3,
+		"creator face mode edits the selected logical polygon and keeps that face highlighted after the live mesh rebuild"
+	)
+	var ray_hit: Dictionary = core.editable_mesh.ray_hit(Vector3(5.0, 0.0, 0.0), Vector3.LEFT)
+	_expect(
+		int(ray_hit.get("face_index", -1)) == 3
+		and (ray_hit.get("normal", Vector3.ZERO) as Vector3).dot(Vector3.RIGHT) > 0.99,
+		"editable Core topology provides face-aware ray hits for creator picking instead of relying on an axis-aligned box"
+	)
+	var snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(core)
+	var restored: DroneCoreDefinition = MLBodyResourceSnapshot.decode_resource(snapshot) as DroneCoreDefinition
+	_expect(
+		restored != null
+		and restored.editable_mesh != null
+		and restored.editable_mesh.vertices == core.editable_mesh.vertices
+		and restored.editable_mesh.face_vertex_indices == core.editable_mesh.face_vertex_indices,
+		"custom Core topology survives the generic body-resource snapshot used by creator/checkpoint persistence"
+	)
+	var shape: Shape3D = preload("res://scripts/drones/drone_part_geometry.gd").create_collision_shape(core)
+	_expect(
+		shape is ConvexPolygonShape3D
+		and (shape as ConvexPolygonShape3D).points.size() == core.editable_mesh.vertices.size(),
+		"edited dynamic Cores use their authored vertices for one convex physics hull instead of reverting to BoxShape3D"
 	)
 	panel.free()
 

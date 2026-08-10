@@ -4,6 +4,7 @@ extends RigidBody3D
 const SLOT_LAYOUT := preload(
 	"res://scripts/drones/drone_slot_layout.gd"
 )
+const PART_GEOMETRY = preload("res://scripts/drones/drone_part_geometry.gd")
 const AI_GROUND_PROBE_DISTANCE := 12.0
 const MAX_PROPELLER_SLOTS := 4
 const DEFAULT_CORE_SIZE := Vector3(0.65, 0.24, 0.65)
@@ -578,8 +579,15 @@ func _refresh_part_collisions() -> void:
 func _refresh_main_part_collisions(has_core: bool) -> Vector3:
 	var has_battery := loadout != null and loadout.battery != null
 	var core_size = loadout.core.body_size if has_core else DEFAULT_CORE_SIZE
-	var core_shape := BoxShape3D.new()
-	core_shape.size = core_size
+	var core_shape: Shape3D = (
+		PART_GEOMETRY.create_collision_shape(loadout.core)
+		if has_core
+		else null
+	)
+	if core_shape == null:
+		var fallback_core_shape: BoxShape3D = BoxShape3D.new()
+		fallback_core_shape.size = core_size
+		core_shape = fallback_core_shape
 	$CoreCollision.shape = core_shape
 	var battery_size = (
 		loadout.battery.body_size

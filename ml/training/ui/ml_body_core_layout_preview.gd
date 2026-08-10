@@ -4,6 +4,7 @@ extends SubViewportContainer
 signal surface_clicked(mount_transform: Transform3D)
 signal slot_selected(slot_index: int)
 signal slot_remove_requested(slot_index: int)
+signal face_selected(face_index: int)
 
 const PART_GEOMETRY = preload("res://scripts/drones/drone_part_geometry.gd")
 const BACKGROUND_COLOR: Color = Color("071713")
@@ -11,6 +12,8 @@ const CORE_FALLBACK_COLOR: Color = Color("4a6b61")
 const SLOT_COLOR: Color = Color("54e6b1")
 const PROPELLER_SLOT_COLOR: Color = Color("67c7ff")
 const SLOT_SELECTED_COLOR: Color = Color("ffad42")
+const FACE_SELECTED_COLOR: Color = Color(1.0, 0.47, 0.13, 0.55)
+const FACE_HIGHLIGHT_OFFSET_M: float = 0.003
 const PLACEMENT_OFFSET_M: float = 0.10
 const MARKER_RADIUS_PX: float = 18.0
 const ORBIT_SENSITIVITY: float = 0.009
@@ -22,12 +25,16 @@ var preview_viewport: SubViewport
 var scene_root: Node3D
 var core_visual_root: Node3D
 var marker_root: Node3D
+var face_highlight_root: Node3D
 var camera: Camera3D
 var core_size: Vector3 = Vector3(0.65, 0.24, 0.65)
+var editable_core_mesh: DroneCoreEditableMeshDefinition
 var slot_transforms: Array[Transform3D] = []
 var slot_kinds: Array[StringName] = []
 var selected_slot_index: int = -1
 var placement_enabled: bool = true
+var face_edit_enabled: bool = false
+var selected_face_index: int = -1
 var orbit_dragging: bool = false
 var orbit_yaw: float = 0.7
 var orbit_pitch: float = 0.35
@@ -62,6 +69,9 @@ func _build_viewport() -> void:
 	marker_root = Node3D.new()
 	marker_root.name = "SlotMarkers"
 	scene_root.add_child(marker_root)
+	face_highlight_root = Node3D.new()
+	face_highlight_root.name = "FaceHighlight"
+	scene_root.add_child(face_highlight_root)
 
 	camera = Camera3D.new()
 	camera.name = "PreviewCamera"
@@ -90,11 +100,16 @@ func _build_viewport() -> void:
 	scene_root.add_child(environment_node)
 
 
-func set_core_resource(core: Resource) -> void:
+func set_core_resource(core: Resource, reset_camera_distance: bool = true) -> void:
 	if core_visual_root == null:
 		return
 	for child: Node in core_visual_root.get_children():
 		child.queue_free()
+	editable_core_mesh = null
+	if core is DroneCoreDefinition:
+		var drone_core: DroneCoreDefinition = core as DroneCoreDefinition
+		if drone_core.editable_mesh != null and drone_core.editable_mesh.has_geometry():
+			editable_core_mesh = drone_core.editable_mesh
 	core_size = _core_preview_size(core)
 	var visual: Node3D = null
 	if core is DronePartDefinition:
@@ -105,8 +120,33 @@ func set_core_resource(core: Resource) -> void:
 	var extent: float = maxf(core_size.x, maxf(core_size.y, core_size.z))
 	minimum_orbit_distance = maxf(extent * 1.6, 0.65)
 	maximum_orbit_distance = maxf(extent * 8.0, 4.0)
-	orbit_distance = clampf(extent * 3.3, minimum_orbit_distance, maximum_orbit_distance)
+	if reset_camera_distance:
+		orbit_distance = clampf(extent * 3.3, minimum_orbit_distance, maximum_orbit_distance)
+	else:
+		orbit_distance = clampf(orbit_distance, minimum_orbit_distance, maximum_orbit_distance)
+	selected_face_index = (
+		selected_face_index
+		if editable_core_mesh != null and selected_face_index < editable_core_mesh.face_count()
+		else -1
+	)
+	_rebuild_face_highlight()
 	_update_camera()
+
+
+func set_face_edit_enabled(enabled: bool) -> void:
+	face_edit_enabled = enabled
+	if not face_edit_enabled:
+		selected_face_index = -1
+	_rebuild_face_highlight()
+
+
+func set_selected_face(face_index: int) -> void:
+	selected_face_index = (
+		face_index
+		if editable_core_mesh != null and face_index >= 0 and face_index < editable_core_mesh.face_count()
+		else -1
+	)
+	_rebuild_face_highlight()
 
 
 func set_slots(
@@ -187,6 +227,16 @@ func _gui_input(event: InputEvent) -> void:
 
 func _handle_left_click(local_position: Vector2) -> void:
 	var viewport_position: Vector2 = _to_viewport_position(local_position)
+	if face_edit_enabled:
+		var face_hit: Dictionary = _core_hit_at(viewport_position)
+		if face_hit.is_empty():
+			set_selected_face(-1)
+			face_selected.emit(-1)
+			return
+		var face_index: int = int(face_hit.get("face_index", -1))
+		set_selected_face(face_index)
+		face_selected.emit(face_index)
+		return
 	var marker_index: int = _marker_at(viewport_position)
 	if marker_index >= 0:
 		slot_selected.emit(marker_index)
@@ -228,17 +278,44 @@ func _marker_at(viewport_position: Vector2) -> int:
 
 
 func _surface_mount_at(viewport_position: Vector2) -> Transform3D:
-	if camera == null:
-		return Transform3D.IDENTITY
-	var ray_origin: Vector3 = camera.project_ray_origin(viewport_position)
-	var ray_direction: Vector3 = camera.project_ray_normal(viewport_position).normalized()
-	var hit: Dictionary = _ray_box_hit(ray_origin, ray_direction, core_size * 0.5)
+	var hit: Dictionary = _core_hit_at(viewport_position)
 	if hit.is_empty():
 		return Transform3D.IDENTITY
 	var point: Vector3 = hit.get("point", Vector3.ZERO)
 	var normal: Vector3 = hit.get("normal", Vector3.DOWN)
 	var basis: Basis = _basis_with_down_axis(normal)
 	return Transform3D(basis, point + normal * PLACEMENT_OFFSET_M)
+
+
+func _core_hit_at(viewport_position: Vector2) -> Dictionary:
+	if camera == null:
+		return {}
+	var ray_origin: Vector3 = camera.project_ray_origin(viewport_position)
+	var ray_direction: Vector3 = camera.project_ray_normal(viewport_position).normalized()
+	if editable_core_mesh != null and editable_core_mesh.has_geometry():
+		return editable_core_mesh.ray_hit(ray_origin, ray_direction)
+	var hit: Dictionary = _ray_box_hit(ray_origin, ray_direction, core_size * 0.5)
+	if hit.is_empty():
+		return {}
+	# Fallback box faces use a stable six-face order matching DroneCoreEditableMeshDefinition.
+	hit["face_index"] = _box_face_index(hit.get("normal", Vector3.ZERO))
+	return hit
+
+
+func _box_face_index(normal: Vector3) -> int:
+	if normal.z < -0.5:
+		return 0
+	if normal.z > 0.5:
+		return 1
+	if normal.x < -0.5:
+		return 2
+	if normal.x > 0.5:
+		return 3
+	if normal.y < -0.5:
+		return 4
+	if normal.y > 0.5:
+		return 5
+	return -1
 
 
 func _ray_box_hit(origin: Vector3, direction: Vector3, half_extents: Vector3) -> Dictionary:
@@ -332,6 +409,41 @@ func _rebuild_markers() -> void:
 		label.position = slot_transforms[slot_index].origin + Vector3.UP * 0.09
 		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		marker_root.add_child(label)
+
+
+func _rebuild_face_highlight() -> void:
+	if face_highlight_root == null:
+		return
+	for child: Node in face_highlight_root.get_children():
+		child.queue_free()
+	if (
+		not face_edit_enabled
+		or editable_core_mesh == null
+		or selected_face_index < 0
+		or selected_face_index >= editable_core_mesh.face_count()
+	):
+		return
+	var indices: PackedInt32Array = editable_core_mesh.face_indices(selected_face_index)
+	if indices.size() < 3:
+		return
+	var normal: Vector3 = editable_core_mesh.face_normal(selected_face_index)
+	var surface_tool: SurfaceTool = SurfaceTool.new()
+	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var first_vertex: Vector3 = editable_core_mesh.vertices[indices[0]] + normal * FACE_HIGHLIGHT_OFFSET_M
+	for corner: int in range(1, indices.size() - 1):
+		surface_tool.add_vertex(first_vertex)
+		surface_tool.add_vertex(editable_core_mesh.vertices[indices[corner]] + normal * FACE_HIGHLIGHT_OFFSET_M)
+		surface_tool.add_vertex(editable_core_mesh.vertices[indices[corner + 1]] + normal * FACE_HIGHLIGHT_OFFSET_M)
+	var highlight: MeshInstance3D = MeshInstance3D.new()
+	highlight.mesh = surface_tool.commit()
+	var material: StandardMaterial3D = StandardMaterial3D.new()
+	material.albedo_color = FACE_SELECTED_COLOR
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	highlight.material_override = material
+	highlight.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	face_highlight_root.add_child(highlight)
 
 
 func _fallback_core_visual(size_value: Vector3) -> Node3D:

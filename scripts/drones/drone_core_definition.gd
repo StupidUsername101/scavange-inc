@@ -14,6 +14,7 @@ extends DronePartDefinition
 @export_range(0, 8, 1) var ai_chip_slot_count := 2
 @export_range(0, 32, 1, "or_greater") var attachment_slot_count: int = 2
 @export var body_size := Vector3(0.65, 0.24, 0.65)
+@export var editable_mesh: DroneCoreEditableMeshDefinition
 
 @export_group("AI Flight Authority")
 @export_range(0.0, 30.0, 0.05, "or_greater") var ai_max_horizontal_speed := 4.0
@@ -44,6 +45,26 @@ extends DronePartDefinition
 @export_range(0.001, 1000.0, 0.001, "or_greater") var drag_area := 0.45
 @export_range(0.0, 10.0, 0.01, "or_greater") var drag_coefficient := 1.05
 @export_range(0.0, 1000.0, 0.01, "or_greater") var angular_drag_coefficient := 0.35
+
+
+func ensure_editable_mesh() -> DroneCoreEditableMeshDefinition:
+	if editable_mesh == null:
+		editable_mesh = DroneCoreEditableMeshDefinition.new()
+	editable_mesh.ensure_box(body_size)
+	body_size = editable_mesh.bounds_size()
+	return editable_mesh
+
+
+func set_editable_body_size(size_value: Vector3) -> void:
+	var mesh_definition: DroneCoreEditableMeshDefinition = ensure_editable_mesh()
+	mesh_definition.set_bounds_size(size_value)
+	body_size = mesh_definition.bounds_size()
+
+
+func synchronize_body_size_from_editable_mesh() -> void:
+	if editable_mesh != null and editable_mesh.has_geometry():
+		body_size = editable_mesh.bounds_size()
+
 
 func ml_part_tags() -> Array[StringName]:
 	return [&"drone_part", &"core"]

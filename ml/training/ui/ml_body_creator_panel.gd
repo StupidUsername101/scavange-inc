@@ -15,6 +15,8 @@ const STAGE_HARDWARE: int = 1
 const MINIMUM_SLOT_SPACING_M: float = 0.075
 const MAX_CREATOR_PROPELLER_SLOTS: int = 4
 const CREATOR_SCROLL_STEP_PX: int = 72
+const CORE_MOUNT_OFFSET_M: float = 0.10
+const CORE_FACE_SCALE_STEP: float = 1.10
 
 var root_panel: PanelContainer
 var window_layout: VBoxContainer
@@ -29,6 +31,13 @@ var layout_preview: MLBodyCoreLayoutPreview
 var layout_slot_count_label: Label
 var layout_selected_label: Label
 var layout_slot_kind_picker: OptionButton
+var core_face_edit_toggle: CheckBox
+var core_width_input: SpinBox
+var core_height_input: SpinBox
+var core_depth_input: SpinBox
+var core_face_label: Label
+var core_face_shrink_button: Button
+var core_face_expand_button: Button
 var mirror_next_checkbox: CheckBox
 var back_button: Button
 var cancel_button: Button
@@ -68,6 +77,8 @@ var layout_slot_capacity: int = 0
 var layout_slot_transforms: Array[Transform3D] = []
 var layout_slot_kinds: Array[StringName] = []
 var layout_selected_slot_index: int = -1
+var layout_selected_face_index: int = -1
+var suppress_core_geometry_callbacks: bool = false
 
 
 func _ready() -> void:
@@ -276,15 +287,54 @@ func _build_ui() -> void:
 	var preview_body: VBoxContainer = VBoxContainer.new()
 	preview_body.add_theme_constant_override("separation", 7)
 	preview_panel.add_child(preview_body)
+
+	var dimensions_row: HBoxContainer = HBoxContainer.new()
+	dimensions_row.add_theme_constant_override("separation", 7)
+	preview_body.add_child(dimensions_row)
+	var dimensions_label: Label = Label.new()
+	dimensions_label.text = "Core dimensions"
+	dimensions_label.custom_minimum_size.x = 120.0
+	dimensions_row.add_child(dimensions_label)
+	core_width_input = _core_dimension_input("X", 0.65)
+	core_height_input = _core_dimension_input("Y", 0.24)
+	core_depth_input = _core_dimension_input("Z", 0.65)
+	dimensions_row.add_child(core_width_input.get_parent())
+	dimensions_row.add_child(core_height_input.get_parent())
+	dimensions_row.add_child(core_depth_input.get_parent())
+	for dimension_input: SpinBox in [core_width_input, core_height_input, core_depth_input]:
+		dimension_input.value_changed.connect(_on_core_dimensions_changed)
+
+	var geometry_tools: HBoxContainer = HBoxContainer.new()
+	geometry_tools.add_theme_constant_override("separation", 7)
+	preview_body.add_child(geometry_tools)
+	core_face_edit_toggle = CheckBox.new()
+	core_face_edit_toggle.text = "Edit Core faces"
+	core_face_edit_toggle.tooltip_text = "When enabled, left-click selects a Core face instead of placing a mount."
+	core_face_edit_toggle.toggled.connect(_on_core_face_edit_toggled)
+	geometry_tools.add_child(core_face_edit_toggle)
+	core_face_shrink_button = _creator_button("SHRINK FACE", false)
+	core_face_shrink_button.tooltip_text = "Scale the selected face inward around its center by 10%."
+	core_face_shrink_button.pressed.connect(_shrink_selected_core_face)
+	geometry_tools.add_child(core_face_shrink_button)
+	core_face_expand_button = _creator_button("EXPAND FACE", false)
+	core_face_expand_button.tooltip_text = "Scale the selected face outward around its center by 10%."
+	core_face_expand_button.pressed.connect(_expand_selected_core_face)
+	geometry_tools.add_child(core_face_expand_button)
+	core_face_label = Label.new()
+	core_face_label.text = "No Core face selected."
+	core_face_label.add_theme_color_override("font_color", MUTED)
+	geometry_tools.add_child(core_face_label)
+
 	layout_preview = MLBodyCoreLayoutPreview.new()
 	layout_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	layout_preview.surface_clicked.connect(_on_layout_surface_clicked)
 	layout_preview.slot_selected.connect(_on_layout_slot_selected)
 	layout_preview.slot_remove_requested.connect(_on_layout_slot_remove_requested)
+	layout_preview.face_selected.connect(_on_layout_face_selected)
 	preview_body.add_child(layout_preview)
 
 	var preview_hint: Label = Label.new()
-	preview_hint.text = "Choose a slot kind, then left-click the Core to place it. Left-click a marker to select it, right-click a marker to remove it, and middle-drag to rotate. Ctrl+wheel zooms."
+	preview_hint.text = "Set Core dimensions directly, or enable Edit Core faces and left-click a face to expand/shrink it. In mount mode, choose a slot kind and left-click the Core to place it. Right-click a marker to remove it; middle-drag rotates; Ctrl+wheel zooms."
 	preview_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	preview_hint.add_theme_color_override("font_color", MUTED)
 	preview_body.add_child(preview_hint)
@@ -464,6 +514,7 @@ func _initialize_layout_for_current_core() -> void:
 	layout_slot_transforms.clear()
 	layout_slot_kinds.clear()
 	layout_selected_slot_index = -1
+	layout_selected_face_index = -1
 	layout_slot_capacity = 0
 	var physical_core: Resource = _current_physical_core()
 	if physical_core is DroneCoreDefinition:
@@ -472,19 +523,260 @@ func _initialize_layout_for_current_core() -> void:
 		# counts describe a stock/default layout, not a physical ceiling. Rotor count remains bounded
 		# by the current ServerDrone flight runtime; articulated attachments do not.
 		layout_slot_capacity = -1
+		drone_core.ensure_editable_mesh()
 	if layout_slot_kind_picker != null:
 		layout_slot_kind_picker.disabled = current_body_kind != "drone"
 		if layout_slot_kind_picker.item_count > 0 and layout_slot_kind_picker.selected < 0:
 			layout_slot_kind_picker.select(0)
+	if core_face_edit_toggle != null:
+		suppress_core_geometry_callbacks = true
+		core_face_edit_toggle.button_pressed = false
+		suppress_core_geometry_callbacks = false
+	_sync_core_geometry_controls()
 	if layout_preview != null:
 		layout_preview.set_core_resource(physical_core)
 		layout_preview.placement_enabled = current_body_kind == "drone"
+		layout_preview.set_face_edit_enabled(false)
 	_refresh_layout_preview()
+
+
+func _core_dimension_input(axis_label: String, initial_value: float) -> SpinBox:
+	var group: HBoxContainer = HBoxContainer.new()
+	group.add_theme_constant_override("separation", 4)
+	group.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var label: Label = Label.new()
+	label.text = axis_label
+	label.add_theme_color_override("font_color", MUTED)
+	group.add_child(label)
+	var input: SpinBox = SpinBox.new()
+	input.min_value = 0.10
+	input.max_value = 20.0
+	input.step = 0.05
+	input.allow_lesser = false
+	input.allow_greater = true
+	input.value = initial_value
+	input.custom_minimum_size.x = 92.0
+	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	group.add_child(input)
+	return input
+
+
+func _sync_core_geometry_controls() -> void:
+	var drone_core: DroneCoreDefinition = _current_physical_core() as DroneCoreDefinition
+	var supported: bool = current_body_kind == "drone" and drone_core != null
+	suppress_core_geometry_callbacks = true
+	for input: SpinBox in [core_width_input, core_height_input, core_depth_input]:
+		if input != null:
+			input.editable = supported
+	if core_face_edit_toggle != null:
+		core_face_edit_toggle.disabled = not supported
+	if supported:
+		drone_core.ensure_editable_mesh()
+		core_width_input.value = drone_core.body_size.x
+		core_height_input.value = drone_core.body_size.y
+		core_depth_input.value = drone_core.body_size.z
+	suppress_core_geometry_callbacks = false
+	_refresh_core_face_controls()
+
+
+func _refresh_core_face_controls() -> void:
+	var drone_core: DroneCoreDefinition = _current_physical_core() as DroneCoreDefinition
+	var edit_enabled: bool = (
+		current_body_kind == "drone"
+		and drone_core != null
+		and core_face_edit_toggle != null
+		and core_face_edit_toggle.button_pressed
+	)
+	var face_valid: bool = (
+		edit_enabled
+		and drone_core.editable_mesh != null
+		and layout_selected_face_index >= 0
+		and layout_selected_face_index < drone_core.editable_mesh.face_count()
+	)
+	if core_face_shrink_button != null:
+		core_face_shrink_button.disabled = not face_valid
+	if core_face_expand_button != null:
+		core_face_expand_button.disabled = not face_valid
+	if core_face_label != null:
+		core_face_label.text = (
+			"Selected face %d" % (layout_selected_face_index + 1)
+			if face_valid
+			else "Select a Core face." if edit_enabled else "Face editing off."
+		)
+
+
+func _on_core_face_edit_toggled(enabled: bool) -> void:
+	if suppress_core_geometry_callbacks:
+		return
+	var drone_core: DroneCoreDefinition = _current_physical_core() as DroneCoreDefinition
+	if current_body_kind != "drone" or drone_core == null:
+		return
+	layout_selected_face_index = -1
+	layout_selected_slot_index = -1
+	if layout_preview != null:
+		layout_preview.set_face_edit_enabled(enabled)
+		layout_preview.set_selected_face(-1)
+	status_label.text = (
+		"Face edit mode: left-click a Core face, then expand or shrink it."
+		if enabled
+		else "Mount placement mode restored."
+	)
+	status_label.add_theme_color_override("font_color", MUTED)
+	_refresh_core_face_controls()
+	_refresh_layout_preview()
+
+
+func _on_layout_face_selected(face_index: int) -> void:
+	var drone_core: DroneCoreDefinition = _current_physical_core() as DroneCoreDefinition
+	if (
+		drone_core == null
+		or drone_core.editable_mesh == null
+		or face_index < 0
+		or face_index >= drone_core.editable_mesh.face_count()
+	):
+		layout_selected_face_index = -1
+	else:
+		layout_selected_face_index = face_index
+	layout_selected_slot_index = -1
+	_refresh_core_face_controls()
+	_refresh_layout_preview()
+
+
+func _on_core_dimensions_changed(_value: float) -> void:
+	if suppress_core_geometry_callbacks:
+		return
+	var drone_core: DroneCoreDefinition = _current_physical_core() as DroneCoreDefinition
+	if current_body_kind != "drone" or drone_core == null:
+		return
+	var old_size: Vector3 = drone_core.body_size
+	var target_size: Vector3 = Vector3(
+		core_width_input.value,
+		core_height_input.value,
+		core_depth_input.value
+	)
+	drone_core.set_editable_body_size(target_size)
+	_scale_layout_mounts_for_core_resize(old_size, drone_core.body_size, drone_core.editable_mesh)
+	_sync_core_geometry_controls()
+	_refresh_core_geometry_preview(false)
+	status_label.text = "Core dimensions updated to %.2f × %.2f × %.2f m." % [
+		drone_core.body_size.x,
+		drone_core.body_size.y,
+		drone_core.body_size.z,
+	]
+	status_label.add_theme_color_override("font_color", MUTED)
+
+
+func _shrink_selected_core_face() -> void:
+	_scale_selected_core_face(1.0 / CORE_FACE_SCALE_STEP)
+
+
+func _expand_selected_core_face() -> void:
+	_scale_selected_core_face(CORE_FACE_SCALE_STEP)
+
+
+func _scale_selected_core_face(factor: float) -> void:
+	var drone_core: DroneCoreDefinition = _current_physical_core() as DroneCoreDefinition
+	if (
+		drone_core == null
+		or drone_core.editable_mesh == null
+		or layout_selected_face_index < 0
+		or layout_selected_face_index >= drone_core.editable_mesh.face_count()
+	):
+		_set_error("Select a Core face first.")
+		return
+	if not drone_core.editable_mesh.scale_face(layout_selected_face_index, factor):
+		_set_error("The selected Core face could not be edited.")
+		return
+	drone_core.synchronize_body_size_from_editable_mesh()
+	_reproject_layout_mounts_to_mesh(drone_core.editable_mesh)
+	_sync_core_geometry_controls()
+	_refresh_core_geometry_preview(false)
+	status_label.text = "%s face %d. Core bounds are now %.2f × %.2f × %.2f m." % [
+		"Expanded" if factor > 1.0 else "Shrank",
+		layout_selected_face_index + 1,
+		drone_core.body_size.x,
+		drone_core.body_size.y,
+		drone_core.body_size.z,
+	]
+	status_label.add_theme_color_override("font_color", MUTED)
+
+
+func _refresh_core_geometry_preview(reset_camera_distance: bool) -> void:
+	if layout_preview != null:
+		layout_preview.set_core_resource(_current_physical_core(), reset_camera_distance)
+		layout_preview.set_face_edit_enabled(
+			core_face_edit_toggle != null and core_face_edit_toggle.button_pressed
+		)
+		layout_preview.set_selected_face(layout_selected_face_index)
+	_refresh_layout_preview()
+
+
+func _scale_layout_mounts_for_core_resize(
+	old_size: Vector3,
+	new_size: Vector3,
+	mesh_definition: DroneCoreEditableMeshDefinition
+) -> void:
+	if mesh_definition == null:
+		return
+	var scale_factor: Vector3 = Vector3(
+		new_size.x / maxf(old_size.x, 0.001),
+		new_size.y / maxf(old_size.y, 0.001),
+		new_size.z / maxf(old_size.z, 0.001)
+	)
+	for slot_index: int in range(layout_slot_transforms.size()):
+		var source: Transform3D = layout_slot_transforms[slot_index]
+		var kind: StringName = layout_slot_kinds[slot_index]
+		var outward: Vector3 = _layout_slot_outward_normal(source, kind)
+		var surface_point: Vector3 = source.origin - outward * CORE_MOUNT_OFFSET_M
+		var scaled_surface_point: Vector3 = Vector3(
+			surface_point.x * scale_factor.x,
+			surface_point.y * scale_factor.y,
+			surface_point.z * scale_factor.z
+		)
+		var direction: Vector3 = scaled_surface_point.normalized()
+		if direction.length_squared() <= 0.000001:
+			continue
+		var hit: Dictionary = mesh_definition.ray_hit(Vector3.ZERO, direction)
+		if hit.is_empty():
+			continue
+		layout_slot_transforms[slot_index] = _layout_mount_from_mesh_hit(hit, kind)
+
+
+func _reproject_layout_mounts_to_mesh(mesh_definition: DroneCoreEditableMeshDefinition) -> void:
+	if mesh_definition == null:
+		return
+	for slot_index: int in range(layout_slot_transforms.size()):
+		var source: Transform3D = layout_slot_transforms[slot_index]
+		var kind: StringName = layout_slot_kinds[slot_index]
+		var outward: Vector3 = _layout_slot_outward_normal(source, kind)
+		var surface_point: Vector3 = source.origin - outward * CORE_MOUNT_OFFSET_M
+		var direction: Vector3 = surface_point.normalized()
+		if direction.length_squared() <= 0.000001:
+			continue
+		var hit: Dictionary = mesh_definition.ray_hit(Vector3.ZERO, direction)
+		if hit.is_empty():
+			continue
+		layout_slot_transforms[slot_index] = _layout_mount_from_mesh_hit(hit, kind)
+
+
+func _layout_mount_from_mesh_hit(hit: Dictionary, kind: StringName) -> Transform3D:
+	var point: Vector3 = hit.get("point", Vector3.ZERO)
+	var normal: Vector3 = hit.get("normal", Vector3.UP).normalized()
+	return Transform3D(
+		_slot_basis_from_surface_normal(normal, kind),
+		point + normal * CORE_MOUNT_OFFSET_M
+	)
+
+
+func _layout_slot_outward_normal(source: Transform3D, kind: StringName) -> Vector3:
+	var result: Vector3 = source.basis.y.normalized() if kind == &"propeller" else -source.basis.y.normalized()
+	return result if result.length_squared() > 0.000001 else Vector3.UP
 
 
 func _refresh_layout_preview() -> void:
 	if layout_preview != null:
 		layout_preview.set_slots(layout_slot_transforms, layout_slot_kinds, layout_selected_slot_index)
+		layout_preview.set_selected_face(layout_selected_face_index)
 	if layout_slot_count_label != null:
 		if current_body_kind == "drone":
 			layout_slot_count_label.text = "Placed mounts: %d   •   %d / %d propeller   •   %d attachments (unlimited)   •   battery is intrinsic" % [
@@ -594,6 +886,8 @@ func _on_layout_slot_selected(slot_index: int) -> void:
 	if slot_index < 0 or slot_index >= layout_slot_transforms.size():
 		return
 	layout_selected_slot_index = slot_index
+	layout_selected_face_index = -1
+	_refresh_core_face_controls()
 	_refresh_layout_preview()
 
 

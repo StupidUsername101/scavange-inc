@@ -60,10 +60,13 @@ static func create_collision_shape(
 		return battery_shape
 
 	if definition is DroneCoreDefinition:
-		var core_shape := BoxShape3D.new()
-		core_shape.size = (
-			definition as DroneCoreDefinition
-		).body_size
+		var core: DroneCoreDefinition = definition as DroneCoreDefinition
+		if core.editable_mesh != null and core.editable_mesh.has_geometry():
+			var editable_shape: ConvexPolygonShape3D = ConvexPolygonShape3D.new()
+			editable_shape.points = core.editable_mesh.vertices
+			return editable_shape
+		var core_shape: BoxShape3D = BoxShape3D.new()
+		core_shape.size = core.body_size
 		return core_shape
 
 	if definition is DronePropellerDefinition:
@@ -113,9 +116,9 @@ static func create_visual(
 		return root
 
 	if definition is DroneCoreDefinition:
-		_add_box_visual(
+		_add_core_visual(
 			root,
-			(definition as DroneCoreDefinition).body_size,
+			definition as DroneCoreDefinition,
 			material
 		)
 		return root
@@ -140,6 +143,39 @@ static func create_visual(
 	fallback_visual.mesh = fallback_mesh
 	root.add_child(fallback_visual)
 	return root
+
+
+static func create_core_mesh(core: DroneCoreDefinition) -> Mesh:
+	if core == null:
+		return null
+	if core.editable_mesh == null or not core.editable_mesh.has_geometry():
+		var box: BoxMesh = BoxMesh.new()
+		box.size = core.body_size
+		return box
+	var surface_tool: SurfaceTool = SurfaceTool.new()
+	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for face_index: int in range(core.editable_mesh.face_count()):
+		var indices: PackedInt32Array = core.editable_mesh.face_indices(face_index)
+		if indices.size() < 3:
+			continue
+		var first_vertex: Vector3 = core.editable_mesh.vertices[indices[0]]
+		for corner: int in range(1, indices.size() - 1):
+			surface_tool.add_vertex(first_vertex)
+			surface_tool.add_vertex(core.editable_mesh.vertices[indices[corner]])
+			surface_tool.add_vertex(core.editable_mesh.vertices[indices[corner + 1]])
+	surface_tool.generate_normals()
+	return surface_tool.commit()
+
+
+static func _add_core_visual(
+	root: Node3D,
+	core: DroneCoreDefinition,
+	material: StandardMaterial3D
+) -> void:
+	var visual: MeshInstance3D = MeshInstance3D.new()
+	visual.mesh = create_core_mesh(core)
+	visual.material_override = material
+	root.add_child(visual)
 
 
 static func _add_attachment_visual(
