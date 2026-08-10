@@ -91,6 +91,10 @@ static func capture_ppo(drone, delta: float, step_index: int) -> Dictionary:
 
 
 static func _capture_ppo_manipulator(drone) -> Dictionary:
+	if drone != null and drone.has_method("legacy_manipulator_state"):
+		var direct_value: Variant = drone.legacy_manipulator_state()
+		if direct_value is Dictionary:
+			return direct_value as Dictionary
 	if drone == null or not drone.has_method("all_limb_attachment_states"):
 		return {"present": false}
 	var states_value: Variant = drone.all_limb_attachment_states()
@@ -129,6 +133,8 @@ static func _capture_ppo_manipulator(drone) -> Dictionary:
 
 static func capture_ppo_propeller_states(drone) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
+	if drone == null or drone.propeller_slots.is_empty():
+		return result
 	var maximum_thrusts: Array[float] = drone.get_ml_static_thrust_limits()
 	for array_index: int in range(drone.propeller_slots.size()):
 		var slot = drone.propeller_slots[array_index]

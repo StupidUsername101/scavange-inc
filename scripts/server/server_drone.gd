@@ -83,7 +83,9 @@ var cached_angular_drag_coefficient := 0.0
 var deterministic_power_output_cache := false
 var deterministic_bus_voltage_v := 0.0
 var deterministic_forwarded_power_w := 0.0
-var has_installed_attachments_cache := false
+var has_runtime_attachment_power_cache: bool = false
+var has_weapon_attachments_cache: bool = false
+var attachment_idle_power_total_cache: float = 0.0
 var ground_effect_refresh_cursor := 0
 var ground_effect_cache_initialized := false
 var ml_degraded_propeller_slots: Dictionary[int, bool] = {}
@@ -97,6 +99,7 @@ var weapon_cooldowns_by_slot: Dictionary[int, float] = {}
 var weapon_aim_local_by_slot: Dictionary[int, Vector3] = {}
 var camera_attachment_nodes_by_slot: Dictionary[int, Camera3D] = {}
 var limb_attachment_assemblies_by_slot: Dictionary[int, GenericLimbAssembly3D] = {}
+var limb_attachment_slot_cache: PackedInt32Array = PackedInt32Array()
 var core_camera_part_definition: DroneCameraAttachmentDefinition
 var ml_body_interface_manifest: MLBodyInterfaceManifest
 
@@ -486,11 +489,11 @@ func can_submit_model_attachment_slot_commands(slot_index: int, command_count: i
 	var attachment: DroneAttachmentDefinition = loadout.get_attachment(slot_index)
 	if attachment == null:
 		return command_count == 0
-	if MLBodyPartContract.control_descriptors(attachment).size() != command_count:
-		return false
 	if attachment is DroneLimbAttachmentDefinition:
 		var assembly: GenericLimbAssembly3D = limb_attachment_assemblies_by_slot.get(slot_index) as GenericLimbAssembly3D
 		return is_instance_valid(assembly) and assembly.can_submit_commands(command_count)
+	if MLBodyPartContract.control_descriptors(attachment).size() != command_count:
+		return false
 	var runtime_node: Node = get_node_or_null("ModelAttachmentRuntime%d" % slot_index)
 	if runtime_node == null or not runtime_node.has_method("submit_model_commands"):
 		return command_count == 0
@@ -729,6 +732,7 @@ func _refresh_limb_attachment_nodes() -> void:
 		if is_instance_valid(old_assembly):
 			old_assembly.queue_free()
 	limb_attachment_assemblies_by_slot.clear()
+	limb_attachment_slot_cache = PackedInt32Array()
 	if loadout == null or loadout.core == null:
 		return
 	for slot_index in range(loadout.core.attachment_slot_count):
@@ -752,6 +756,7 @@ func _refresh_limb_attachment_nodes() -> void:
 		)
 		assembly.set_runtime_active(not is_edit_preview)
 		limb_attachment_assemblies_by_slot[slot_index] = assembly
+		limb_attachment_slot_cache.append(slot_index)
 	_configure_limb_attachment_collision_exceptions()
 
 
@@ -799,19 +804,12 @@ func limb_attachment_state(slot_index: int) -> Dictionary:
 
 
 func limb_attachment_slots() -> PackedInt32Array:
-	var result := PackedInt32Array()
-	var slots: Array[int] = []
-	for slot_value: Variant in limb_attachment_assemblies_by_slot.keys():
-		slots.append(int(slot_value))
-	slots.sort()
-	for slot_index: int in slots:
-		result.append(slot_index)
-	return result
+	return limb_attachment_slot_cache.duplicate()
 
 
 func total_limb_attachment_action_count() -> int:
-	var result := 0
-	for slot_index: int in limb_attachment_slots():
+	var result: int = 0
+	for slot_index: int in limb_attachment_slot_cache:
 		result += limb_attachment_action_count(slot_index)
 	return result
 
@@ -819,10 +817,10 @@ func total_limb_attachment_action_count() -> int:
 func submit_all_limb_attachment_commands(commands: PackedFloat64Array) -> bool:
 	if commands.size() != total_limb_attachment_action_count():
 		return false
-	var cursor := 0
-	for slot_index: int in limb_attachment_slots():
-		var local_count := limb_attachment_action_count(slot_index)
-		var local_commands := PackedFloat64Array()
+	var cursor: int = 0
+	for slot_index: int in limb_attachment_slot_cache:
+		var local_count: int = limb_attachment_action_count(slot_index)
+		var local_commands: PackedFloat64Array = PackedFloat64Array()
 		local_commands.resize(local_count)
 		for local_index in range(local_count):
 			local_commands[local_index] = commands[cursor + local_index]
@@ -834,9 +832,34 @@ func submit_all_limb_attachment_commands(commands: PackedFloat64Array) -> bool:
 
 func all_limb_attachment_states() -> Dictionary:
 	var result: Dictionary[int, Dictionary] = {}
-	for slot_index: int in limb_attachment_slots():
+	for slot_index: int in limb_attachment_slot_cache:
 		result[slot_index] = limb_attachment_state(slot_index)
 	return result
+
+
+func legacy_manipulator_state() -> Dictionary:
+	# Schema-9 PPO checkpoints need only four grip flags. Reading those values directly avoids a
+	# second full articulated-body snapshot on every modern PPO decision merely for compatibility.
+	for slot_index: int in limb_attachment_slot_cache:
+		var assembly: GenericLimbAssembly3D = get_limb_attachment_assembly(slot_index)
+		if not is_instance_valid(assembly) or assembly.required_action_count() <= 0:
+			continue
+		for limb: GenericLimb3D in assembly.limbs:
+			if not is_instance_valid(limb) or not is_instance_valid(limb.end_effector):
+				continue
+			var effector: LimbEndEffector3D = limb.end_effector
+			if effector.definition == null or not effector.definition.enabled:
+				continue
+			var grip: GenericGrip3D = effector.grip_actuator
+			return {
+				"present": true,
+				"grip_activation": (
+					clampf(grip.activation, 0.0, 1.0) if is_instance_valid(grip) else 0.0
+				),
+				"candidate_present": is_instance_valid(grip) and grip.candidate_present,
+				"attached": is_instance_valid(grip) and grip.attached,
+			}
+	return {"present": false}
 
 
 func set_limb_attachments_runtime_active(
@@ -1067,7 +1090,7 @@ func server_physics_tick(delta: float) -> void:
 	)
 
 	var remaining_power := current_power_output
-	if has_installed_attachments_cache:
+	if has_weapon_attachments_cache:
 		_tick_weapon_cooldowns(delta)
 	var ai_consumed_power := 0.0
 	if activated and ai_controller != null and not is_ml_control_enabled():
@@ -1078,13 +1101,14 @@ func server_physics_tick(delta: float) -> void:
 	_update_ai_command_outputs(delta)
 
 	var attachment_consumed_power := 0.0
-	if has_installed_attachments_cache:
+	if has_runtime_attachment_power_cache:
 		attachment_consumed_power = _apply_attachment_power(remaining_power)
-		_process_powered_weapon_fire()
 		remaining_power = maxf(
 			remaining_power - attachment_consumed_power,
 			0.0
 		)
+	if has_weapon_attachments_cache:
+		_process_powered_weapon_fire()
 	var propeller_consumed_power := 0.0
 	if air_environment != null:
 		propeller_consumed_power = _apply_propeller_forces(remaining_power)
@@ -1310,6 +1334,14 @@ func _apply_attachment_power(available_power: float) -> float:
 	if loadout == null or loadout.core == null or available_power <= 0.0:
 		ai_fire_requested = false
 		return 0.0
+	# Ordinary articulated limbs currently draw only their authored idle attachment power here; their
+	# actuator runtime is handled by GenericLimbAssembly3D. With no fire request, allocation order
+	# cannot change the total consumed amount, so use the loadout-time cache instead of rescanning every
+	# attachment Resource on every physics frame.
+	if not ai_fire_requested or not has_weapon_attachments_cache:
+		if not has_weapon_attachments_cache:
+			ai_fire_requested = false
+		return minf(maxf(attachment_idle_power_total_cache, 0.0), available_power)
 
 	var consumed := 0.0
 	var remaining := available_power
@@ -1756,17 +1788,24 @@ func _refresh_propeller_runtime_cache() -> void:
 				),
 				maxf(core.max_power_throughput, 0.0)
 			)
-	has_installed_attachments_cache = false
+	has_runtime_attachment_power_cache = false
+	has_weapon_attachments_cache = false
+	attachment_idle_power_total_cache = 0.0
 	if loadout != null and loadout.core != null:
 		for attachment_slot_index in range(loadout.core.attachment_slot_count):
-			var attachment := loadout.get_attachment(attachment_slot_index)
-			# Passive camera parts are represented in the real loadout but require no power,
-			# cooldown, targeting, or weapon tick. Do not make every observed training drone
-			# pay the general attachment-processing cost each physics frame.
-			if attachment != null and not attachment is DroneCameraAttachmentDefinition:
-				has_installed_attachments_cache = true
-				break
-	if not has_installed_attachments_cache:
+			var attachment: DroneAttachmentDefinition = loadout.get_attachment(attachment_slot_index)
+			if attachment == null or attachment is DroneCameraAttachmentDefinition:
+				continue
+			attachment_idle_power_total_cache += maxf(attachment.idle_power_draw, 0.0)
+			var is_weapon: bool = attachment.provides_capability(&"weapon")
+			has_weapon_attachments_cache = has_weapon_attachments_cache or is_weapon
+			if (
+				attachment.idle_power_draw > MIN_POWER_REQUEST
+				or attachment.active_power_draw > MIN_POWER_REQUEST
+				or is_weapon
+			):
+				has_runtime_attachment_power_cache = true
+	if not has_weapon_attachments_cache:
 		powered_weapon_slots.clear()
 		weapon_cooldowns_by_slot.clear()
 		weapon_aim_local_by_slot.clear()

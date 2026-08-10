@@ -304,6 +304,31 @@ func _test_model_body_creator_unbounded_attachment_layout() -> void:
 		and runtime_limb_count == 8,
 		"eight configurable limbs survive accepted manifest and runtime loadout construction with all 24 joint controls"
 	)
+	var spider_power_cache_valid: bool = false
+	if spider_runtime != null and spider_runtime.core != null:
+		var expected_idle_power: float = 0.0
+		for attachment_index: int in range(spider_runtime.core.attachment_slot_count):
+			var attachment: DroneAttachmentDefinition = spider_runtime.get_attachment(attachment_index)
+			if attachment != null and not attachment is DroneCameraAttachmentDefinition:
+				expected_idle_power += maxf(attachment.idle_power_draw, 0.0)
+		var spider_drone: ServerDrone = ServerDrone.new()
+		spider_drone.loadout = spider_runtime
+		spider_drone.call("_refresh_propeller_runtime_cache")
+		var cached_consumption: float = float(spider_drone.call(
+			"_apply_attachment_power",
+			expected_idle_power + 100.0
+		))
+		spider_power_cache_valid = (
+			spider_drone.has_runtime_attachment_power_cache
+			and not spider_drone.has_weapon_attachments_cache
+			and is_equal_approx(spider_drone.attachment_idle_power_total_cache, expected_idle_power)
+			and is_equal_approx(cached_consumption, expected_idle_power)
+		)
+		spider_drone.free()
+	_expect(
+		spider_power_cache_valid,
+		"an eight-limb spider keeps authored idle electrical draw through the cached non-weapon attachment power path"
+	)
 	panel.free()
 
 

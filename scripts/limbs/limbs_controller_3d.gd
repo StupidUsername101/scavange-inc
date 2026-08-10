@@ -52,6 +52,16 @@ class JointRuntimeRecord:
 	var rest_relative_basis: Basis = Basis.IDENTITY
 	var joint_basis_parent: Basis = Basis.IDENTITY
 	var parameters: JointRuntimeParameters
+	var smoothed_target_angles: Vector3 = Vector3.ZERO
+	var current_angles: Vector3 = Vector3.ZERO
+	var target_angles: Vector3 = Vector3.ZERO
+	var target_error_angles: Vector3 = Vector3.ZERO
+	var rest_error_angles: Vector3 = Vector3.ZERO
+	var passive_stretch_ratio: Vector3 = Vector3.ZERO
+	var passive_torque_joint: Vector3 = Vector3.ZERO
+	var active_torque_joint: Vector3 = Vector3.ZERO
+	var limit_torque_joint: Vector3 = Vector3.ZERO
+	var applied_torque_joint: Vector3 = Vector3.ZERO
 
 var core_body: RigidBody3D
 var limbs: Array[GenericLimb3D] = []
@@ -64,13 +74,15 @@ var action_mapping_valid := true
 var active := false
 var runtime_joint_records: Array[JointRuntimeRecord] = []
 var runtime_end_effectors: Array[LimbEndEffector3D] = []
+var publish_source_records_each_step: bool = true
 
 
 func configure(
 	core: RigidBody3D,
 	new_limbs: Array[GenericLimb3D],
 	new_action_count: int = -1,
-	new_reserved_noop_action_indices: PackedInt32Array = PackedInt32Array()
+	new_reserved_noop_action_indices: PackedInt32Array = PackedInt32Array(),
+	new_publish_source_records_each_step: bool = true
 ) -> void:
 	core_body = core
 	limbs = new_limbs
@@ -80,6 +92,7 @@ func configure(
 		else maxi(new_action_count, 0)
 	)
 	reserved_noop_action_indices = new_reserved_noop_action_indices.duplicate()
+	publish_source_records_each_step = new_publish_source_records_each_step
 	action_mapping_valid = has_complete_action_mapping_for_limbs(
 		new_limbs,
 		action_count,
@@ -220,14 +233,13 @@ func _apply_joint(runtime_record: JointRuntimeRecord, delta: float) -> void:
 	if passive_effectiveness <= 0.0 and active_effectiveness <= 0.0:
 		return
 
-	var source_record: Dictionary = runtime_record.source_record
 	var rest_relative: Basis = runtime_record.rest_relative_basis
 	var joint_basis_parent: Basis = runtime_record.joint_basis_parent
 	var parent_basis: Basis = parent.global_basis
 	var parent_basis_inverse: Basis = parent_basis.inverse()
 	var current_relative: Basis = (parent_basis_inverse * child.global_basis).orthonormalized()
 	var current_angles := joint_angles(current_relative, rest_relative, joint_basis_parent)
-	var target_angles: Vector3 = source_record.get("smoothed_target_angles", Vector3.ZERO)
+	var target_angles: Vector3 = runtime_record.smoothed_target_angles
 	var desired_targets := Vector3.ZERO
 	for axis in range(3):
 		var axis_bit: int = 1 << axis
@@ -349,16 +361,56 @@ func _apply_joint(runtime_record: JointRuntimeRecord, delta: float) -> void:
 		# momentum and make the joint behave like a real internal elastic element.
 		child.apply_torque(torque_world)
 		parent.apply_torque(-torque_world)
-	source_record["smoothed_target_angles"] = target_angles
-	source_record["current_angles"] = current_angles
-	source_record["target_angles"] = target_angles
-	source_record["target_error_angles"] = active_error_joint
-	source_record["rest_error_angles"] = passive_error_joint
-	source_record["passive_stretch_ratio"] = passive_stretch_ratio
-	source_record["passive_torque_joint"] = passive_torque_joint
-	source_record["active_torque_joint"] = active_torque_joint
-	source_record["limit_torque_joint"] = limit_torque_joint
-	source_record["applied_torque_joint"] = torque_joint
+	runtime_record.smoothed_target_angles = target_angles
+	runtime_record.current_angles = current_angles
+	runtime_record.target_angles = target_angles
+	runtime_record.target_error_angles = active_error_joint
+	runtime_record.rest_error_angles = passive_error_joint
+	runtime_record.passive_stretch_ratio = passive_stretch_ratio
+	runtime_record.passive_torque_joint = passive_torque_joint
+	runtime_record.active_torque_joint = active_torque_joint
+	runtime_record.limit_torque_joint = limit_torque_joint
+	runtime_record.applied_torque_joint = torque_joint
+	if publish_source_records_each_step:
+		_sync_runtime_record(runtime_record)
+
+
+func sync_source_records() -> void:
+	for runtime_record: JointRuntimeRecord in runtime_joint_records:
+		_sync_runtime_record(runtime_record)
+
+
+func reset_runtime_state() -> void:
+	for runtime_record: JointRuntimeRecord in runtime_joint_records:
+		runtime_record.smoothed_target_angles = Vector3.ZERO
+		runtime_record.current_angles = Vector3.ZERO
+		runtime_record.target_angles = Vector3.ZERO
+		runtime_record.target_error_angles = Vector3.ZERO
+		runtime_record.rest_error_angles = Vector3.ZERO
+		runtime_record.passive_stretch_ratio = Vector3.ZERO
+		runtime_record.passive_torque_joint = Vector3.ZERO
+		runtime_record.active_torque_joint = Vector3.ZERO
+		runtime_record.limit_torque_joint = Vector3.ZERO
+		runtime_record.applied_torque_joint = Vector3.ZERO
+	# Reset/debug snapshots must stay coherent even when the fast runtime path publishes diagnostics
+	# only on demand.
+	sync_source_records()
+
+
+func _sync_runtime_record(runtime_record: JointRuntimeRecord) -> void:
+	if runtime_record == null:
+		return
+	var source_record: Dictionary = runtime_record.source_record
+	source_record["smoothed_target_angles"] = runtime_record.smoothed_target_angles
+	source_record["current_angles"] = runtime_record.current_angles
+	source_record["target_angles"] = runtime_record.target_angles
+	source_record["target_error_angles"] = runtime_record.target_error_angles
+	source_record["rest_error_angles"] = runtime_record.rest_error_angles
+	source_record["passive_stretch_ratio"] = runtime_record.passive_stretch_ratio
+	source_record["passive_torque_joint"] = runtime_record.passive_torque_joint
+	source_record["active_torque_joint"] = runtime_record.active_torque_joint
+	source_record["limit_torque_joint"] = runtime_record.limit_torque_joint
+	source_record["applied_torque_joint"] = runtime_record.applied_torque_joint
 
 
 func _build_runtime_records() -> void:
@@ -382,6 +434,32 @@ func _build_runtime_records() -> void:
 			)
 			runtime_record.joint_basis_parent = source_record.get(
 				"joint_basis_parent", Basis.IDENTITY
+			)
+			runtime_record.smoothed_target_angles = source_record.get(
+				"smoothed_target_angles", Vector3.ZERO
+			)
+			runtime_record.current_angles = source_record.get("current_angles", Vector3.ZERO)
+			runtime_record.target_angles = source_record.get("target_angles", Vector3.ZERO)
+			runtime_record.target_error_angles = source_record.get(
+				"target_error_angles", Vector3.ZERO
+			)
+			runtime_record.rest_error_angles = source_record.get(
+				"rest_error_angles", Vector3.ZERO
+			)
+			runtime_record.passive_stretch_ratio = source_record.get(
+				"passive_stretch_ratio", Vector3.ZERO
+			)
+			runtime_record.passive_torque_joint = source_record.get(
+				"passive_torque_joint", Vector3.ZERO
+			)
+			runtime_record.active_torque_joint = source_record.get(
+				"active_torque_joint", Vector3.ZERO
+			)
+			runtime_record.limit_torque_joint = source_record.get(
+				"limit_torque_joint", Vector3.ZERO
+			)
+			runtime_record.applied_torque_joint = source_record.get(
+				"applied_torque_joint", Vector3.ZERO
 			)
 			runtime_record.parameters = _joint_runtime_parameters(definition)
 			runtime_joint_records.append(runtime_record)

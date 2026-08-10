@@ -26,9 +26,12 @@ func _run() -> void:
 	_test_soft_limits_and_command_margin()
 	_test_rigid_part_surface_material()
 	_test_generic_grip_surface_contract()
+	_test_plain_foot_skips_grip_runtime()
+	_test_observation_count_matches_descriptors()
 	await _test_static_ground_can_anchor_generic_grip()
 	await _test_physical_end_effector_grip_uses_surface_anchor()
 	await _test_arbitrary_segment_counts()
+	await _test_live_observation_fast_path_matches_snapshot()
 	await _test_reset_tracks_current_host_transform()
 	await _test_duplicate_action_mapping_is_rejected()
 	await _test_sparse_action_mapping_is_rejected()
@@ -318,6 +321,46 @@ func _test_generic_grip_surface_contract() -> void:
 	)
 
 
+func _test_plain_foot_skips_grip_runtime() -> void:
+	var owner: LimbSegment3D = LimbSegment3D.new()
+	var definition: LimbEndEffectorDefinition = LimbEndEffectorDefinition.new()
+	definition.enabled = true
+	definition.geometry_type = LimbEndEffectorDefinition.GeometryType.BOX
+	definition.box_size = Vector3(0.2, 0.05, 0.2)
+	definition.grip_mode = LimbEndEffectorDefinition.GripMode.NONE
+	var effector: LimbEndEffector3D = LimbEndEffector3D.new()
+	owner.add_child(effector)
+	effector.configure(owner, definition, Vector3.ZERO, Color.WHITE)
+	_expect(
+		not is_instance_valid(effector.grip_actuator),
+		"plain feet do not allocate an unused GenericGrip3D query runtime"
+	)
+	var snapshot: Dictionary = effector.state_snapshot()
+	_expect(
+		float(snapshot.get("activation", 0.0)) == 0.0
+		and not bool(snapshot.get("candidate_present", true))
+		and not bool(snapshot.get("attached", true)),
+		"non-gripping feet retain the neutral grip observation contract without a grip node"
+	)
+	owner.free()
+
+
+func _test_observation_count_matches_descriptors() -> void:
+	var limb: GenericLimbDefinition = _create_chain_definition(4, 0)
+	var effector: LimbEndEffectorDefinition = LimbEndEffectorDefinition.new()
+	effector.enabled = true
+	effector.grip_mode = LimbEndEffectorDefinition.GripMode.CONTROLLED
+	effector.grip_action_index = 1
+	limb.end_effector = effector
+	limb.sanitize()
+	var definitions: Array[GenericLimbDefinition] = [limb]
+	_expect(
+		GenericLimbModelContract.observation_count(definitions)
+		== GenericLimbModelContract.observation_descriptors(definitions).size(),
+		"fast limb observation counting stays exactly aligned with the finalized descriptor topology"
+	)
+
+
 func _test_static_ground_can_anchor_generic_grip() -> void:
 	var floor: StaticBody3D = StaticBody3D.new()
 	floor.name = "GripTestGround"
@@ -482,6 +525,10 @@ func _test_arbitrary_segment_counts() -> void:
 			"runtime Jolt spring flags and gains match the generic limb definition"
 		)
 		for segment: LimbSegment3D in chain.segments:
+			_expect(
+				segment.can_sleep and not segment.contact_monitor and segment.max_contacts_reported == 0,
+				"generic model-forge limb segments use the low-overhead sleep/contact defaults"
+			)
 			var surface := segment.physics_material_override
 			_expect(
 				surface is PhysicsMaterial,
@@ -496,6 +543,45 @@ func _test_arbitrary_segment_counts() -> void:
 		chain.queue_free()
 		core.queue_free()
 		await process_frame
+
+
+func _test_live_observation_fast_path_matches_snapshot() -> void:
+	var core: LimbSegment3D = _create_frozen_core(
+		"ObservationFastPathCore",
+		Vector3(20.0, 6.0, 0.0)
+	)
+	var definition: GenericLimbDefinition = _create_chain_definition(4, 0)
+	var definitions: Array[GenericLimbDefinition] = [definition]
+	var assembly: GenericLimbAssembly3D = GenericLimbAssembly3D.new()
+	test_world.add_child(assembly)
+	assembly.configure(core, definitions, null, 4, 0, true)
+	await process_frame
+	if is_instance_valid(assembly.controller) and not assembly.controller.runtime_joint_records.is_empty():
+		var runtime_record = assembly.controller.runtime_joint_records[0]
+		runtime_record.current_angles = Vector3(0.17, 0.0, 0.0)
+		runtime_record.target_error_angles = Vector3(-0.08, 0.0, 0.0)
+		runtime_record.active_torque_joint = Vector3(3.5, 0.0, 0.0)
+	var snapshot_features: PackedFloat64Array = GenericLimbModelContract.encode(
+		definitions,
+		assembly.state_snapshot()
+	)
+	var live_features: PackedFloat64Array = GenericLimbModelContract.encode(
+		definitions,
+		assembly
+	)
+	var tensors_match: bool = snapshot_features.size() == live_features.size()
+	if tensors_match:
+		for index: int in range(snapshot_features.size()):
+			if not is_equal_approx(snapshot_features[index], live_features[index]):
+				tensors_match = false
+				break
+	_expect(
+		tensors_match and live_features.size() == GenericLimbModelContract.observation_count(definitions),
+		"live generic-limb observation encoding preserves the snapshot tensor exactly without building snapshot Dictionaries"
+	)
+	assembly.queue_free()
+	core.queue_free()
+	await process_frame
 
 
 func _test_reset_tracks_current_host_transform() -> void:

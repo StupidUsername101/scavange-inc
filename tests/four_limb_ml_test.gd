@@ -3352,6 +3352,23 @@ func _test_physical_body_uses_simulated_core() -> void:
 	_expect(body.physical_rig.has_valid_physical_bindings(false), "the core, generic limbs, and constraints are fully connected")
 	_expect(body.physical_rig.has_safe_joint_constraints(), "all joint translations are locked and anatomical rotations are bounded")
 	_expect(body.physical_rig.has_passive_rest_elasticity(), "every free joint axis has permanent passive elasticity")
+	_expect(
+		body.physical_rig.limbs_controller.publish_source_records_each_step,
+		"the legacy four-limb rig keeps per-frame joint diagnostics for its reward and observation code"
+	)
+	var legacy_contact_reporting_preserved: bool = true
+	for chain: GenericLimb3D in body.physical_rig.generic_limbs:
+		for segment: LimbSegment3D in chain.segments:
+			legacy_contact_reporting_preserved = (
+				legacy_contact_reporting_preserved
+				and not segment.can_sleep
+				and segment.contact_monitor
+				and segment.max_contacts_reported == GenericLimb3D.MAX_CONTACTS_REPORTED
+			)
+	_expect(
+		legacy_contact_reporting_preserved,
+		"the legacy four-limb rig keeps contact reporting and always-awake limbs required by its support rewards"
+	)
 	var aligned_hip_frames = 0
 	var correctly_mapped_hip_axes = 0
 	var high_priority_joint_count = 0

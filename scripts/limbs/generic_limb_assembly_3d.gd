@@ -16,6 +16,8 @@ var controller: LimbsController3D
 var collision_layer_value := 4
 var collision_mask_value := 1
 var exclude_self_collision := true
+var contact_reporting_enabled: bool = false
+var allow_sleep: bool = true
 var built := false
 
 
@@ -29,7 +31,9 @@ func configure(
 	new_owner_model: Node = null,
 	new_collision_layer: int = 4,
 	new_collision_mask: int = 1,
-	new_exclude_self_collision: bool = true
+	new_exclude_self_collision: bool = true,
+	new_contact_reporting_enabled: bool = false,
+	new_allow_sleep: bool = true
 ) -> void:
 	host_body = new_host_body
 	owner_model = new_owner_model if new_owner_model != null else new_host_body
@@ -37,6 +41,8 @@ func configure(
 	collision_layer_value = maxi(new_collision_layer, 0)
 	collision_mask_value = maxi(new_collision_mask, 0)
 	exclude_self_collision = new_exclude_self_collision
+	contact_reporting_enabled = new_contact_reporting_enabled
+	allow_sleep = new_allow_sleep
 	if is_inside_tree():
 		_build()
 
@@ -63,14 +69,18 @@ func _build() -> void:
 			index,
 			Color.from_hsv(fmod(float(index) * 0.173, 1.0), 0.65, 0.95),
 			collision_layer_value,
-			collision_mask_value
+			collision_mask_value,
+			contact_reporting_enabled,
+			allow_sleep
 		)
 		limbs.append(limb)
 	_configure_self_collision_exceptions()
 	controller = LimbsController3D.new()
 	controller.name = "LimbsController"
 	add_child(controller)
-	controller.configure(host_body, limbs)
+	# Generic model-forge bodies only need joint diagnostics when an observation/debug snapshot is
+	# sampled. Keep the 60 Hz actuator loop on typed runtime fields instead of mutating Dictionaries.
+	controller.configure(host_body, limbs, -1, PackedInt32Array(), false)
 
 
 func _configure_self_collision_exceptions() -> void:
@@ -133,6 +143,15 @@ func reset_to_rest() -> void:
 	for limb: GenericLimb3D in limbs:
 		if is_instance_valid(limb):
 			limb.reset_to_rest()
+	if is_instance_valid(controller):
+		controller.reset_runtime_state()
+
+
+func limb_for_definition_index(definition_index: int) -> GenericLimb3D:
+	for limb: GenericLimb3D in limbs:
+		if is_instance_valid(limb) and limb.slot_index == definition_index:
+			return limb
+	return null
 
 
 func required_action_count() -> int:
@@ -153,6 +172,8 @@ func holds_instance_id(instance_id: int) -> bool:
 
 
 func state_snapshot() -> Dictionary:
+	if is_instance_valid(controller):
+		controller.sync_source_records()
 	var limb_states: Array[Dictionary] = []
 	for limb: GenericLimb3D in limbs:
 		if not is_instance_valid(limb):

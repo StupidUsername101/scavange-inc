@@ -208,12 +208,12 @@ static func _packed_finite(value: Variant) -> PackedFloat64Array:
 	var result = PackedFloat64Array()
 	if value is PackedFloat64Array:
 		var source64: PackedFloat64Array = value
-		result.resize(source64.size())
-		for index in range(source64.size()):
-			if not is_finite(source64[index]):
+		for element: float in source64:
+			if not is_finite(element):
 				return PackedFloat64Array()
-			result[index] = source64[index]
-		return result
+		# PackedFloat64Array already has the exact representation the body manifest consumes. The
+		# caller validates ranges before appending, so a second element-for-element copy is pure cost.
+		return source64
 	if value is PackedFloat32Array:
 		var source32: PackedFloat32Array = value
 		result.resize(source32.size())

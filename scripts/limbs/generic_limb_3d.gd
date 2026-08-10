@@ -14,6 +14,8 @@ var definition: GenericLimbDefinition
 var slot_index := -1
 var collision_layer_value := 4
 var collision_mask_value := 1
+var contact_reporting_enabled: bool = false
+var allow_sleep: bool = true
 var segments: Array[LimbSegment3D] = []
 var joints: Array[Generic6DOFJoint3D] = []
 var joint_records: Array[Dictionary] = []
@@ -29,7 +31,9 @@ func configure(
 	new_slot_index: int,
 	new_color: Color,
 	new_collision_layer: int = 4,
-	new_collision_mask: int = 1
+	new_collision_mask: int = 1,
+	new_contact_reporting_enabled: bool = false,
+	new_allow_sleep: bool = true
 ) -> void:
 	owner_body = body
 	core_body = core
@@ -38,6 +42,8 @@ func configure(
 	color = new_color
 	collision_layer_value = new_collision_layer
 	collision_mask_value = new_collision_mask
+	contact_reporting_enabled = new_contact_reporting_enabled
+	allow_sleep = new_allow_sleep
 	if definition != null:
 		definition.sanitize()
 	if is_inside_tree():
@@ -185,13 +191,13 @@ func _create_segment(
 	segment.angular_damp_mode = RigidBody3D.DAMP_MODE_REPLACE
 	segment.angular_damp = 1.2
 	segment.continuous_cd = segment_definition.continuous_collision_detection
-	segment.can_sleep = false
+	segment.can_sleep = allow_sleep
 	segment.freeze = true
 	segment.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
 	segment.collision_layer = collision_layer_value
 	segment.collision_mask = collision_mask_value
-	segment.max_contacts_reported = MAX_CONTACTS_REPORTED
-	segment.contact_monitor = true
+	segment.max_contacts_reported = MAX_CONTACTS_REPORTED if contact_reporting_enabled else 0
+	segment.contact_monitor = contact_reporting_enabled
 	add_child(segment)
 	# Limb definitions are authored in core-local space. Do not assume the core happens to be at
 	# this container's origin: a creature editor, test scene, or spawned body may give it any world

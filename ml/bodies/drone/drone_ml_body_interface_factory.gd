@@ -128,16 +128,13 @@ static func runtime_states(drone: ServerDrone) -> Dictionary:
 		var slot_index: int = int(propeller_state.get("slot_index", -1))
 		if slot_index >= 0:
 			result["propeller_%d" % slot_index] = propeller_state
-	var limb_states: Dictionary = (
-		drone.all_limb_attachment_states()
-		if drone.has_method("all_limb_attachment_states")
-		else {}
-	)
 	if drone.loadout != null and drone.loadout.core != null:
 		for slot_index in range(drone.loadout.core.attachment_slot_count):
 			var attachment: DroneAttachmentDefinition = drone.loadout.get_attachment(slot_index)
 			if attachment is DroneLimbAttachmentDefinition:
-				result["attachment_%d" % slot_index] = limb_states.get(slot_index, {})
+				# The generic limb contract can encode the instantiated assembly directly. Avoid allocating
+				# a deep hierarchy of limb/segment/joint state Dictionaries every policy decision.
+				result["attachment_%d" % slot_index] = drone.get_limb_attachment_assembly(slot_index)
 			elif attachment != null and drone.has_method("model_attachment_state_for_slot"):
 				result["attachment_%d" % slot_index] = drone.model_attachment_state_for_slot(slot_index)
 	return result

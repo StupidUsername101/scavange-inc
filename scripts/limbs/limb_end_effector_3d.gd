@@ -36,10 +36,13 @@ func configure(
 	disabled = not definition.is_physically_present() or shape == null
 	if not disabled:
 		_create_visual(visual_color)
-	grip_actuator = GenericGrip3D.new()
-	grip_actuator.name = "GripActuator"
-	add_child(grip_actuator)
-	grip_actuator.configure(parent_segment, definition)
+	# Plain feet and other non-gripping terminal hardware do not need a physics-query node ticking
+	# beside every limb. Only construct the generic grip runtime when the authored hardware can use it.
+	if definition.grip_mode != LimbEndEffectorDefinition.GripMode.NONE:
+		grip_actuator = GenericGrip3D.new()
+		grip_actuator.name = "GripActuator"
+		add_child(grip_actuator)
+		grip_actuator.configure(parent_segment, definition)
 
 
 func set_grip_excluded_rids(values: Array[RID]) -> void:

@@ -1062,7 +1062,9 @@ func _build_four_limb_slot(limb_index: int) -> void:
 		limb_index,
 		_limb_color(limb_index, false),
 		PHYSICAL_BODY_LAYER,
-		WORLD_COLLISION_MASK
+		WORLD_COLLISION_MASK,
+		true,
+		false
 	)
 	if not chain.has_valid_topology() or chain.segments.size() != 2:
 		chain.queue_free()

@@ -87,8 +87,10 @@ func ml_observation_descriptors() -> Array[Dictionary]:
 
 
 func ml_encode_observation(runtime_state: Variant, host_state: Dictionary = {}) -> PackedFloat64Array:
-	var mounted: Array[GenericLimbDefinition] = mounted_limb_definitions(Vector3.ZERO)
-	return GenericLimbModelContract.encode(mounted, runtime_state, host_state)
+	# Encoding depends on segment/joint/end-effector topology and physical scales, not on the mount
+	# transform or dense action offsets. Do not deep-duplicate the complete limb resource tree on
+	# every policy decision just to recreate an equivalent observation definition.
+	return GenericLimbModelContract.encode(limb_definitions, runtime_state, host_state)
 
 
 func ml_contract_dictionary() -> Dictionary:

@@ -4,6 +4,9 @@ extends RefCounted
 const LINEAR_VELOCITY_SCALE_MPS: float = 10.0
 const ANGULAR_VELOCITY_SCALE_RADPS: float = 8.0
 const MINIMUM_SCALE: float = 0.000001
+const SEGMENT_OBSERVATION_COUNT: int = 17
+const CONTROLLED_AXIS_OBSERVATION_COUNT: int = 3
+const END_EFFECTOR_OBSERVATION_COUNT: int = 12
 
 #######################################################
 # Model-facing contract for the same GenericLimbDefinition/GenericLimbAssembly3D stack used by
@@ -113,11 +116,35 @@ static func observation_descriptors(definitions: Array[GenericLimbDefinition]) -
 	return result
 
 
+static func observation_count(definitions: Array[GenericLimbDefinition]) -> int:
+	# Hot-path count used by runtime encoders. Building hundreds of descriptor Dictionaries every
+	# control step merely to ask for .size() was a large avoidable cost on many-legged bodies.
+	var result: int = 0
+	for limb: GenericLimbDefinition in definitions:
+		if limb == null or not limb.installed:
+			continue
+		for segment: LimbSegmentDefinition in limb.segments:
+			result += SEGMENT_OBSERVATION_COUNT
+			if segment == null or segment.joint == null:
+				continue
+			for axis: int in range(3):
+				if segment.joint.axis_control_declared(axis):
+					result += CONTROLLED_AXIS_OBSERVATION_COUNT
+		if limb.end_effector != null and limb.end_effector.enabled:
+			result += END_EFFECTOR_OBSERVATION_COUNT
+	return result
+
+
 static func encode(
 	definitions: Array[GenericLimbDefinition],
 	assembly_state_value: Variant,
 	_host_state: Dictionary = {}
 ) -> PackedFloat64Array:
+	if assembly_state_value is GenericLimbAssembly3D:
+		return encode_runtime_assembly(
+			definitions,
+			assembly_state_value as GenericLimbAssembly3D
+		)
 	var assembly_state: Dictionary = assembly_state_value if assembly_state_value is Dictionary else {}
 	var host_transform: Transform3D = assembly_state.get("host_transform_world", Transform3D.IDENTITY)
 	var host_inverse_basis: Basis = host_transform.basis.inverse()
@@ -170,7 +197,124 @@ static func encode(
 				result.append(clampf(active_torque[axis] / torque_scale, -1.0, 1.0))
 		if limb.end_effector != null and limb.end_effector.enabled:
 			_append_effector(result, limb.end_effector, limb_state.get("end_effector", {}), host_transform)
-	var expected: int = observation_descriptors(definitions).size()
+	var expected: int = observation_count(definitions)
+	return result if result.size() == expected and _all_finite(result) else PackedFloat64Array()
+
+
+static func encode_runtime_assembly(
+	definitions: Array[GenericLimbDefinition],
+	assembly: GenericLimbAssembly3D
+) -> PackedFloat64Array:
+	# Training used to construct a large tree of per-segment/per-joint Dictionaries and immediately
+	# unpack it again here. The finalized body contract is immutable, so the hot path can safely read
+	# the matching instantiated assembly directly while preserving the exact same normalized tensor.
+	if not is_instance_valid(assembly) or not is_instance_valid(assembly.host_body):
+		return PackedFloat64Array()
+	var host_body: RigidBody3D = assembly.host_body
+	var host_transform: Transform3D = host_body.global_transform
+	var host_inverse_basis: Basis = host_transform.basis.inverse()
+	var host_linear: Vector3 = host_body.linear_velocity
+	var host_angular: Vector3 = host_body.angular_velocity
+	var result: PackedFloat64Array = PackedFloat64Array()
+	var runtime_joint_cursor: int = 0
+	for limb_index: int in range(definitions.size()):
+		var limb_definition: GenericLimbDefinition = definitions[limb_index]
+		if limb_definition == null or not limb_definition.installed:
+			continue
+		var runtime_limb: GenericLimb3D = assembly.limb_for_definition_index(limb_index)
+		var reach: float = maxf(limb_definition.maximum_reach(), 0.1)
+		for segment_index: int in range(limb_definition.segments.size()):
+			var segment_definition: LimbSegmentDefinition = limb_definition.segments[segment_index]
+			var runtime_segment: LimbSegment3D = null
+			if (
+				is_instance_valid(runtime_limb)
+				and segment_index >= 0
+				and segment_index < runtime_limb.segments.size()
+			):
+				runtime_segment = runtime_limb.segments[segment_index]
+			var transform: Transform3D = (
+				runtime_segment.global_transform
+				if is_instance_valid(runtime_segment)
+				else host_transform
+			)
+			var relative_position: Vector3 = host_inverse_basis * (
+				transform.origin - host_transform.origin
+			)
+			_append_vector(result, relative_position / reach)
+			var linear_world: Vector3 = (
+				runtime_segment.linear_velocity
+				if is_instance_valid(runtime_segment)
+				else host_linear
+			)
+			_append_vector(
+				result,
+				(host_inverse_basis * (linear_world - host_linear)) / LINEAR_VELOCITY_SCALE_MPS
+			)
+			var angular_world: Vector3 = (
+				runtime_segment.angular_velocity
+				if is_instance_valid(runtime_segment)
+				else host_angular
+			)
+			_append_vector(
+				result,
+				(host_inverse_basis * (angular_world - host_angular)) / ANGULAR_VELOCITY_SCALE_RADPS
+			)
+			_append_vector(result, host_inverse_basis * transform.basis.y.normalized())
+			_append_vector(result, host_inverse_basis * transform.basis.z.normalized())
+			result.append(_unit_to_signed(
+				runtime_segment.health_ratio() if is_instance_valid(runtime_segment) else 0.0
+			))
+			result.append(_unit_to_signed(
+				runtime_segment.actuator_effectiveness if is_instance_valid(runtime_segment) else 0.0
+			))
+			if segment_definition == null or segment_definition.joint == null:
+				continue
+			var joint_definition: LimbJointDefinition = segment_definition.joint
+			var runtime_record = null
+			if (
+				is_instance_valid(assembly.controller)
+				and runtime_joint_cursor >= 0
+				and runtime_joint_cursor < assembly.controller.runtime_joint_records.size()
+			):
+				runtime_record = assembly.controller.runtime_joint_records[runtime_joint_cursor]
+			runtime_joint_cursor += 1
+			var current: Vector3 = (
+				runtime_record.current_angles if runtime_record != null else Vector3.ZERO
+			)
+			var error: Vector3 = (
+				runtime_record.target_error_angles if runtime_record != null else Vector3.ZERO
+			)
+			var active_torque: Vector3 = (
+				runtime_record.active_torque_joint if runtime_record != null else Vector3.ZERO
+			)
+			for axis: int in range(3):
+				if not joint_definition.axis_control_declared(axis):
+					continue
+				var angle_scale: float = maxf(
+					maxf(
+						absf(deg_to_rad(joint_definition.lower_limit_degrees[axis])),
+						absf(deg_to_rad(joint_definition.upper_limit_degrees[axis]))
+					),
+					deg_to_rad(1.0)
+				)
+				result.append(clampf(current[axis] / angle_scale, -1.0, 1.0))
+				result.append(clampf(error[axis] / angle_scale, -1.0, 1.0))
+				var torque_scale: float = maxf(
+					joint_definition.maximum_active_torque[axis],
+					MINIMUM_SCALE
+				)
+				result.append(clampf(active_torque[axis] / torque_scale, -1.0, 1.0))
+		if limb_definition.end_effector != null and limb_definition.end_effector.enabled:
+			var runtime_effector: LimbEndEffector3D = (
+				runtime_limb.end_effector if is_instance_valid(runtime_limb) else null
+			)
+			_append_live_effector(
+				result,
+				limb_definition.end_effector,
+				runtime_effector,
+				host_transform
+			)
+	var expected: int = observation_count(definitions)
 	return result if result.size() == expected and _all_finite(result) else PackedFloat64Array()
 
 
@@ -273,6 +417,59 @@ static func _append_effector(
 		_append_vector(result, Vector3.ZERO)
 		result.append(0.0)
 	result.append(_unit_to_signed(float(state.get("health_ratio", 0.0))))
+
+
+static func _append_live_effector(
+	result: PackedFloat64Array,
+	definition: LimbEndEffectorDefinition,
+	effector: LimbEndEffector3D,
+	host_transform: Transform3D
+) -> void:
+	var inverse_basis: Basis = host_transform.basis.inverse()
+	var position: Vector3 = (
+		effector.global_position if is_instance_valid(effector) else host_transform.origin
+	)
+	var grip: GenericGrip3D = (
+		effector.grip_actuator
+		if is_instance_valid(effector) and is_instance_valid(effector.grip_actuator)
+		else null
+	)
+	var activation: float = grip.activation if is_instance_valid(grip) else 0.0
+	result.append(_unit_to_signed(activation))
+	var candidate_present: bool = is_instance_valid(grip) and grip.candidate_present
+	result.append(1.0 if candidate_present else -1.0)
+	if candidate_present:
+		var candidate_offset: Vector3 = inverse_basis * (grip.candidate_point_world - position)
+		_append_vector(
+			result,
+			candidate_offset.normalized()
+			if candidate_offset.length_squared() > MINIMUM_SCALE
+			else Vector3.ZERO
+		)
+		result.append(_unsigned_to_signed(
+			grip.candidate_distance,
+			maxf(definition.grip_detection_radius, 0.01)
+		))
+	else:
+		_append_vector(result, Vector3.ZERO)
+		result.append(0.0)
+	var attached: bool = is_instance_valid(grip) and grip.attached
+	result.append(1.0 if attached else -1.0)
+	if attached:
+		var attached_offset: Vector3 = inverse_basis * (grip.attached_point_world() - position)
+		_append_vector(
+			result,
+			attached_offset.normalized()
+			if attached_offset.length_squared() > MINIMUM_SCALE
+			else Vector3.ZERO
+		)
+		result.append(clampf(grip.load_ratio, 0.0, 2.0) - 1.0)
+	else:
+		_append_vector(result, Vector3.ZERO)
+		result.append(0.0)
+	result.append(_unit_to_signed(
+		effector.health_ratio() if is_instance_valid(effector) else 0.0
+	))
 
 
 static func _append_names(target: Array[Dictionary], prefix: String, names: Array[String]) -> void:
