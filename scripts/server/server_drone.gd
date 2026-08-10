@@ -100,6 +100,7 @@ var weapon_aim_local_by_slot: Dictionary[int, Vector3] = {}
 var camera_attachment_nodes_by_slot: Dictionary[int, Camera3D] = {}
 var limb_attachment_assemblies_by_slot: Dictionary[int, GenericLimbAssembly3D] = {}
 var limb_attachment_slot_cache: PackedInt32Array = PackedInt32Array()
+var limb_attachment_assembly_tick_cache: Array[GenericLimbAssembly3D] = []
 var core_camera_part_definition: DroneCameraAttachmentDefinition
 var ml_body_interface_manifest: MLBodyInterfaceManifest
 
@@ -733,6 +734,7 @@ func _refresh_limb_attachment_nodes() -> void:
 			old_assembly.queue_free()
 	limb_attachment_assemblies_by_slot.clear()
 	limb_attachment_slot_cache = PackedInt32Array()
+	limb_attachment_assembly_tick_cache.clear()
 	if loadout == null or loadout.core == null:
 		return
 	for slot_index in range(loadout.core.attachment_slot_count):
@@ -754,9 +756,13 @@ func _refresh_limb_attachment_nodes() -> void:
 			definition.limb_collision_mask,
 			definition.exclude_self_collision
 		)
+		# ServerDrone already has one centralized physics tick. Avoid one SceneTree physics callback
+		# per attachment assembly on many-legged bodies; the exact same controller step is driven below.
+		assembly.set_controller_external_step(true)
 		assembly.set_runtime_active(not is_edit_preview)
 		limb_attachment_assemblies_by_slot[slot_index] = assembly
 		limb_attachment_slot_cache.append(slot_index)
+		limb_attachment_assembly_tick_cache.append(assembly)
 	_configure_limb_attachment_collision_exceptions()
 
 
@@ -1045,6 +1051,12 @@ func apply_damage(amount: float) -> void:
 		set_activated(false)
 
 
+func _step_limb_attachment_controllers(delta: float) -> void:
+	for assembly: GenericLimbAssembly3D in limb_attachment_assembly_tick_cache:
+		if is_instance_valid(assembly):
+			assembly.step_controller(delta)
+
+
 func server_physics_tick(delta: float) -> void:
 	if ml_training_paused:
 		return
@@ -1065,6 +1077,8 @@ func server_physics_tick(delta: float) -> void:
 		return
 	if loadout == null or loadout.core == null:
 		return
+
+	_step_limb_attachment_controllers(delta)
 
 	if (
 		loadout.battery == null

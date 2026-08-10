@@ -34,7 +34,9 @@ static func capture_ppo(drone, delta: float, step_index: int) -> Dictionary:
 	# remains rich, but constructing all of its static part metadata and secondary encoded
 	# tensor for every decision is wasted work in the training room.
 	var basis: Basis = drone.global_basis
-	var inverse_basis: Basis = basis.inverse()
+	# RigidBody3D transforms are rotations; transpose is the exact inverse and is substantially
+	# cheaper than a general Basis inverse on every PPO observation.
+	var inverse_basis: Basis = basis.transposed()
 	var objective: Dictionary = (
 		drone.ml_controller.objective
 		if drone.ml_controller != null

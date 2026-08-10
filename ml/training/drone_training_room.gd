@@ -12170,7 +12170,7 @@ func _refresh_group_card_texts() -> void:
 		var trainer: DroneTrainingAlgorithm = group["trainer"]
 		var button = group.get("card_button") as Button
 		if button != null:
-			var card_text = "%s %s  ·  %s\n%s %s  ·  update %d  ·  %s" % [
+			var card_text = "%s %s  ·  %s\n%s %s  ·  update %d  ·  %s  ·  %s" % [
 				("▼" if int(group["group_id"]) == selected_group_id else "▶"),
 				str(group["name"]),
 				("running" if bool(group["active"]) else "paused"),
@@ -12178,6 +12178,7 @@ func _refresh_group_card_texts() -> void:
 				_network_architecture_compact_text(trainer.network_architecture()),
 				trainer.update_count_value(),
 				_group_model_short_name(group),
+				group_episode_progress_text(group, "drone"),
 			]
 			if button.text != card_text:
 				button.text = card_text
@@ -12255,13 +12256,13 @@ func _refresh_group_card_texts() -> void:
 		)
 		var limb_button = limb_group.get("card_button") as Button
 		if limb_button != null:
-			limb_button.text = "%s %s  ·  %s\nFOUR-LIMB PPO  ·  %s  ·  update %d  ·  episode %d" % [
+			limb_button.text = "%s %s  ·  %s\nFOUR-LIMB PPO  ·  %s  ·  update %d  ·  %s" % [
 				("▼" if int(limb_group["group_id"]) == selected_limb_group_id else "▶"),
 				str(limb_group["name"]),
 				limb_state_text,
 				_network_architecture_compact_text(limb_trainer.network_architecture()),
 				limb_trainer.update_count,
-				int(limb_group.get("episode", 0)),
+				group_episode_progress_text(limb_group, "limb"),
 			]
 			limb_button.add_theme_color_override("font_color", limb_group["color"])
 		var limb_candidate_id: int = limb_trainer.pending_evaluation_candidate_id()
@@ -16151,6 +16152,43 @@ func _trial_episode_elapsed(trial: Dictionary) -> float:
 	return episode.elapsed_seconds if episode != null else episode_elapsed
 
 
+func group_episode_progress_text(group: Dictionary, family: String) -> String:
+	var fallback_episode: int = int(group.get("episode", 0))
+	var current_episode: int = fallback_episode
+	var elapsed: float = 0.0
+	var duration: float = 0.0
+	var found_runtime: bool = false
+	if family == "drone":
+		var group_id: int = int(group.get("group_id", -1))
+		for trial: Dictionary in trials:
+			if (
+				str(trial.get("mode", "evaluation")) != "algorithm_training"
+				or int(trial.get("group_id", -1)) != group_id
+			):
+				continue
+			var trial_episode: DroneTrainingEpisode = trial.get("episode") as DroneTrainingEpisode
+			if trial_episode == null:
+				continue
+			found_runtime = true
+			current_episode = maxi(current_episode, trial_episode.episode_number)
+			elapsed = maxf(elapsed, trial_episode.elapsed_seconds)
+			duration = maxf(duration, trial_episode.duration_seconds)
+	else:
+		var workers_value: Variant = group.get("workers", [])
+		if workers_value is Array:
+			var workers: Array = workers_value as Array
+			for worker_value: Variant in workers:
+				if not (worker_value is Dictionary):
+					continue
+				var worker: Dictionary = worker_value as Dictionary
+				found_runtime = true
+				elapsed = maxf(elapsed, float(worker.get("episode_elapsed", 0.0)))
+				duration = maxf(duration, float(worker.get("episode_duration", episode_duration)))
+	if found_runtime and duration > 0.0:
+		return "episode %d · %.1f/%.1f s" % [current_episode, elapsed, duration]
+	return "episode %d" % current_episode
+
+
 func _push_target_objective_to_live_drones() -> void:
 	for trial in trials:
 		if bool(trial.get("episode_finished", false)):
@@ -17416,6 +17454,8 @@ func _refresh_episode_status() -> void:
 		return
 	var limb_summaries: Array[Dictionary] = limb_training.episode_progress_summaries()
 	var turret_summaries: Array[Dictionary] = turret_training.episode_progress_summaries()
+	var active_elapsed_values: Array[float] = []
+	var active_duration_values: Array[float] = []
 	var active_drone_groups: int = 0
 	var paused_drone_groups: int = 0
 	for group: Dictionary in worker_groups:
@@ -17432,6 +17472,9 @@ func _refresh_episode_status() -> void:
 		if bool(summary.get("active", false)):
 			active_limb_groups += 1
 			active_limb_instances += int(summary.get("instance_count", 0))
+			if int(summary.get("unfinished_instance_count", 0)) > 0:
+				active_elapsed_values.append(maxf(float(summary.get("elapsed", 0.0)), 0.0))
+				active_duration_values.append(maxf(float(summary.get("duration", episode_duration)), 0.0))
 		else:
 			paused_limb_groups += 1
 	var active_turret_groups: int = 0
@@ -17443,6 +17486,9 @@ func _refresh_episode_status() -> void:
 		if bool(summary.get("active", false)):
 			active_turret_groups += 1
 			active_turret_instances += int(summary.get("instance_count", 0))
+			if int(summary.get("unfinished_instance_count", 0)) > 0:
+				active_elapsed_values.append(maxf(float(summary.get("elapsed", 0.0)), 0.0))
+				active_duration_values.append(maxf(float(summary.get("duration", episode_duration)), 0.0))
 		else:
 			paused_turret_groups += 1
 	var active_drone_instances: int = 0
@@ -17453,6 +17499,10 @@ func _refresh_episode_status() -> void:
 		retained_drone_instances += 1
 		if _trial_runtime_is_active(trial):
 			active_drone_instances += 1
+			var trial_episode: DroneTrainingEpisode = trial.get("episode") as DroneTrainingEpisode
+			if trial_episode != null:
+				active_elapsed_values.append(maxf(trial_episode.elapsed_seconds, 0.0))
+				active_duration_values.append(maxf(trial_episode.duration_seconds, 0.0))
 	var active_models: int = active_drone_groups + active_limb_groups + active_turret_groups
 	var paused_models: int = paused_drone_groups + paused_limb_groups + paused_turret_groups
 	var active_instances: int = active_drone_instances + active_limb_instances + active_turret_instances
@@ -17465,8 +17515,25 @@ func _refresh_episode_status() -> void:
 			_simulation_speed_text(simulation_speed),
 		]
 		return
-	var episode_status: String = "Episode length %.1f s · %d active model%s · %d active instance%s" % [
+	var live_progress_text: String = ""
+	if not active_elapsed_values.is_empty():
+		var minimum_elapsed: float = active_elapsed_values[0]
+		var maximum_elapsed: float = active_elapsed_values[0]
+		var maximum_duration: float = episode_duration
+		for elapsed_value: float in active_elapsed_values:
+			minimum_elapsed = minf(minimum_elapsed, elapsed_value)
+			maximum_elapsed = maxf(maximum_elapsed, elapsed_value)
+		for duration_value: float in active_duration_values:
+			maximum_duration = maxf(maximum_duration, duration_value)
+		if absf(maximum_elapsed - minimum_elapsed) < 0.11:
+			live_progress_text = " · live %.1f / %.1f s" % [maximum_elapsed, maximum_duration]
+		else:
+			live_progress_text = " · live %.1f–%.1f / %.1f s" % [
+				minimum_elapsed, maximum_elapsed, maximum_duration,
+			]
+	var episode_status: String = "Episode length %.1f s%s · %d active model%s · %d active instance%s" % [
 		episode_duration,
+		live_progress_text,
 		active_models,
 		"" if active_models == 1 else "s",
 		active_instances,

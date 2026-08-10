@@ -47,7 +47,10 @@ func encode_body_observation(
 ) -> PackedFloat64Array:
 	if not finalized:
 		return PackedFloat64Array()
-	var result = PackedFloat64Array()
+	var total_observation_count: int = observation_count()
+	var result: PackedFloat64Array = PackedFloat64Array()
+	result.resize(total_observation_count)
+	var written_observation_count: int = 0
 	var core_observation_count: int = int(core_record.get("observation_count", 0))
 	if core_observation_count > 0:
 		var core_part: Resource = core_record.get("part") as Resource
@@ -59,8 +62,9 @@ func encode_body_observation(
 		)
 		if core_encoded.size() != core_observation_count:
 			return PackedFloat64Array()
-		if not _append_validated_observations(result, core_encoded, core_record):
+		if not _write_validated_observations(result, core_encoded, core_record):
 			return PackedFloat64Array()
+		written_observation_count += core_encoded.size()
 	for record: Dictionary in slot_records:
 		var observation_count_for_part: int = int(record.get("observation_count", 0))
 		if observation_count_for_part <= 0:
@@ -75,9 +79,14 @@ func encode_body_observation(
 		)
 		if encoded.size() != observation_count_for_part:
 			return PackedFloat64Array()
-		if not _append_validated_observations(result, encoded, record):
+		if not _write_validated_observations(result, encoded, record):
 			return PackedFloat64Array()
-	return result if result.size() == observation_count() else PackedFloat64Array()
+		written_observation_count += encoded.size()
+	return (
+		result
+		if written_observation_count == total_observation_count
+		else PackedFloat64Array()
+	)
 
 
 func route_controls(commands: PackedFloat64Array) -> Dictionary:
@@ -212,7 +221,7 @@ func to_dictionary() -> Dictionary:
 	}
 
 
-func _append_validated_observations(
+func _write_validated_observations(
 	target: PackedFloat64Array,
 	encoded: PackedFloat64Array,
 	record: Dictionary
@@ -227,5 +236,5 @@ func _append_validated_observations(
 		var value: float = encoded[local_index]
 		if not is_finite(value) or value < minimum - 0.000001 or value > maximum + 0.000001:
 			return false
-	target.append_array(encoded)
+		target[observation_offset + local_index] = value
 	return true

@@ -20,21 +20,23 @@ static func build(
 		runtime_states_by_slot,
 		host_state
 	)
-	return combine_finalized(manifest, body_features, extra_features)
+	return combine_finalized(manifest, body_features, extra_features, true)
 
 
 static func combine_finalized(
 	manifest: MLBodyInterfaceManifest,
 	body_features: PackedFloat64Array,
-	extra_features: PackedFloat64Array
+	extra_features: PackedFloat64Array,
+	body_features_already_validated: bool = false
 ) -> PackedFloat64Array:
 	if manifest == null or not manifest.finalized:
 		return PackedFloat64Array()
 	if body_features.size() != manifest.observation_count():
 		return PackedFloat64Array()
-	for value: float in body_features:
-		if not is_finite(value) or value < -1.000001 or value > 1.000001:
-			return PackedFloat64Array()
+	if not body_features_already_validated:
+		for value: float in body_features:
+			if not is_finite(value) or value < -1.000001 or value > 1.000001:
+				return PackedFloat64Array()
 	for value: float in extra_features:
 		if not is_finite(value) or value < -1.000001 or value > 1.000001:
 			return PackedFloat64Array()

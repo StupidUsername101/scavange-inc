@@ -279,6 +279,47 @@ func _test_model_body_creator_unbounded_attachment_layout() -> void:
 			StringName("attachment_%d" % attachment_index),
 			MLBodyPartContract.deep_duplicate_resource(configurable_limb)
 		)
+	var copied_attachment_configuration_valid: bool = false
+	if equipped_all_limbs:
+		var source_attachment: DroneLimbAttachmentDefinition = (
+			panel.current_draft.equipped_part(&"attachment_0") as DroneLimbAttachmentDefinition
+		)
+		var target_slot: MLBodySlotDefinition = panel.current_draft.slot_definition(&"attachment_1")
+		if (
+			source_attachment != null
+			and not source_attachment.limb_definitions.is_empty()
+			and source_attachment.limb_definitions[0] != null
+			and not source_attachment.limb_definitions[0].segments.is_empty()
+			and target_slot != null
+		):
+			var target_mount_before: Transform3D = target_slot.mount_transform
+			source_attachment.limb_definitions[0].segments[0].length = 1.37
+			var target_picker: OptionButton = OptionButton.new()
+			target_picker.add_item("Attachment 2")
+			target_picker.set_item_metadata(0, "attachment_1")
+			target_picker.select(0)
+			panel._on_apply_slot_configuration_pressed("attachment_0", target_picker)
+			var copied_attachment: DroneLimbAttachmentDefinition = (
+				panel.current_draft.equipped_part(&"attachment_1") as DroneLimbAttachmentDefinition
+			)
+			var copied_limb: GenericLimbDefinition = (
+				copied_attachment.limb_definitions[0]
+				if copied_attachment != null and not copied_attachment.limb_definitions.is_empty()
+				else null
+			)
+			copied_attachment_configuration_valid = (
+				copied_attachment != null
+				and copied_attachment != source_attachment
+				and copied_limb != null
+				and copied_limb != source_attachment.limb_definitions[0]
+				and is_equal_approx(copied_limb.segments[0].length, 1.37)
+				and panel.current_draft.slot_definition(&"attachment_1").mount_transform == target_mount_before
+			)
+			target_picker.free()
+	_expect(
+		copied_attachment_configuration_valid,
+		"creator can deep-copy one attachment configuration to a compatible same-kind slot without moving that target mount"
+	)
 	var spider_manifest: MLBodyInterfaceManifest = (
 		panel.current_draft.duplicate_editable().accept_build() if equipped_all_limbs else null
 	)
@@ -416,7 +457,18 @@ func _test_room_episode_status_is_one_shared_line() -> void:
 		and room.episode_status_label.text.contains("1 paused model")
 		and not room.episode_status_label.text.contains("Drones ·")
 		and not room.episode_status_label.text.contains("Walker ·"),
-		"room episode status uses one shared-duration line instead of one timer row per worker family"
+		"room episode status keeps one shared room line instead of one timer row per worker family"
+	)
+	var progress_text: String = room.group_episode_progress_text({
+		"episode": 7,
+		"workers": [{
+			"episode_elapsed": 6.2,
+			"episode_duration": 20.0,
+		}],
+	}, "limb")
+	_expect(
+		progress_text == "episode 7 · 6.2/20.0 s",
+		"worker-group cards expose live episode elapsed/duration progress again"
 	)
 	room.free()
 

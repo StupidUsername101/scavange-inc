@@ -105,8 +105,12 @@ func build_model_input_vector(task_and_environment_features: PackedFloat64Array)
 	# their established fixed profile internally, while the body-creator path can call this after
 	# Accept without knowing whether the body is a drone, creature, turret, or future Core type.
 	var manifest: MLBodyInterfaceManifest = model_body_interface()
+	# model_body_observation_features() was produced by the finalized manifest, which already
+	# checked every body channel against its descriptor. Avoid scanning the large articulated body
+	# block a second time before every policy forward pass.
 	return MLModelInputVectorBuilder.combine_finalized(
 		manifest,
 		model_body_observation_features(),
-		task_and_environment_features
+		task_and_environment_features,
+		true
 	)

@@ -244,13 +244,13 @@ func refresh_group_cards() -> void:
 				if active and optimizing
 				else ("running" if active else ("optimizer finishing" if optimizing else "paused"))
 			)
-			button.text = "%s %s  ·  %s\nTURRET PPO  ·  %s  ·  update %d  ·  episode %d" % [
+			button.text = "%s %s  ·  %s\nTURRET PPO  ·  %s  ·  update %d  ·  %s" % [
 				("▼" if int(group["group_id"]) == int(room.selected_turret_group_id) else "▶"),
 				str(group["name"]),
 				state,
 				room._network_architecture_compact_text(trainer.network_architecture()),
 				trainer.update_count,
-				int(group.get("episode", 0)),
+				room.group_episode_progress_text(group, "turret"),
 			]
 			button.add_theme_color_override("font_color", group["color"])
 		var evaluation_candidate_id: int = (

@@ -75,6 +75,7 @@ var active := false
 var runtime_joint_records: Array[JointRuntimeRecord] = []
 var runtime_end_effectors: Array[LimbEndEffector3D] = []
 var publish_source_records_each_step: bool = true
+var externally_stepped: bool = false
 
 
 func configure(
@@ -180,7 +181,12 @@ static func has_complete_action_mapping_for_limbs(
 
 func set_active(value: bool) -> void:
 	active = value
-	set_physics_process(value)
+	set_physics_process(value and not externally_stepped)
+
+
+func set_external_step_mode(value: bool) -> void:
+	externally_stepped = value
+	set_physics_process(active and not externally_stepped)
 
 
 func submit_commands(commands: PackedFloat64Array) -> bool:
@@ -236,8 +242,8 @@ func _apply_joint(runtime_record: JointRuntimeRecord, delta: float) -> void:
 	var rest_relative: Basis = runtime_record.rest_relative_basis
 	var joint_basis_parent: Basis = runtime_record.joint_basis_parent
 	var parent_basis: Basis = parent.global_basis
-	var parent_basis_inverse: Basis = parent_basis.inverse()
-	var current_relative: Basis = (parent_basis_inverse * child.global_basis).orthonormalized()
+	var parent_basis_inverse: Basis = parent_basis.transposed()
+	var current_relative: Basis = parent_basis_inverse * child.global_basis
 	var current_angles := joint_angles(current_relative, rest_relative, joint_basis_parent)
 	var target_angles: Vector3 = runtime_record.smoothed_target_angles
 	var desired_targets := Vector3.ZERO
@@ -264,7 +270,7 @@ func _apply_joint(runtime_record: JointRuntimeRecord, delta: float) -> void:
 	# two swing/twist coordinate vectors. Project the physical quaternion error onto the joint axes,
 	# and expose those exact projected values as diagnostics below.
 	var active_delta := rotation_from_joint_angles(target_angles, joint_basis_parent)
-	var active_desired_relative := (active_delta * rest_relative).orthonormalized()
+	var active_desired_relative: Basis = active_delta * rest_relative
 	var passive_error_parent := rotation_error_vector_parent(current_relative, rest_relative)
 	var active_error_parent := rotation_error_vector_parent(
 		current_relative,
@@ -647,15 +653,17 @@ static func rotation_from_joint_angles(angles: Vector3, joint_basis_parent: Basi
 	if swing_angle > 0.000001:
 		swing = Quaternion(swing_vector / swing_angle, swing_angle)
 	var delta_joint := Basis((swing * twist).normalized())
-	return (
-		joint_basis_parent * delta_joint * joint_basis_parent.inverse()
-	).orthonormalized()
+	# Joint bases are authored as pure rotations. For orthonormal bases transpose is the exact
+	# inverse and avoids a general 3x3 inverse + normalization for every joint on every physics tick.
+	return joint_basis_parent * delta_joint * joint_basis_parent.transposed()
 
 
 static func rotation_error_vector_parent(current: Basis, desired: Basis) -> Vector3:
 	if not current.is_finite() or not desired.is_finite():
 		return Vector3.ZERO
-	var error := (desired * current.inverse()).orthonormalized().get_rotation_quaternion().normalized()
+	var error: Quaternion = (
+		desired * current.transposed()
+	).get_rotation_quaternion().normalized()
 	var angle := error.get_angle()
 	var axis := error.get_axis()
 	if angle > PI:
@@ -671,10 +679,10 @@ static func joint_angles(
 	rest_relative: Basis,
 	joint_basis_parent: Basis
 ) -> Vector3:
-	var delta_parent := (current_relative * rest_relative.inverse()).orthonormalized()
-	var delta_joint := (
-		joint_basis_parent.inverse() * delta_parent * joint_basis_parent
-	).orthonormalized()
+	var delta_parent: Basis = current_relative * rest_relative.transposed()
+	var delta_joint: Basis = (
+		joint_basis_parent.transposed() * delta_parent * joint_basis_parent
+	)
 	var rotation := _shortest_quaternion(delta_joint.get_rotation_quaternion())
 	var twist := Quaternion(rotation.x, 0.0, 0.0, rotation.w)
 	if twist.length_squared() <= 0.0000001:

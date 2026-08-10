@@ -22,6 +22,11 @@ var joint_records: Array[Dictionary] = []
 var end_effector: LimbEndEffector3D
 var color := Color.WHITE
 var built := false
+# Immutable observation normalization values derived once from the authored limb. The policy
+# encoder samples these every decision, so recomputing reach and radian/torque scales there is wasteful.
+var observation_reach: float = 0.1
+var observation_angle_scales: Array[Vector3] = []
+var observation_torque_scales: Array[Vector3] = []
 
 
 func configure(
@@ -58,6 +63,7 @@ func _build() -> void:
 	if built or definition == null or not definition.installed or not is_instance_valid(core_body):
 		return
 	definition.sanitize()
+	_cache_observation_normalization()
 	var validation_error: String = definition.ml_validation_error()
 	if not validation_error.is_empty():
 		push_error("Generic limb build rejected: %s" % validation_error)
@@ -125,6 +131,33 @@ func _build() -> void:
 		parent_rest_basis = segment_basis
 		start_local = end_local
 	_build_end_effector()
+
+
+func _cache_observation_normalization() -> void:
+	observation_reach = maxf(definition.maximum_reach(), 0.1) if definition != null else 0.1
+	observation_angle_scales.clear()
+	observation_torque_scales.clear()
+	if definition == null:
+		return
+	for segment_definition: LimbSegmentDefinition in definition.segments:
+		var angle_scales: Vector3 = Vector3.ONE
+		var torque_scales: Vector3 = Vector3.ONE
+		if segment_definition != null and segment_definition.joint != null:
+			var joint_definition: LimbJointDefinition = segment_definition.joint
+			for axis: int in range(3):
+				angle_scales[axis] = maxf(
+					maxf(
+						absf(deg_to_rad(joint_definition.lower_limit_degrees[axis])),
+						absf(deg_to_rad(joint_definition.upper_limit_degrees[axis]))
+					),
+					deg_to_rad(1.0)
+				)
+				torque_scales[axis] = maxf(
+					joint_definition.maximum_active_torque[axis],
+					0.000001
+				)
+		observation_angle_scales.append(angle_scales)
+		observation_torque_scales.append(torque_scales)
 
 
 func _build_end_effector() -> void:

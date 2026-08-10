@@ -12,6 +12,7 @@ var host_body: RigidBody3D
 var owner_model: Node
 var limb_definitions: Array[GenericLimbDefinition] = []
 var limbs: Array[GenericLimb3D] = []
+var limbs_by_definition_index: Dictionary = {}
 var controller: LimbsController3D
 var collision_layer_value := 4
 var collision_mask_value := 1
@@ -55,6 +56,7 @@ func _build() -> void:
 	if built or not is_instance_valid(host_body):
 		return
 	built = true
+	limbs_by_definition_index.clear()
 	for index in range(limb_definitions.size()):
 		var definition := limb_definitions[index]
 		if definition == null:
@@ -74,6 +76,7 @@ func _build() -> void:
 			allow_sleep
 		)
 		limbs.append(limb)
+		limbs_by_definition_index[index] = limb
 	_configure_self_collision_exceptions()
 	controller = LimbsController3D.new()
 	controller.name = "LimbsController"
@@ -121,6 +124,16 @@ func neutralize() -> void:
 		controller.neutralize()
 
 
+func set_controller_external_step(value: bool) -> void:
+	if is_instance_valid(controller):
+		controller.set_external_step_mode(value)
+
+
+func step_controller(delta: float) -> void:
+	if is_instance_valid(controller):
+		controller.step_controller(delta)
+
+
 func set_runtime_active(value: bool, release_grip_on_deactivate: bool = true) -> void:
 	for limb: GenericLimb3D in limbs:
 		if is_instance_valid(limb):
@@ -148,10 +161,8 @@ func reset_to_rest() -> void:
 
 
 func limb_for_definition_index(definition_index: int) -> GenericLimb3D:
-	for limb: GenericLimb3D in limbs:
-		if is_instance_valid(limb) and limb.slot_index == definition_index:
-			return limb
-	return null
+	var limb: GenericLimb3D = limbs_by_definition_index.get(definition_index) as GenericLimb3D
+	return limb if is_instance_valid(limb) else null
 
 
 func required_action_count() -> int:

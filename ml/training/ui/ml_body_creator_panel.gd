@@ -1339,7 +1339,10 @@ func _build_slot_row(slot: MLBodySlotDefinition, current_part: Resource) -> void
 			picker.set_item_metadata(option_index, source_path)
 	if selected_index >= 0:
 		picker.select(selected_index)
-	initial_slot_keys[slot_id] = selected_key
+	# Keep the original stage-entry selection as the change baseline. Rebuilding rows after
+	# copying a configuration must not make the newly copied hardware look unchanged.
+	if not initial_slot_keys.has(slot_id):
+		initial_slot_keys[slot_id] = selected_key
 	picker.disabled = not editable
 	picker.item_selected.connect(_on_slot_part_selected.bind(slot_id))
 
@@ -1359,11 +1362,103 @@ func _build_slot_row(slot: MLBodySlotDefinition, current_part: Resource) -> void
 		detail.tooltip_text = "This slot is represented by the generic creator contract, but the current four-limb runtime does not yet install arbitrary Core attachments."
 	body.add_child(detail)
 
+	_build_apply_configuration_row(body, slot, current_part, editable)
+
 	var editor_host: VBoxContainer = VBoxContainer.new()
 	editor_host.add_theme_constant_override("separation", 7)
 	body.add_child(editor_host)
 	slot_editor_hosts[slot_id] = editor_host
 	_rebuild_limb_editor(slot_id)
+
+
+func _build_apply_configuration_row(
+	parent: VBoxContainer,
+	source_slot: MLBodySlotDefinition,
+	source_part: Resource,
+	editable: bool
+) -> void:
+	if current_draft == null or source_slot == null or source_part == null or not editable:
+		return
+	var target_slots: Array[MLBodySlotDefinition] = []
+	for entry: Dictionary in current_draft.slots:
+		var candidate: MLBodySlotDefinition = entry.get("definition") as MLBodySlotDefinition
+		if (
+			candidate == null
+			or candidate.slot_id == source_slot.slot_id
+			or candidate.slot_type != source_slot.slot_type
+			or not _slot_runtime_edit_supported(candidate)
+			or not candidate.accepts(source_part)
+		):
+			continue
+		target_slots.append(candidate)
+	if target_slots.is_empty():
+		return
+
+	var row: HBoxContainer = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	parent.add_child(row)
+	var label: Label = Label.new()
+	label.text = "Apply configuration to"
+	label.custom_minimum_size.x = 180.0
+	label.add_theme_color_override("font_color", MUTED)
+	label.tooltip_text = "Copies this equipped part's complete editable configuration to another compatible slot of the same kind. The target slot keeps its own mount position and rotation."
+	row.add_child(label)
+	var target_picker: OptionButton = OptionButton.new()
+	target_picker.fit_to_longest_item = false
+	target_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	target_picker.tooltip_text = label.tooltip_text
+	for target_slot: MLBodySlotDefinition in target_slots:
+		var target_index: int = target_picker.item_count
+		target_picker.add_item(target_slot.display_name)
+		target_picker.set_item_metadata(target_index, str(target_slot.slot_id))
+	row.add_child(target_picker)
+	var apply_button: Button = Button.new()
+	apply_button.text = "APPLY"
+	apply_button.tooltip_text = label.tooltip_text
+	apply_button.pressed.connect(
+		_on_apply_slot_configuration_pressed.bind(str(source_slot.slot_id), target_picker)
+	)
+	row.add_child(apply_button)
+
+
+func _on_apply_slot_configuration_pressed(
+	source_slot_id: String,
+	target_picker: OptionButton
+) -> void:
+	if current_draft == null or target_picker == null or target_picker.item_count <= 0:
+		return
+	var selected_index: int = target_picker.selected
+	if selected_index < 0 or selected_index >= target_picker.item_count:
+		return
+	var target_slot_id: String = str(target_picker.get_item_metadata(selected_index))
+	if target_slot_id.is_empty() or target_slot_id == source_slot_id:
+		return
+	var source_slot: MLBodySlotDefinition = current_draft.slot_definition(StringName(source_slot_id))
+	var target_slot: MLBodySlotDefinition = current_draft.slot_definition(StringName(target_slot_id))
+	var source_part: Resource = current_draft.equipped_part(StringName(source_slot_id))
+	if source_slot == null or target_slot == null or source_part == null:
+		_set_error("The source or target attachment is no longer available.")
+		return
+	if source_slot.slot_type != target_slot.slot_type or not target_slot.accepts(source_part):
+		_set_error("That target slot is not compatible with this attachment configuration.")
+		return
+	var copied_part: Resource = MLBodyPartContract.deep_duplicate_resource(source_part)
+	if copied_part == null or not current_draft.equip(StringName(target_slot_id), copied_part):
+		_set_error(
+			current_draft.last_error
+			if not current_draft.last_error.is_empty()
+			else "The attachment configuration could not be copied."
+		)
+		return
+	changed_slot_ids[target_slot_id] = true
+	status_label.text = "%s configuration copied to %s; the target mount transform was preserved." % [
+		source_slot.display_name,
+		target_slot.display_name,
+	]
+	status_label.add_theme_color_override("font_color", MUTED)
+	_rebuild_slot_rows()
+	_refresh_training_settings_for_body(false)
+	_refresh_summary()
 
 
 func _rebuild_limb_editor(slot_id: String) -> void:

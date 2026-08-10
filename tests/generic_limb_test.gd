@@ -561,6 +561,21 @@ func _test_live_observation_fast_path_matches_snapshot() -> void:
 		runtime_record.current_angles = Vector3(0.17, 0.0, 0.0)
 		runtime_record.target_error_angles = Vector3(-0.08, 0.0, 0.0)
 		runtime_record.active_torque_joint = Vector3(3.5, 0.0, 0.0)
+	var runtime_limb: GenericLimb3D = assembly.limb_for_definition_index(0)
+	_expect(
+		is_instance_valid(runtime_limb)
+		and runtime_limb == assembly.limbs[0]
+		and is_equal_approx(runtime_limb.observation_reach, definition.maximum_reach())
+		and runtime_limb.observation_angle_scales.size() == definition.segments.size()
+		and runtime_limb.observation_torque_scales.size() == definition.segments.size(),
+		"generic assembly caches direct limb lookup and immutable observation normalization for the policy hot path"
+	)
+	assembly.set_controller_external_step(true)
+	assembly.set_runtime_active(true)
+	_expect(
+		is_instance_valid(assembly.controller) and not assembly.controller.is_physics_processing(),
+		"externally stepped drone limb assemblies do not retain one SceneTree physics callback per attachment"
+	)
 	var snapshot_features: PackedFloat64Array = GenericLimbModelContract.encode(
 		definitions,
 		assembly.state_snapshot()

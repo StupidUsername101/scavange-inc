@@ -212,7 +212,7 @@ static func encode_runtime_assembly(
 		return PackedFloat64Array()
 	var host_body: RigidBody3D = assembly.host_body
 	var host_transform: Transform3D = host_body.global_transform
-	var host_inverse_basis: Basis = host_transform.basis.inverse()
+	var host_inverse_basis: Basis = host_transform.basis.transposed()
 	var host_linear: Vector3 = host_body.linear_velocity
 	var host_angular: Vector3 = host_body.angular_velocity
 	var result: PackedFloat64Array = PackedFloat64Array()
@@ -222,7 +222,11 @@ static func encode_runtime_assembly(
 		if limb_definition == null or not limb_definition.installed:
 			continue
 		var runtime_limb: GenericLimb3D = assembly.limb_for_definition_index(limb_index)
-		var reach: float = maxf(limb_definition.maximum_reach(), 0.1)
+		var reach: float = (
+			runtime_limb.observation_reach
+			if is_instance_valid(runtime_limb)
+			else maxf(limb_definition.maximum_reach(), 0.1)
+		)
 		for segment_index: int in range(limb_definition.segments.size()):
 			var segment_definition: LimbSegmentDefinition = limb_definition.segments[segment_index]
 			var runtime_segment: LimbSegment3D = null
@@ -259,8 +263,9 @@ static func encode_runtime_assembly(
 				result,
 				(host_inverse_basis * (angular_world - host_angular)) / ANGULAR_VELOCITY_SCALE_RADPS
 			)
-			_append_vector(result, host_inverse_basis * transform.basis.y.normalized())
-			_append_vector(result, host_inverse_basis * transform.basis.z.normalized())
+			# Dynamic RigidBody3D bases are rotations; these axes are already normalized.
+			_append_vector(result, host_inverse_basis * transform.basis.y)
+			_append_vector(result, host_inverse_basis * transform.basis.z)
 			result.append(_unit_to_signed(
 				runtime_segment.health_ratio() if is_instance_valid(runtime_segment) else 0.0
 			))
@@ -287,22 +292,40 @@ static func encode_runtime_assembly(
 			var active_torque: Vector3 = (
 				runtime_record.active_torque_joint if runtime_record != null else Vector3.ZERO
 			)
+			var cached_scales_available: bool = (
+				is_instance_valid(runtime_limb)
+				and segment_index < runtime_limb.observation_angle_scales.size()
+				and segment_index < runtime_limb.observation_torque_scales.size()
+			)
+			var cached_angle_scales: Vector3 = (
+				runtime_limb.observation_angle_scales[segment_index]
+				if cached_scales_available
+				else Vector3.ONE
+			)
+			var cached_torque_scales: Vector3 = (
+				runtime_limb.observation_torque_scales[segment_index]
+				if cached_scales_available
+				else Vector3.ONE
+			)
 			for axis: int in range(3):
 				if not joint_definition.axis_control_declared(axis):
 					continue
-				var angle_scale: float = maxf(
-					maxf(
-						absf(deg_to_rad(joint_definition.lower_limit_degrees[axis])),
-						absf(deg_to_rad(joint_definition.upper_limit_degrees[axis]))
-					),
-					deg_to_rad(1.0)
-				)
+				var angle_scale: float = cached_angle_scales[axis]
+				var torque_scale: float = cached_torque_scales[axis]
+				if not cached_scales_available:
+					angle_scale = maxf(
+						maxf(
+							absf(deg_to_rad(joint_definition.lower_limit_degrees[axis])),
+							absf(deg_to_rad(joint_definition.upper_limit_degrees[axis]))
+						),
+						deg_to_rad(1.0)
+					)
+					torque_scale = maxf(
+						joint_definition.maximum_active_torque[axis],
+						MINIMUM_SCALE
+					)
 				result.append(clampf(current[axis] / angle_scale, -1.0, 1.0))
 				result.append(clampf(error[axis] / angle_scale, -1.0, 1.0))
-				var torque_scale: float = maxf(
-					joint_definition.maximum_active_torque[axis],
-					MINIMUM_SCALE
-				)
 				result.append(clampf(active_torque[axis] / torque_scale, -1.0, 1.0))
 		if limb_definition.end_effector != null and limb_definition.end_effector.enabled:
 			var runtime_effector: LimbEndEffector3D = (
@@ -312,10 +335,13 @@ static func encode_runtime_assembly(
 				result,
 				limb_definition.end_effector,
 				runtime_effector,
-				host_transform
+				host_transform.origin,
+				host_inverse_basis
 			)
 	var expected: int = observation_count(definitions)
-	return result if result.size() == expected and _all_finite(result) else PackedFloat64Array()
+	# MLBodyPartContract/MLBodyInterfaceManifest own numeric/range validation at the common body
+	# boundary. Re-scanning every articulated channel here doubled that work for each limb slot.
+	return result if result.size() == expected else PackedFloat64Array()
 
 
 static func runtime_state_for_limb(
@@ -423,11 +449,11 @@ static func _append_live_effector(
 	result: PackedFloat64Array,
 	definition: LimbEndEffectorDefinition,
 	effector: LimbEndEffector3D,
-	host_transform: Transform3D
+	host_origin: Vector3,
+	host_inverse_basis: Basis
 ) -> void:
-	var inverse_basis: Basis = host_transform.basis.inverse()
 	var position: Vector3 = (
-		effector.global_position if is_instance_valid(effector) else host_transform.origin
+		effector.global_position if is_instance_valid(effector) else host_origin
 	)
 	var grip: GenericGrip3D = (
 		effector.grip_actuator
@@ -439,7 +465,7 @@ static func _append_live_effector(
 	var candidate_present: bool = is_instance_valid(grip) and grip.candidate_present
 	result.append(1.0 if candidate_present else -1.0)
 	if candidate_present:
-		var candidate_offset: Vector3 = inverse_basis * (grip.candidate_point_world - position)
+		var candidate_offset: Vector3 = host_inverse_basis * (grip.candidate_point_world - position)
 		_append_vector(
 			result,
 			candidate_offset.normalized()
@@ -456,7 +482,7 @@ static func _append_live_effector(
 	var attached: bool = is_instance_valid(grip) and grip.attached
 	result.append(1.0 if attached else -1.0)
 	if attached:
-		var attached_offset: Vector3 = inverse_basis * (grip.attached_point_world() - position)
+		var attached_offset: Vector3 = host_inverse_basis * (grip.attached_point_world() - position)
 		_append_vector(
 			result,
 			attached_offset.normalized()
