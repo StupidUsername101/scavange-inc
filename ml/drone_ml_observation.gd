@@ -144,6 +144,9 @@ static func capture_ppo_propeller_states(drone) -> Array[Dictionary]:
 		result.append({
 			"slot_index": int(slot.slot_index),
 			"installed": propeller != null and not degraded,
+			"position_local": slot.position,
+			"lift_axis_local": slot.basis.y.normalized(),
+			"spin_direction": int(slot.spin_direction),
 			"realized_thrust_n": _array_value(
 				drone.last_propeller_realized_thrust_n,
 				array_index

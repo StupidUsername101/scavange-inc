@@ -13,7 +13,7 @@ signal failed(group_id: int, candidate_id: int, reason: String)
 const DRONE_SCENE = preload("res://scenes/server/server_drone.tscn")
 const LOADOUT_CONFIG = preload("res://ml/training/drone_training_loadout_config.gd")
 const SENSOR_INTERVAL_SECONDS = 0.05
-const QUAD_PROPELLER_COUNT = 4
+const MAXIMUM_PROPELLER_COUNT: int = 4
 const TRAINING_CONTACTS_REPORTED = 12
 const EVALUATION_WORLD_COLLISION_LAYER = 1 << 19
 
@@ -177,8 +177,8 @@ func begin() -> bool:
 	drone.visible = false
 	drone.set_ml_training_performance_mode(true)
 	drone.set_ml_episode_unlimited_battery(unlimited_battery)
-	if drone.propeller_slots.size() != QUAD_PROPELLER_COUNT:
-		return _fail_start("candidate evaluator requires exactly four propeller slots")
+	if drone.propeller_slots.is_empty() or drone.propeller_slots.size() > MAXIMUM_PROPELLER_COUNT:
+		return _fail_start("candidate evaluator requires between one and four propeller slots")
 	if not DroneMLBodyInterfaceFactory.matches_runtime_contract(
 		drone.model_body_interface(),
 		expected_body_runtime_contract
@@ -347,7 +347,10 @@ func _begin_case(next_case_index: int) -> bool:
 		return _fail_start("hidden evaluation drone could not reset with the frozen policy")
 	_register_evaluation_drone_combatant()
 	if _scenario_is_degraded_propeller(scenario_id):
-		var degraded_slot: int = posmod(case_seed, QUAD_PROPELLER_COUNT)
+		if drone.propeller_slots.is_empty():
+			return _fail_start("degraded-propeller scenario has no runtime propeller slot")
+		var degraded_array_index: int = posmod(case_seed, drone.propeller_slots.size())
+		var degraded_slot: int = int(drone.propeller_slots[degraded_array_index].slot_index)
 		if not drone.set_ml_propeller_degraded(degraded_slot, true):
 			return _fail_start("degraded-propeller scenario could not disable its selected rotor")
 	obstacle_probe = DroneTrainingObstacleSensor.clear_probe()

@@ -1,6 +1,8 @@
 class_name DroneMLBodyInterfaceFactory
 extends RefCounted
 
+const SLOT_LAYOUT = preload("res://scripts/drones/drone_slot_layout.gd")
+
 #######################################################
 # Adapts the existing gameplay DroneLoadout slot system into the shared model-forge body draft.
 # Nothing is finalized while the loadout is being edited. Training/group creation calls
@@ -39,6 +41,7 @@ static func create_draft(loadout: DroneLoadout) -> MLBodyBuildDraft:
 		slot.display_name = "Propeller %d" % (slot_index + 1)
 		slot.slot_type = &"propeller"
 		slot.accepted_part_tags.append(&"propeller")
+		slot.mount_transform = safe_loadout.get_propeller_slot_transform(slot_index)
 		if not draft.add_slot(slot, safe_loadout.get_propeller(slot_index)):
 			return draft
 	# Legacy gameplay AI chips are not part of a trainable model body. The learned policy itself
@@ -61,6 +64,40 @@ static func finalize_loadout(loadout: DroneLoadout) -> MLBodyInterfaceManifest:
 		return null
 	return draft.accept_build()
 
+
+
+
+static func is_legacy_stock_quad_manifest(manifest: MLBodyInterfaceManifest) -> bool:
+	# SAC/SAC-HER still use a structured warm-up mixer whose four action indices mean the stock
+	# front-left/front-right/back-left/back-right geometry. Four arbitrary creator-authored rotors
+	# are therefore not a legacy quad merely because the tensor width happens to be four.
+	if manifest == null or not manifest.finalized or manifest.control_count() != 4:
+		return false
+	var core: DroneCoreDefinition = manifest.core_record.get("part") as DroneCoreDefinition
+	if core == null or core.propeller_slot_count != 4:
+		return false
+	var propeller_controls: int = 0
+	for descriptor: Dictionary in manifest.control_descriptors:
+		if str(descriptor.get("kind", "")) == "propeller_throttle":
+			propeller_controls += 1
+	if propeller_controls != 4:
+		return false
+	for slot_index: int in range(4):
+		var expected_slot_id: String = "propeller_%d" % slot_index
+		var slot_definition: MLBodySlotDefinition = null
+		for record: Dictionary in manifest.slot_records:
+			if str(record.get("slot_id", "")) == expected_slot_id:
+				slot_definition = record.get("slot_definition") as MLBodySlotDefinition
+				break
+		if slot_definition == null:
+			return false
+		var expected_transform: Transform3D = Transform3D(
+			Basis.IDENTITY,
+			SLOT_LAYOUT.get_propeller_position(slot_index, core.body_size)
+		)
+		if not _transforms_match(slot_definition.mount_transform, expected_transform):
+			return false
+	return true
 
 static func matches_runtime_contract(
 	manifest: MLBodyInterfaceManifest,
@@ -132,7 +169,7 @@ static func training_runtime_validation_error(
 	var accepted_manifest: MLBodyInterfaceManifest = (
 		expected_manifest if expected_manifest != null else manifest
 	)
-	var mount_error: String = _attachment_mount_validation_error(drone, accepted_manifest)
+	var mount_error: String = _mount_validation_error(drone, accepted_manifest)
 	if not mount_error.is_empty():
 		return mount_error
 
@@ -197,26 +234,37 @@ static func training_runtime_validation_error(
 	return ""
 
 
-static func _attachment_mount_validation_error(
+static func _mount_validation_error(
 	drone: ServerDrone,
 	accepted_manifest: MLBodyInterfaceManifest
 ) -> String:
 	if not is_instance_valid(drone) or drone.loadout == null or accepted_manifest == null:
-		return "Drone attachment mount validation has no accepted runtime body."
+		return "Drone mount validation has no accepted runtime body."
 	for record: Dictionary in accepted_manifest.slot_records:
 		var slot_id: String = str(record.get("slot_id", ""))
-		if not slot_id.begins_with("attachment_"):
+		var is_propeller: bool = slot_id.begins_with("propeller_")
+		var is_attachment: bool = slot_id.begins_with("attachment_")
+		if not is_propeller and not is_attachment:
 			continue
-		var suffix: String = slot_id.trim_prefix("attachment_")
+		var suffix: String = (
+			slot_id.trim_prefix("propeller_")
+			if is_propeller
+			else slot_id.trim_prefix("attachment_")
+		)
 		if not suffix.is_valid_int():
-			return "Malformed finalized attachment slot %s." % slot_id
+			return "Malformed finalized mount slot %s." % slot_id
 		var slot_index: int = int(suffix)
 		var slot_definition: MLBodySlotDefinition = record.get("slot_definition") as MLBodySlotDefinition
 		if slot_definition == null:
 			return "%s has no frozen mount definition." % slot_id
+		var runtime_transform: Transform3D = (
+			drone.loadout.get_propeller_slot_transform(slot_index)
+			if is_propeller
+			else drone.loadout.get_attachment_slot_transform(slot_index)
+		)
 		if not _transforms_match(
 			slot_definition.mount_transform,
-			drone.loadout.get_attachment_slot_transform(slot_index)
+			runtime_transform
 		):
 			return "%s live mount transform differs from the accepted creator layout." % slot_id
 	return ""

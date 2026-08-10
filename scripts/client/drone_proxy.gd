@@ -80,6 +80,7 @@ var battery_charge_ratio := 0.0
 var core_definition_path := ""
 var battery_definition_path := ""
 var propeller_definition_paths: Array[String] = ["", "", "", ""]
+var propeller_slot_transforms: Array[Transform3D] = []
 var ai_chip_definition_paths: Array[String] = ["", "", "", "", "", "", "", ""]
 var attachment_definition_paths: Array[String] = ["", "", "", ""]
 var attachment_slot_transforms: Array[Transform3D] = []
@@ -135,6 +136,11 @@ func _apply_propeller_state(
 		"propeller_definition_paths",
 		[]
 	)
+	propeller_slot_transforms.clear()
+	var mount_values: Array = state.get("propeller_slot_transforms", [])
+	for mount_value: Variant in mount_values:
+		if mount_value is Transform3D:
+			propeller_slot_transforms.append(mount_value as Transform3D)
 	for slot_index in range(propeller_visuals.size()):
 		_apply_propeller_definition(
 			slot_index,
@@ -142,13 +148,20 @@ func _apply_propeller_state(
 			if slot_index < definition_paths.size()
 			else ""
 		)
-		var propeller_present := (
-			slot_index < presence.size()
+		# New server state carries exact creator-authored transforms. Fall back to the presence array
+		# for older/partial state producers so a missing transform field cannot hide every rotor.
+		var slot_supported: bool = (
+			slot_index < propeller_slot_transforms.size()
+			or (propeller_slot_transforms.is_empty() and slot_index < presence.size())
+		)
+		var propeller_present: bool = (
+			slot_supported
+			and slot_index < presence.size()
 			and bool(presence[slot_index])
 		)
 		propeller_visuals[slot_index].visible = propeller_present
 		propeller_guides[slot_index].visible = (
-			edit_preview and not propeller_present
+			edit_preview and slot_supported and not propeller_present
 		)
 
 
@@ -374,6 +387,17 @@ func _update_modular_slot_layout() -> void:
 		1.0,
 		current_battery_size.z / 0.28
 	)
+	for slot_index in range(propeller_visuals.size()):
+		var propeller_transform: Transform3D = (
+			propeller_slot_transforms[slot_index]
+			if slot_index < propeller_slot_transforms.size()
+			else Transform3D(
+				Basis.IDENTITY,
+				SLOT_LAYOUT.get_propeller_position(slot_index, current_core_size)
+			)
+		)
+		propeller_visuals[slot_index].transform = propeller_transform
+		propeller_guides[slot_index].transform = propeller_transform
 	for slot_index in range(ai_chip_visuals.size()):
 		var chip_position := SLOT_LAYOUT.get_ai_chip_position(
 			slot_index,

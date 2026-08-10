@@ -7832,7 +7832,8 @@ func _normalize_selected_loadout_values(
 				loadout.battery.maximum_power_output
 			)
 	if part_kind == &"propeller":
-		for slot_index in range(QUAD_PROPELLER_COUNT):
+		var propeller_count: int = loadout.core.propeller_slot_count if loadout.core != null else loadout.propellers.size()
+		for slot_index in range(propeller_count):
 			var propeller = loadout.get_propeller(slot_index)
 			if propeller == null:
 				continue
@@ -7868,7 +7869,7 @@ func _ensure_group_drone_profile_hardware(group: Dictionary) -> bool:
 			or str(architecture.get("body_interface_signature", "")) != manifest.contract_signature
 		):
 			return false
-	elif manifest.control_count() != QUAD_PROPELLER_COUNT:
+	elif not _manifest_is_legacy_four_propeller_body(manifest):
 		return false
 	group["body_interface"] = manifest.to_dictionary()
 	group["body_interface_signature"] = manifest.contract_signature
@@ -11150,6 +11151,21 @@ static func _create_group_training_algorithm(
 	)
 
 
+func _manifest_is_legacy_four_propeller_body(manifest: MLBodyInterfaceManifest) -> bool:
+	return DroneMLBodyInterfaceFactory.is_legacy_stock_quad_manifest(manifest)
+
+
+func _runtime_contract_is_stock_quad(contract: Dictionary) -> bool:
+	var controls_value: Variant = contract.get("controls", [])
+	if not (controls_value is Array) or int(contract.get("action_count", -1)) != QUAD_PROPELLER_COUNT:
+		return false
+	var propeller_controls: int = 0
+	for control_value: Variant in controls_value:
+		if control_value is Dictionary and str((control_value as Dictionary).get("kind", "")) == "propeller_throttle":
+			propeller_controls += 1
+	return propeller_controls == QUAD_PROPELLER_COUNT
+
+
 func _create_worker_group(
 	clone_selected: bool,
 	reward_components: Dictionary = {},
@@ -11193,11 +11209,11 @@ func _create_worker_group(
 	if accepted_body == null:
 		status_label.text = "Could not finalize the drone body interface."
 		return {}
-	if group_loadout.core == null or group_loadout.core.propeller_slot_count != QUAD_PROPELLER_COUNT:
-		status_label.text = "The current drone runtime requires exactly four propeller slots."
+	if group_loadout.core == null or group_loadout.core.propeller_slot_count <= 0 or group_loadout.core.propeller_slot_count > QUAD_PROPELLER_COUNT:
+		status_label.text = "The current drone runtime requires between one and four propeller slots."
 		return {}
-	if str(algorithm_id) != "ppo_clip" and accepted_body.control_count() != QUAD_PROPELLER_COUNT:
-		status_label.text = "%s currently supports only the four-propeller body profile; use PPO for controlled attachments." % str(algorithm_id)
+	if str(algorithm_id) != "ppo_clip" and not _manifest_is_legacy_four_propeller_body(accepted_body):
+		status_label.text = "%s currently supports only a plain four-propeller body; use PPO for custom rotor counts or controlled attachments." % str(algorithm_id)
 		return {}
 	var trainer_setup: Dictionary = initial_setup.duplicate(true)
 	var trainer_config: Dictionary = _group_requested_trainer_config(initial_setup)
@@ -12470,7 +12486,7 @@ func _open_model_body_creator() -> void:
 	if model_body_creator == null or not is_instance_valid(model_body_creator):
 		return
 	model_body_creator.open_creator()
-	status_label.text = "Model Body Creator opened. Choose a body and equip its parts."
+	status_label.text = "Model Body Creator opened. Choose a Core, lay out its mounts, then equip the authored slots."
 
 
 func _on_model_body_creator_requested(request: Dictionary) -> void:
@@ -13843,9 +13859,10 @@ func _spawn_training_worker(group: Dictionary, worker_index: int) -> bool:
 	_install_training_camera_part(drone)
 	drone.set_ml_training_performance_mode(true)
 	drone.set_ml_episode_unlimited_battery(unlimited_episode_battery)
-	if drone.propeller_slots.size() != QUAD_PROPELLER_COUNT:
+	var expected_propeller_slots: int = group_loadout.core.propeller_slot_count if group_loadout != null and group_loadout.core != null else 0
+	if expected_propeller_slots <= 0 or drone.propeller_slots.size() != expected_propeller_slots:
 		drone.queue_free()
-		status_label.text = "This training room accepts exactly four propellers."
+		status_label.text = "Drone worker rejected: runtime propeller slots do not match the accepted Core layout."
 		return false
 	var runtime_manifest: MLBodyInterfaceManifest = drone.model_body_interface()
 	var trainer: DroneTrainingAlgorithm = group.get("trainer") as DroneTrainingAlgorithm
@@ -14137,7 +14154,7 @@ func _spawn_model_instance(version: Dictionary, policy: DroneMLModel) -> void:
 		# Arbitrary attachment topology cannot be reconstructed from action count. The exact
 		# accepted gameplay loadout is the physical half of the model contract and must travel
 		# with a non-stock body checkpoint.
-		if saved_loadout_record.is_empty() and int(saved_runtime_contract.get("action_count", -1)) != QUAD_PROPELLER_COUNT:
+		if saved_loadout_record.is_empty() and not _runtime_contract_is_stock_quad(saved_runtime_contract):
 			drone.queue_free()
 			status_label.text = "Evaluator not spawned: the saved custom body is missing its frozen loadout."
 			return
@@ -14145,9 +14162,10 @@ func _spawn_model_instance(version: Dictionary, policy: DroneMLModel) -> void:
 	_install_training_camera_part(drone)
 	drone.set_ml_training_performance_mode(true)
 	drone.set_ml_episode_unlimited_battery(unlimited_episode_battery)
-	if drone.propeller_slots.size() != QUAD_PROPELLER_COUNT:
+	var evaluator_propeller_count: int = drone.loadout.core.propeller_slot_count if drone.loadout != null and drone.loadout.core != null else 0
+	if evaluator_propeller_count <= 0 or drone.propeller_slots.size() != evaluator_propeller_count:
 		drone.queue_free()
-		status_label.text = "Evaluation accepts exactly four propellers."
+		status_label.text = "Evaluator not spawned: runtime propeller slots do not match the saved body."
 		return
 	if not saved_runtime_contract.is_empty():
 		var evaluator_manifest: MLBodyInterfaceManifest = drone.model_body_interface()

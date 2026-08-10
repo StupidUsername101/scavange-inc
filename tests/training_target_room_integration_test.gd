@@ -61,7 +61,6 @@ func _test_library_windows_start_hidden() -> void:
 func _test_model_body_creator_carries_training_setup() -> void:
 	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
 	get_root().add_child(panel)
-	panel._load_preset_at(0)
 	_expect(panel.current_body_kind == "drone", "model creator opens on the authored quad-drone preset")
 	panel.hidden_width_input.value = 96.0
 	panel.hidden_depth_input.value = 3.0
@@ -96,7 +95,6 @@ func _test_model_body_creator_carries_training_setup() -> void:
 func _test_model_body_creator_fits_realized_content_to_viewport() -> void:
 	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
 	get_root().add_child(panel)
-	panel._load_preset_at(0)
 	panel._prepare_creator_window_size()
 	var viewport_size: Vector2i = panel._creator_viewport_size()
 	var maximum_width: int = maxi(
@@ -135,7 +133,7 @@ func _test_model_body_creator_fits_realized_content_to_viewport() -> void:
 	_expect(
 		panel.layout_preview != null
 		and panel.layout_preview.mouse_filter == Control.MOUSE_FILTER_PASS,
-		"3D Core preview passes unhandled wheel input to the creator scroller"
+		"3D Core preview participates in the creator's single Window-level wheel route"
 	)
 	panel.free()
 
@@ -143,12 +141,12 @@ func _test_model_body_creator_fits_realized_content_to_viewport() -> void:
 func _test_model_body_creator_staged_core_layout() -> void:
 	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
 	get_root().add_child(panel)
-	panel._load_preset_at(0)
 	_expect(
 		panel.creator_stage == MLBodyCreatorPanel.STAGE_CORE_LAYOUT
-		and panel.layout_attachment_capacity == 2
-		and panel.layout_attachment_transforms.is_empty(),
-		"drone creator begins with the selected Core and an empty authored attachment-slot layout"
+		and panel.layout_slot_capacity == 6
+		and panel.layout_slot_transforms.is_empty()
+		and panel.layout_slot_kinds.is_empty(),
+		"drone creator infers body kind from the Core and begins with no non-intrinsic mounts"
 	)
 	panel.mirror_next_checkbox.button_pressed = true
 	panel._on_layout_surface_clicked(Transform3D(
@@ -156,7 +154,7 @@ func _test_model_body_creator_staged_core_layout() -> void:
 		Vector3(0.0, 0.22, 0.0)
 	))
 	_expect(
-		panel.layout_attachment_transforms.is_empty(),
+		panel.layout_slot_transforms.is_empty(),
 		"mirror-next placement is atomic and rejects center-plane clicks instead of leaving an unmatched slot"
 	)
 	panel.mirror_next_checkbox.button_pressed = false
@@ -167,32 +165,68 @@ func _test_model_body_creator_staged_core_layout() -> void:
 	panel._on_layout_surface_clicked(first_mount)
 	panel._mirror_selected_layout_slot()
 	_expect(
-		panel.layout_attachment_transforms.size() == 2
-		and is_equal_approx(panel.layout_attachment_transforms[0].origin.x, 0.425)
-		and is_equal_approx(panel.layout_attachment_transforms[1].origin.x, -0.425),
-		"creator can mirror the selected Core attachment slot across the local X axis"
+		panel.layout_slot_transforms.size() == 2
+		and panel.layout_slot_kinds == [&"propeller", &"propeller"]
+		and is_equal_approx(panel.layout_slot_transforms[0].origin.x, 0.425)
+		and is_equal_approx(panel.layout_slot_transforms[1].origin.x, -0.425),
+		"creator can mirror the selected propeller mount across the local X axis"
 	)
-	var frozen_mounts: Array[Transform3D] = panel.layout_attachment_transforms.duplicate()
+	# RMB in the preview emits slot_remove_requested; exercise the same handler directly.
+	panel._on_layout_slot_remove_requested(1)
+	_expect(panel.layout_slot_transforms.size() == 1, "creator removes the exact right-clicked mount")
+	panel._mirror_selected_layout_slot()
+	# Changing the kind with no selected marker sets the kind for the next placement instead of
+	# rewriting an existing mount.
+	panel.layout_selected_slot_index = -1
+	panel.layout_slot_kind_picker.select(1)
+	panel._on_layout_surface_clicked(Transform3D(
+		panel._slot_basis_from_surface_normal(Vector3.FORWARD),
+		Vector3(0.0, 0.0, -0.425)
+	))
+	var propeller_mounts: Array[Transform3D] = []
+	var attachment_mounts: Array[Transform3D] = []
+	for layout_index: int in range(panel.layout_slot_transforms.size()):
+		if panel.layout_slot_kinds[layout_index] == &"propeller":
+			propeller_mounts.append(panel.layout_slot_transforms[layout_index])
+		elif panel.layout_slot_kinds[layout_index] == &"attachment":
+			attachment_mounts.append(panel.layout_slot_transforms[layout_index])
+	_expect(
+		propeller_mounts.size() == 2 and attachment_mounts.size() == 1,
+		"slot kind picker authors propeller and attachment mounts instead of inheriting Core defaults"
+	)
+	_expect(
+		propeller_mounts[0].basis.y.dot(Vector3.RIGHT) > 0.99
+		and propeller_mounts[1].basis.y.dot(Vector3.LEFT) > 0.99
+		and (-attachment_mounts[0].basis.y).dot(Vector3.FORWARD) > 0.99,
+		"free Core mounts preserve attachment outward orientation while propeller +Y points along its actual thrust surface normal"
+	)
 	panel._accept_core_layout()
 	_expect(
 		panel.creator_stage == MLBodyCreatorPanel.STAGE_HARDWARE
 		and panel.current_draft != null
 		and panel.current_draft.equipped_part(&"battery") == null
-		and panel.current_draft.equipped_part(&"propeller_0") == null
-		and panel.current_draft.equipped_part(&"attachment_0") == null
-		and panel.current_draft.equipped_part(&"attachment_1") == null,
-		"accepting the Core layout advances to hardware assignment with every new drone slot empty"
+		and panel.current_draft.slot_definition(&"propeller_0") != null
+		and panel.current_draft.slot_definition(&"propeller_1") != null
+		and panel.current_draft.slot_definition(&"propeller_2") == null
+		and panel.current_draft.slot_definition(&"propeller_3") == null
+		and panel.current_draft.slot_definition(&"attachment_0") != null
+		and panel.current_draft.slot_definition(&"attachment_1") == null,
+		"hardware assignment contains only the intrinsic battery plus the exact mount kinds placed in 3D"
 	)
-	var first_slot: MLBodySlotDefinition = panel.current_draft.slot_definition(&"attachment_0")
-	var second_slot: MLBodySlotDefinition = panel.current_draft.slot_definition(&"attachment_1")
+	var first_propeller_slot: MLBodySlotDefinition = panel.current_draft.slot_definition(&"propeller_0")
+	var second_propeller_slot: MLBodySlotDefinition = panel.current_draft.slot_definition(&"propeller_1")
+	var attachment_slot: MLBodySlotDefinition = panel.current_draft.slot_definition(&"attachment_0")
 	_expect(
-		first_slot != null
-		and second_slot != null
-		and panel._slot_is_required(first_slot)
-		and panel._slot_is_required(second_slot)
-		and DroneMLBodyInterfaceFactory._transforms_match(first_slot.mount_transform, frozen_mounts[0])
-		and DroneMLBodyInterfaceFactory._transforms_match(second_slot.mount_transform, frozen_mounts[1]),
-		"hardware-assignment keeps the accepted 3D mounts and requires hardware for every attachment slot the user explicitly placed"
+		first_propeller_slot != null
+		and second_propeller_slot != null
+		and attachment_slot != null
+		and panel._slot_is_required(first_propeller_slot)
+		and panel._slot_is_required(second_propeller_slot)
+		and panel._slot_is_required(attachment_slot)
+		and DroneMLBodyInterfaceFactory._transforms_match(first_propeller_slot.mount_transform, propeller_mounts[0])
+		and DroneMLBodyInterfaceFactory._transforms_match(second_propeller_slot.mount_transform, propeller_mounts[1])
+		and DroneMLBodyInterfaceFactory._transforms_match(attachment_slot.mount_transform, attachment_mounts[0]),
+		"hardware assignment preserves every accepted propeller/attachment mount transform"
 	)
 	panel.free()
 

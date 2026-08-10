@@ -128,6 +128,26 @@ func _init() -> void:
 		"summary has a finite positive lift-to-weight ratio"
 	)
 
+	var stock_quad_manifest: MLBodyInterfaceManifest = DroneMLBodyInterfaceFactory.finalize_loadout(private_copy)
+	_expect(
+		DroneMLBodyInterfaceFactory.is_legacy_stock_quad_manifest(stock_quad_manifest),
+		"legacy SAC-compatible detection accepts the real stock four-corner rotor geometry"
+	)
+
+	var custom_propeller_mount: Transform3D = Transform3D(
+		Basis(Vector3.UP, 0.35),
+		Vector3(0.37, 0.16, 0.29)
+	)
+	_expect(
+		private_copy.set_propeller_slot_transform(0, custom_propeller_mount),
+		"creator-authored propeller mount can be stored on a training loadout"
+	)
+	_expect(
+		not DroneMLBodyInterfaceFactory.is_legacy_stock_quad_manifest(
+			DroneMLBodyInterfaceFactory.finalize_loadout(private_copy)
+		),
+		"four arbitrary rotor controls are not mislabeled as the stock SAC mixer geometry"
+	)
 	var custom_mount_basis: Basis = Basis(
 		Vector3(0.0, 0.0, -1.0),
 		Vector3(-1.0, 0.0, 0.0),
@@ -147,6 +167,14 @@ func _init() -> void:
 		),
 		"deep loadout copies preserve creator-authored attachment position and orientation"
 	)
+	_expect(
+		copied_with_mounts != null
+		and DroneMLBodyInterfaceFactory._transforms_match(
+			copied_with_mounts.get_propeller_slot_transform(0),
+			custom_propeller_mount
+		),
+		"deep loadout copies preserve creator-authored propeller position and orientation"
+	)
 
 	var replacement_core: DroneCoreDefinition = (
 		MLBodyPartContract.deep_duplicate_resource(copied_with_mounts.core) as DroneCoreDefinition
@@ -165,7 +193,7 @@ func _init() -> void:
 
 	var record = DroneTrainingLoadoutConfig.to_record(private_copy)
 	_expect(not record.is_empty(), "checkpoint hardware record is produced")
-	_expect(int(record.get("schema_version", -1)) == 5, "hardware record persists generic Resource snapshots plus creator mount transforms")
+	_expect(int(record.get("schema_version", -1)) == 6, "hardware record persists generic Resource snapshots plus propeller/attachment mount transforms")
 	_expect(not record.has("ai_chips"), "training hardware persistence no longer serializes legacy AI chips")
 	var json_text = JSON.stringify(record)
 	_expect(not json_text.is_empty(), "checkpoint hardware record is JSON serializable")
@@ -236,6 +264,13 @@ func _init() -> void:
 	)
 	_expect(
 		DroneMLBodyInterfaceFactory._transforms_match(
+			restored.get_propeller_slot_transform(0),
+			custom_propeller_mount
+		),
+		"checkpoint round-trip preserves creator-authored propeller mount transforms"
+	)
+	_expect(
+		DroneMLBodyInterfaceFactory._transforms_match(
 			restored.get_attachment_slot_transform(0),
 			custom_mount
 		),
@@ -243,6 +278,7 @@ func _init() -> void:
 	)
 	var legacy_v4_record: Dictionary = record.duplicate(true)
 	legacy_v4_record["schema_version"] = 4
+	legacy_v4_record.erase("propeller_mounts")
 	legacy_v4_record.erase("attachment_mounts")
 	var legacy_v4_restored: DroneLoadout = DroneTrainingLoadoutConfig.from_record(legacy_v4_record)
 	_expect(
@@ -259,6 +295,15 @@ func _init() -> void:
 	_expect(
 		DroneTrainingLoadoutConfig.from_record(malformed_mount_record) == null,
 		"malformed creator mount records fail closed instead of silently snapping to an unrelated default"
+	)
+	var malformed_propeller_mount_record: Dictionary = record.duplicate(true)
+	var malformed_propeller_mounts: Array = (malformed_propeller_mount_record.get("propeller_mounts", []) as Array).duplicate(true)
+	if not malformed_propeller_mounts.is_empty():
+		malformed_propeller_mounts[0] = {"origin": [0.0], "basis": []}
+	malformed_propeller_mount_record["propeller_mounts"] = malformed_propeller_mounts
+	_expect(
+		DroneTrainingLoadoutConfig.from_record(malformed_propeller_mount_record) == null,
+		"malformed creator propeller mounts fail closed instead of silently reverting to a stock rotor location"
 	)
 
 	var grabber_loadout = MLBodyPresetLibrary.drone_quad_loadout(false)

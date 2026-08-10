@@ -2,7 +2,8 @@ class_name DronePPOActorCritic
 extends RefCounted
 
 const STATE_SCHEMA_VERSION: int = 6
-const PROPELLER_ACTION_COUNT: int = 4
+const PROPELLER_ACTION_COUNT: int = 4 # Legacy quad default.
+const MINIMUM_ACTION_COUNT: int = 1
 const ACTION_COUNT: int = PROPELLER_ACTION_COUNT
 const MAXIMUM_ACTION_COUNT: int = 256
 const HIDDEN_SIZE: int = 64
@@ -65,7 +66,7 @@ func _init(
 	)
 	action_count = clampi(
 		configured_action_count,
-		PROPELLER_ACTION_COUNT,
+		MINIMUM_ACTION_COUNT,
 		MAXIMUM_ACTION_COUNT
 	)
 	body_feature_count = maxi(configured_body_feature_count, 0)
@@ -497,7 +498,7 @@ func load_state(state: Dictionary) -> bool:
 		RLTrainingMath.finite_int_or(state.get("schema_version", 0), -1)
 		!= STATE_SCHEMA_VERSION
 		or not DronePPOObservationEncoder.is_trainable_schema(loaded_observation_schema)
-		or loaded_action_count < PROPELLER_ACTION_COUNT
+		or loaded_action_count < MINIMUM_ACTION_COUNT
 		or loaded_action_count > MAXIMUM_ACTION_COUNT
 		or loaded_body_feature_count < 0
 		or loaded_control_descriptors.size() != loaded_action_count
@@ -640,10 +641,10 @@ func _action_dictionary(
 	# Compatibility mirrors keep existing visualizers/runtime code useful while the generic
 	# body_commands contract becomes authoritative. They are derived, never independently learned.
 	var propellers: Array = observation.get("propellers", [])
-	if propellers.size() >= PROPELLER_ACTION_COUNT:
+	if not propellers.is_empty():
 		var propeller_commands: Array[Dictionary] = []
 		var propeller_mirror_valid: bool = true
-		for propeller_index in range(PROPELLER_ACTION_COUNT):
+		for propeller_index in range(propellers.size()):
 			var propeller: Dictionary = propellers[propeller_index]
 			var slot_index: int = int(propeller.get("slot_index", propeller_index))
 			var descriptor_index: int = _control_descriptor_index(
@@ -689,7 +690,13 @@ func _control_descriptor_index(slot_id: String, kind: String) -> int:
 
 
 func _observation_matches_body_interface(observation: Dictionary) -> bool:
-	if not DronePPOObservationEncoder.has_valid_quad_topology(observation):
+	if not DronePPOObservationEncoder.has_valid_propeller_topology(observation):
+		return false
+	var expected_propeller_count: int = 0
+	for descriptor: Dictionary in control_descriptors:
+		if str(descriptor.get("kind", "")) == "propeller_throttle":
+			expected_propeller_count += 1
+	if expected_propeller_count > 0 and (observation.get("propellers", []) as Array).size() != expected_propeller_count:
 		return false
 	if observation_schema_version < DronePPOObservationEncoder.BODY_INTERFACE_SCHEMA_VERSION:
 		return true

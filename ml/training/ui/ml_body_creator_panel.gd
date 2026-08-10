@@ -13,6 +13,9 @@ const WINDOW_EDGE_MARGIN_PX: int = 36
 const STAGE_CORE_LAYOUT: int = 0
 const STAGE_HARDWARE: int = 1
 const MINIMUM_SLOT_SPACING_M: float = 0.075
+const MAX_CREATOR_PROPELLER_SLOTS: int = 4
+const MAX_CREATOR_ATTACHMENT_SLOTS: int = 4
+const CREATOR_SCROLL_STEP_PX: int = 72
 
 var root_panel: PanelContainer
 var window_layout: VBoxContainer
@@ -22,15 +25,14 @@ var footer_panel: PanelContainer
 var stage_label: Label
 var layout_stage: VBoxContainer
 var hardware_stage: VBoxContainer
-var preset_row: HBoxContainer
 var core_row: HBoxContainer
 var layout_preview: MLBodyCoreLayoutPreview
 var layout_slot_count_label: Label
 var layout_selected_label: Label
+var layout_slot_kind_picker: OptionButton
 var mirror_next_checkbox: CheckBox
 var back_button: Button
 var cancel_button: Button
-var preset_picker: OptionButton
 var core_picker: OptionButton
 var group_name_input: LineEdit
 var description_label: Label
@@ -57,12 +59,14 @@ var slot_parts: Dictionary = {}
 var initial_slot_keys: Dictionary = {}
 var changed_slot_ids: Dictionary = {}
 var core_parts: Dictionary = {}
+var core_preset_ids: Dictionary = {}
 var reward_cardsets: Dictionary = {}
 var reward_cardset_library: TrainingRewardCardsetLibrary = TrainingRewardCardsetLibrary.new()
 var suppress_training_ui_callbacks: bool = false
 var creator_stage: int = STAGE_CORE_LAYOUT
-var layout_attachment_capacity: int = 0
-var layout_attachment_transforms: Array[Transform3D] = []
+var layout_slot_capacity: int = 0
+var layout_slot_transforms: Array[Transform3D] = []
+var layout_slot_kinds: Array[StringName] = []
 var layout_selected_slot_index: int = -1
 
 
@@ -75,16 +79,45 @@ func _ready() -> void:
 	exclusive = false
 	close_requested.connect(hide)
 	_build_ui()
-	_populate_presets()
+	_populate_core_picker()
+	if core_picker.item_count > 0 and not core_picker.disabled:
+		var preferred_index: int = _preferred_initial_core_index()
+		core_picker.select(preferred_index)
+		_on_core_selected(preferred_index)
 	hide()
 
 
-func open_creator() -> void:
-	if preset_picker == null:
+func _input(event: InputEvent) -> void:
+	# A single Window-level wheel route keeps scrolling reliable even when the cursor is over
+	# OptionButtons/SpinBoxes or the embedded SubViewport. Ctrl+wheel over the Core preview remains
+	# reserved for camera zoom; every ordinary wheel event scrolls the creator page.
+	if not visible or content_scroll == null or not (event is InputEventMouseButton):
 		return
-	if preset_picker.item_count > 0 and current_draft == null:
-		preset_picker.select(0)
-		_load_preset_at(0)
+	var mouse_button: InputEventMouseButton = event as InputEventMouseButton
+	if not mouse_button.pressed or mouse_button.button_index not in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		return
+	if (
+		mouse_button.ctrl_pressed
+		and creator_stage == STAGE_CORE_LAYOUT
+		and layout_preview != null
+		and layout_preview.get_global_rect().has_point(mouse_button.position)
+	):
+		return
+	var direction: int = -1 if mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP else 1
+	content_scroll.scroll_vertical += direction * CREATOR_SCROLL_STEP_PX
+	set_input_as_handled()
+
+
+func open_creator() -> void:
+	if core_picker == null:
+		return
+	if current_draft == null:
+		if core_picker.item_count <= 0:
+			_populate_core_picker()
+		if core_picker.item_count > 0:
+			var selected_index: int = maxi(core_picker.selected, 0)
+			core_picker.select(selected_index)
+			_on_core_selected(selected_index)
 	_set_creator_stage(STAGE_CORE_LAYOUT)
 	_prepare_creator_window_size()
 	if content_scroll != null:
@@ -203,18 +236,8 @@ func _build_ui() -> void:
 	identity.add_theme_constant_override("separation", 7)
 	identity_panel.add_child(identity)
 
-	preset_row = HBoxContainer.new()
-	preset_row.add_theme_constant_override("separation", 8)
-	identity.add_child(preset_row)
-	var preset_label: Label = Label.new()
-	preset_label.text = "Body family"
-	preset_label.custom_minimum_size.x = 120.0
-	preset_row.add_child(preset_label)
-	preset_picker = OptionButton.new()
-	preset_picker.fit_to_longest_item = false
-	preset_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	preset_picker.item_selected.connect(_on_preset_selected)
-	preset_row.add_child(preset_picker)
+	# The selected physical Core is the only body-entry selector. Runtime adapters are inferred
+	# internally from the Core resource; there is deliberately no separate body-family state.
 
 	core_row = HBoxContainer.new()
 	core_row.add_theme_constant_override("separation", 8)
@@ -257,13 +280,33 @@ func _build_ui() -> void:
 	layout_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	layout_preview.surface_clicked.connect(_on_layout_surface_clicked)
 	layout_preview.slot_selected.connect(_on_layout_slot_selected)
+	layout_preview.slot_remove_requested.connect(_on_layout_slot_remove_requested)
 	preview_body.add_child(layout_preview)
 
 	var preview_hint: Label = Label.new()
-	preview_hint.text = "Left-click the Core to place a universal attachment slot. Click a marker to select it. Right-drag rotates the view; Ctrl+wheel zooms. Normal wheel scrolling still scrolls the creator."
+	preview_hint.text = "Choose a slot kind, then left-click the Core to place it. Left-click a marker to select it, right-click a marker to remove it, and middle-drag to rotate. Ctrl+wheel zooms."
 	preview_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	preview_hint.add_theme_color_override("font_color", MUTED)
 	preview_body.add_child(preview_hint)
+
+	var slot_kind_row: HBoxContainer = HBoxContainer.new()
+	slot_kind_row.add_theme_constant_override("separation", 8)
+	preview_body.add_child(slot_kind_row)
+	var slot_kind_label: Label = Label.new()
+	slot_kind_label.text = "New mount kind"
+	slot_kind_label.custom_minimum_size.x = 120.0
+	slot_kind_row.add_child(slot_kind_label)
+	layout_slot_kind_picker = OptionButton.new()
+	layout_slot_kind_picker.fit_to_longest_item = false
+	layout_slot_kind_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	layout_slot_kind_picker.add_item("Propeller")
+	layout_slot_kind_picker.set_item_metadata(0, "propeller")
+	layout_slot_kind_picker.add_item("Attachment")
+	layout_slot_kind_picker.set_item_metadata(1, "attachment")
+	layout_slot_kind_picker.item_selected.connect(_on_layout_slot_kind_selected)
+	slot_kind_row.add_child(layout_slot_kind_picker)
+	# Keep the choice above the 3D viewport so the mount type is explicit before the user clicks.
+	preview_body.move_child(slot_kind_row, 0)
 
 	var slot_controls: HBoxContainer = HBoxContainer.new()
 	slot_controls.add_theme_constant_override("separation", 7)
@@ -418,138 +461,235 @@ func _back_to_core_layout() -> void:
 
 
 func _initialize_layout_for_current_core() -> void:
-	layout_attachment_transforms.clear()
+	layout_slot_transforms.clear()
+	layout_slot_kinds.clear()
 	layout_selected_slot_index = -1
-	layout_attachment_capacity = 0
+	layout_slot_capacity = 0
 	var physical_core: Resource = _current_physical_core()
 	if physical_core is DroneCoreDefinition:
-		layout_attachment_capacity = maxi((physical_core as DroneCoreDefinition).attachment_slot_count, 0)
+		var drone_core: DroneCoreDefinition = physical_core as DroneCoreDefinition
+		# Existing Core resources describe a total physical mounting budget. In the model creator the
+		# non-intrinsic mounts are universal: the user decides which become rotors vs attachments.
+		layout_slot_capacity = clampi(
+			maxi(drone_core.propeller_slot_count, 0) + maxi(drone_core.attachment_slot_count, 0),
+			0,
+			MAX_CREATOR_PROPELLER_SLOTS + MAX_CREATOR_ATTACHMENT_SLOTS
+		)
+	if layout_slot_kind_picker != null:
+		layout_slot_kind_picker.disabled = current_body_kind != "drone" or layout_slot_capacity <= 0
+		if layout_slot_kind_picker.item_count > 0 and layout_slot_kind_picker.selected < 0:
+			layout_slot_kind_picker.select(0)
 	if layout_preview != null:
 		layout_preview.set_core_resource(physical_core)
-		layout_preview.placement_enabled = current_body_kind == "drone" and layout_attachment_capacity > 0
+		layout_preview.placement_enabled = current_body_kind == "drone" and layout_slot_capacity > 0
 	_refresh_layout_preview()
 
 
 func _refresh_layout_preview() -> void:
 	if layout_preview != null:
-		layout_preview.set_slot_transforms(layout_attachment_transforms, layout_selected_slot_index)
+		layout_preview.set_slots(layout_slot_transforms, layout_slot_kinds, layout_selected_slot_index)
 	if layout_slot_count_label != null:
 		if current_body_kind == "drone":
-			layout_slot_count_label.text = "Attachment slots: %d / %d placed" % [
-				layout_attachment_transforms.size(),
-				layout_attachment_capacity,
+			layout_slot_count_label.text = "Placed mounts: %d / %d   •   %d propeller   •   %d attachment   •   battery is intrinsic" % [
+				layout_slot_transforms.size(),
+				layout_slot_capacity,
+				_layout_slot_kind_count(&"propeller"),
+				_layout_slot_kind_count(&"attachment"),
 			]
 		else:
 			layout_slot_count_label.text = "Free Core slot placement is currently available for drone Cores."
 	if layout_selected_label != null:
-		if layout_selected_slot_index >= 0 and layout_selected_slot_index < layout_attachment_transforms.size():
-			var mount: Transform3D = layout_attachment_transforms[layout_selected_slot_index]
-			layout_selected_label.text = "Selected attachment slot %d  ·  local mount (%.2f, %.2f, %.2f)" % [
-				layout_selected_slot_index + 1,
+		if layout_selected_slot_index >= 0 and layout_selected_slot_index < layout_slot_transforms.size():
+			var mount: Transform3D = layout_slot_transforms[layout_selected_slot_index]
+			var kind: StringName = layout_slot_kinds[layout_selected_slot_index]
+			layout_selected_label.text = "Selected %s %d  ·  local (%.2f, %.2f, %.2f)" % [
+				str(kind).capitalize(),
+				_layout_kind_ordinal(layout_selected_slot_index),
 				mount.origin.x,
 				mount.origin.y,
 				mount.origin.z,
 			]
 		else:
-			layout_selected_label.text = "No attachment slot selected."
+			layout_selected_label.text = "No slot selected."
 	_refresh_summary()
+
+
+func _selected_layout_slot_kind() -> StringName:
+	if layout_slot_kind_picker == null or layout_slot_kind_picker.selected < 0:
+		return &"propeller"
+	return StringName(str(layout_slot_kind_picker.get_item_metadata(layout_slot_kind_picker.selected)))
+
+
+func _layout_slot_kind_count(kind: StringName) -> int:
+	var result: int = 0
+	for existing_kind: StringName in layout_slot_kinds:
+		if existing_kind == kind:
+			result += 1
+	return result
+
+
+func _layout_kind_ordinal(layout_index: int) -> int:
+	if layout_index < 0 or layout_index >= layout_slot_kinds.size():
+		return 0
+	var kind: StringName = layout_slot_kinds[layout_index]
+	var ordinal: int = 0
+	for index: int in range(layout_index + 1):
+		if layout_slot_kinds[index] == kind:
+			ordinal += 1
+	return ordinal
+
+
+func _layout_kind_limit(kind: StringName) -> int:
+	if kind == &"propeller":
+		return MAX_CREATOR_PROPELLER_SLOTS
+	if kind == &"attachment":
+		return MAX_CREATOR_ATTACHMENT_SLOTS
+	return 0
+
+
+func _layout_capacity_error(kind: StringName, additional_count: int) -> String:
+	if additional_count <= 0:
+		return ""
+	if layout_slot_transforms.size() + additional_count > layout_slot_capacity:
+		return "This Core has room for at most %d user-authored mounts." % layout_slot_capacity
+	var kind_limit: int = _layout_kind_limit(kind)
+	if kind_limit <= 0:
+		return "Slot kind '%s' is not supported by the drone runtime." % str(kind)
+	if _layout_slot_kind_count(kind) + additional_count > kind_limit:
+		return "The current drone runtime supports at most %d %s mounts." % [kind_limit, str(kind)]
+	return ""
+
+
+func _on_layout_slot_kind_selected(_picker_index: int) -> void:
+	# This selector describes the *next* mount. Selecting an existing marker must never make a later
+	# picker change silently rewrite an already-authored slot. Retype by RMB-removing and replacing it.
+	status_label.text = "New placements will create %s mounts." % str(_selected_layout_slot_kind())
+	status_label.add_theme_color_override("font_color", MUTED)
 
 
 func _on_layout_surface_clicked(mount_transform: Transform3D) -> void:
 	if current_body_kind != "drone":
 		return
+	var slot_kind: StringName = _selected_layout_slot_kind()
+	mount_transform = _mount_transform_for_kind(mount_transform, slot_kind)
 	var mirror_pair: bool = mirror_next_checkbox != null and mirror_next_checkbox.button_pressed
 	var required_capacity: int = 2 if mirror_pair else 1
-	if layout_attachment_transforms.size() + required_capacity > layout_attachment_capacity:
-		_set_error(
-			"Mirror placement needs two free attachment slots on this Core."
-			if mirror_pair
-			else "This Core supports at most %d creator attachment slots." % layout_attachment_capacity
-		)
+	var capacity_error: String = _layout_capacity_error(slot_kind, required_capacity)
+	if not capacity_error.is_empty():
+		_set_error(capacity_error)
 		return
 	if _layout_slot_too_close(mount_transform.origin):
-		_set_error("That attachment slot overlaps an existing mount. Pick a different point on the Core.")
+		_set_error("That slot overlaps an existing mount. Pick a different point on the Core.")
 		return
 	var mirrored: Transform3D = Transform3D.IDENTITY
 	if mirror_pair:
-		mirrored = _mirrored_layout_transform(mount_transform)
+		mirrored = _mirrored_layout_transform(mount_transform, slot_kind)
 		if mirrored.origin.distance_to(mount_transform.origin) <= 0.02:
 			_set_error("Mirror placement needs a point away from the Core's center plane.")
 			return
 		if _layout_slot_too_close(mirrored.origin):
-			_set_error("The mirrored mount overlaps an existing attachment slot.")
+			_set_error("The mirrored mount overlaps an existing slot.")
 			return
-	layout_attachment_transforms.append(mount_transform)
-	layout_selected_slot_index = layout_attachment_transforms.size() - 1
+	layout_slot_transforms.append(mount_transform)
+	layout_slot_kinds.append(slot_kind)
+	layout_selected_slot_index = layout_slot_transforms.size() - 1
 	if mirror_pair:
-		layout_attachment_transforms.append(mirrored)
-		layout_selected_slot_index = layout_attachment_transforms.size() - 1
+		layout_slot_transforms.append(mirrored)
+		layout_slot_kinds.append(slot_kind)
+		layout_selected_slot_index = layout_slot_transforms.size() - 1
 	status_label.text = ""
 	status_label.add_theme_color_override("font_color", MUTED)
 	_refresh_layout_preview()
 
 
 func _on_layout_slot_selected(slot_index: int) -> void:
-	if slot_index < 0 or slot_index >= layout_attachment_transforms.size():
+	if slot_index < 0 or slot_index >= layout_slot_transforms.size():
 		return
 	layout_selected_slot_index = slot_index
 	_refresh_layout_preview()
 
 
+func _on_layout_slot_remove_requested(slot_index: int) -> void:
+	if slot_index < 0 or slot_index >= layout_slot_transforms.size():
+		return
+	layout_selected_slot_index = slot_index
+	_delete_selected_layout_slot()
+
+
 func _mirror_selected_layout_slot() -> void:
-	if layout_selected_slot_index < 0 or layout_selected_slot_index >= layout_attachment_transforms.size():
-		_set_error("Select an attachment-slot marker first.")
+	if layout_selected_slot_index < 0 or layout_selected_slot_index >= layout_slot_transforms.size():
+		_set_error("Select a slot marker first.")
 		return
-	if layout_attachment_transforms.size() >= layout_attachment_capacity:
-		_set_error("This Core has no unused attachment-slot capacity to mirror into.")
+	var source_kind: StringName = layout_slot_kinds[layout_selected_slot_index]
+	var capacity_error: String = _layout_capacity_error(source_kind, 1)
+	if not capacity_error.is_empty():
+		_set_error(capacity_error)
 		return
-	var source: Transform3D = layout_attachment_transforms[layout_selected_slot_index]
-	var mirrored: Transform3D = _mirrored_layout_transform(source)
+	var source: Transform3D = layout_slot_transforms[layout_selected_slot_index]
+	var mirrored: Transform3D = _mirrored_layout_transform(source, source_kind)
 	if mirrored.origin.distance_to(source.origin) <= 0.02:
 		_set_error("A slot on the mirror plane has no distinct left/right counterpart.")
 		return
 	if _layout_slot_too_close(mirrored.origin):
-		_set_error("The mirrored mount already overlaps an existing attachment slot.")
+		_set_error("The mirrored mount already overlaps an existing slot.")
 		return
-	layout_attachment_transforms.append(mirrored)
-	layout_selected_slot_index = layout_attachment_transforms.size() - 1
-	status_label.text = "Mirrored the selected slot across the Core's local X axis."
+	layout_slot_transforms.append(mirrored)
+	layout_slot_kinds.append(source_kind)
+	layout_selected_slot_index = layout_slot_transforms.size() - 1
+	status_label.text = "Mirrored the selected %s slot across the Core's local X axis." % str(source_kind)
 	status_label.add_theme_color_override("font_color", MUTED)
 	_refresh_layout_preview()
 
 
 func _delete_selected_layout_slot() -> void:
-	if layout_selected_slot_index < 0 or layout_selected_slot_index >= layout_attachment_transforms.size():
-		_set_error("Select an attachment-slot marker first.")
+	if layout_selected_slot_index < 0 or layout_selected_slot_index >= layout_slot_transforms.size():
+		_set_error("Select a slot marker first.")
 		return
-	layout_attachment_transforms.remove_at(layout_selected_slot_index)
-	layout_selected_slot_index = mini(layout_selected_slot_index, layout_attachment_transforms.size() - 1)
-	status_label.text = "Attachment slot removed. Remaining slots were renumbered in layout order."
+	layout_slot_transforms.remove_at(layout_selected_slot_index)
+	if layout_selected_slot_index < layout_slot_kinds.size():
+		layout_slot_kinds.remove_at(layout_selected_slot_index)
+	layout_selected_slot_index = mini(layout_selected_slot_index, layout_slot_transforms.size() - 1)
+	status_label.text = "Slot removed. Remaining mounts were renumbered in layout order."
 	status_label.add_theme_color_override("font_color", MUTED)
 	_refresh_layout_preview()
 
 
 func _layout_slot_too_close(position: Vector3) -> bool:
-	for existing: Transform3D in layout_attachment_transforms:
+	for existing: Transform3D in layout_slot_transforms:
 		if existing.origin.distance_to(position) < MINIMUM_SLOT_SPACING_M:
 			return true
 	return false
 
 
-func _mirrored_layout_transform(source: Transform3D) -> Transform3D:
+func _mount_transform_for_kind(source: Transform3D, kind: StringName) -> Transform3D:
+	# The preview encodes the outward surface normal as -Y because articulated attachments use that
+	# convention. Propeller physics, however, applies thrust along +Y. Convert rotor mounts here so
+	# a rotor placed on the top of a Core actually pushes upward instead of into the chassis.
+	var outward_normal: Vector3 = -source.basis.y.normalized()
+	return Transform3D(_slot_basis_from_surface_normal(outward_normal, kind), source.origin)
+
+
+func _mirrored_layout_transform(source: Transform3D, kind: StringName) -> Transform3D:
 	var mirrored_origin: Vector3 = source.origin
 	mirrored_origin.x = -mirrored_origin.x
-	var surface_normal: Vector3 = -source.basis.y.normalized()
+	var surface_normal: Vector3 = (
+		source.basis.y.normalized()
+		if kind == &"propeller"
+		else -source.basis.y.normalized()
+	)
 	surface_normal.x = -surface_normal.x
-	var mirrored_basis: Basis = _slot_basis_from_surface_normal(surface_normal)
+	var mirrored_basis: Basis = _slot_basis_from_surface_normal(surface_normal, kind)
 	return Transform3D(mirrored_basis, mirrored_origin)
 
 
-func _slot_basis_from_surface_normal(surface_normal: Vector3) -> Basis:
+func _slot_basis_from_surface_normal(
+	surface_normal: Vector3,
+	kind: StringName = &"attachment"
+) -> Basis:
 	var normal: Vector3 = surface_normal.normalized()
 	if normal.length_squared() <= 0.000001:
 		normal = Vector3.DOWN
-	var y_axis: Vector3 = -normal
+	var y_axis: Vector3 = normal if kind == &"propeller" else -normal
 	var helper: Vector3 = Vector3.FORWARD
 	if absf(y_axis.dot(helper)) > 0.92:
 		helper = Vector3.RIGHT
@@ -567,22 +707,37 @@ func _accept_core_layout() -> void:
 		if source_core == null:
 			_set_error("The selected drone body has no physical Core.")
 			return
+		var propeller_count: int = _layout_slot_kind_count(&"propeller")
+		var attachment_count: int = _layout_slot_kind_count(&"attachment")
+		if propeller_count <= 0:
+			_set_error("Place at least one propeller slot before accepting the drone Core layout.")
+			return
 		var core_copy: DroneCoreDefinition = (
 			MLBodyPartContract.deep_duplicate_resource(source_core) as DroneCoreDefinition
 		)
 		if core_copy == null:
 			_set_error("The selected Core could not be copied into the hardware stage.")
 			return
-		core_copy.attachment_slot_count = layout_attachment_transforms.size()
+		core_copy.propeller_slot_count = propeller_count
+		core_copy.attachment_slot_count = attachment_count
+		core_copy.ai_chip_slot_count = 0
 		var empty_loadout: DroneLoadout = DroneLoadout.new()
 		empty_loadout.install_core(core_copy)
-		for slot_index: int in range(layout_attachment_transforms.size()):
-			if not empty_loadout.set_attachment_slot_transform(
-				slot_index,
-				layout_attachment_transforms[slot_index]
-			):
-				_set_error("Attachment-slot layout %d could not be transferred to the runtime body." % (slot_index + 1))
-				return
+		var propeller_index: int = 0
+		var attachment_index: int = 0
+		for layout_index: int in range(layout_slot_transforms.size()):
+			var slot_kind: StringName = layout_slot_kinds[layout_index]
+			var slot_transform: Transform3D = layout_slot_transforms[layout_index]
+			if slot_kind == &"propeller":
+				if not empty_loadout.set_propeller_slot_transform(propeller_index, slot_transform):
+					_set_error("Propeller mount %d could not be transferred to the runtime body." % (layout_index + 1))
+					return
+				propeller_index += 1
+			elif slot_kind == &"attachment":
+				if not empty_loadout.set_attachment_slot_transform(attachment_index, slot_transform):
+					_set_error("Attachment mount %d could not be transferred to the runtime body." % (layout_index + 1))
+					return
+				attachment_index += 1
 		var next_draft: MLBodyBuildDraft = DroneMLBodyInterfaceFactory.create_draft(empty_loadout)
 		if next_draft == null or next_draft.core == null or not next_draft.last_error.is_empty():
 			_set_error("The accepted Core layout could not create an empty hardware draft.")
@@ -595,9 +750,8 @@ func _accept_core_layout() -> void:
 		_rebuild_slot_rows()
 		_refresh_training_settings_for_body(true)
 	else:
-		# The staged UI is shared now, but arbitrary mount placement is intentionally not faked for
-		# body families whose physics runtimes do not yet consume generic Core mount transforms. Their
-		# authored topology is retained, while every runtime-editable hardware slot still begins empty.
+		# Non-drone runtimes still use their authored fixed topology until they gain a generic Core
+		# mount installer. The family selector is gone; selecting such a Core chooses that adapter.
 		for entry: Dictionary in current_draft.slots:
 			var authored_slot: MLBodySlotDefinition = entry.get("definition") as MLBodySlotDefinition
 			if authored_slot != null and _slot_runtime_edit_supported(authored_slot):
@@ -802,7 +956,7 @@ func _refresh_training_settings_for_body(reset_values: bool = false) -> void:
 	var previous_algorithm: String = _selected_algorithm_id()
 	algorithm_picker.clear()
 	if current_body_kind == "drone":
-		var control_count: int = int(current_draft.ui_snapshot().get("preview_control_count", 0)) if current_draft != null else 0
+		var legacy_four_propeller_body: bool = _drone_body_supports_legacy_four_propeller_algorithm()
 		var selected_valid_index: int = -1
 		var ppo_index: int = -1
 		for descriptor: Dictionary in DroneTrainingAlgorithmCatalog.descriptors():
@@ -810,8 +964,11 @@ func _refresh_training_settings_for_body(reset_values: bool = false) -> void:
 			var descriptor_id: String = str(descriptor.get("id", "ppo_clip"))
 			algorithm_picker.add_item(str(descriptor.get("display_name", "Learning algorithm")))
 			algorithm_picker.set_item_metadata(index, descriptor_id)
-			algorithm_picker.set_item_tooltip(index, str(descriptor.get("description", "")))
-			var supported: bool = descriptor_id == "ppo_clip" or control_count == 4
+			var supported: bool = descriptor_id == "ppo_clip" or legacy_four_propeller_body
+			var algorithm_tooltip: String = str(descriptor.get("description", ""))
+			if not supported:
+				algorithm_tooltip += "\n\nThis algorithm still assumes the authored stock four-rotor geometry. Use PPO for freely placed rotors or controlled attachments."
+			algorithm_picker.set_item_tooltip(index, algorithm_tooltip)
 			algorithm_picker.set_item_disabled(index, not supported)
 			if descriptor_id == "ppo_clip":
 				ppo_index = index
@@ -868,6 +1025,13 @@ func _refresh_training_settings_for_body(reset_values: bool = false) -> void:
 				control_rate_input.value = 1.0 / TurretTrainingCoordinator.DECISION_INTERVAL_SECONDS
 	_refresh_reward_cardsets(false)
 	suppress_training_ui_callbacks = false
+
+
+func _drone_body_supports_legacy_four_propeller_algorithm() -> bool:
+	if current_draft == null:
+		return false
+	var manifest: MLBodyInterfaceManifest = current_draft.duplicate_editable().accept_build()
+	return DroneMLBodyInterfaceFactory.is_legacy_stock_quad_manifest(manifest)
 
 
 func _reward_body_type() -> String:
@@ -949,99 +1113,89 @@ func _training_request() -> Dictionary:
 	}
 
 
-func _populate_presets() -> void:
-	preset_picker.clear()
-	var presets: Array[MLBodyPreset] = MLBodyPresetLibrary.built_in_presets()
-	for preset: MLBodyPreset in presets:
-		var index: int = preset_picker.item_count
-		preset_picker.add_item(preset.display_name)
-		preset_picker.set_item_metadata(index, str(preset.preset_id))
-	if preset_picker.item_count > 0:
-		preset_picker.select(0)
-		_load_preset_at(0)
-
-
-func _on_preset_selected(index: int) -> void:
-	_load_preset_at(index)
-
-
-func _load_preset_at(index: int) -> void:
-	if index < 0 or index >= preset_picker.item_count:
-		return
-	var preset_id: StringName = StringName(str(preset_picker.get_item_metadata(index)))
-	var preset: MLBodyPreset = MLBodyPresetLibrary.preset_by_id(preset_id)
-	if preset == null:
-		_set_error("The selected body preset could not be loaded.")
-		return
-	var draft: MLBodyBuildDraft = preset.instantiate_draft()
-	if draft == null or draft.core == null or not draft.last_error.is_empty():
-		_set_error("The selected body preset could not create an editable draft.")
-		return
-	current_preset_id = preset_id
-	current_draft = draft
-	current_body_kind = str(draft.core_contract.get("body_kind", preset.body_kind))
-	changed_slot_ids.clear()
-	initial_slot_keys.clear()
-	status_label.text = ""
-	status_label.add_theme_color_override("font_color", MUTED)
-	slot_parts.clear()
-	description_label.text = preset.description
-	core_label.text = "Core: %s   •   Family: %s" % [
-		str(draft.ui_snapshot().get("core_name", "Core")),
-		current_body_kind.replace("_", " ").capitalize(),
-	]
-	group_name_input.text = "%s group" % preset.display_name
-	_refresh_training_settings_for_body(true)
-	_populate_core_picker()
-	_initialize_layout_for_current_core()
-	_set_creator_stage(STAGE_CORE_LAYOUT)
-	_refresh_summary()
-
-
 func _populate_core_picker() -> void:
 	core_picker.clear()
 	core_parts.clear()
-	var current_core: Resource = _current_physical_core()
-	if current_core == null:
-		core_picker.add_item("No compatible physical Core")
-		core_picker.disabled = true
-		return
+	core_preset_ids.clear()
 	core_picker.disabled = false
-	var current_key: String = CURRENT_KEY_PREFIX + "core"
-	core_parts[current_key] = MLBodyPartContract.deep_duplicate_resource(current_core)
-	core_picker.add_item("%s  • current" % MLBodyPartCatalog.display_name(current_core))
-	core_picker.set_item_metadata(0, current_key)
-	core_picker.select(0)
-	var current_source: String = MLBodyPartContract.resource_source_path(current_core)
+
+	# Saved gameplay Cores are the primary creator entry point. The runtime family is inferred from
+	# the concrete Core resource, so drone and turret Cores can coexist in one list without a second
+	# selector that can contradict the selected Core.
 	for part: Resource in MLBodyPartCatalog.all_parts():
-		if not _same_core_family(part, current_core):
-			continue
-		var source_path: String = MLBodyPartContract.resource_source_path(part)
-		if source_path.is_empty() or source_path == current_source or core_parts.has(source_path):
-			continue
-		core_parts[source_path] = part
-		var option_index: int = core_picker.item_count
-		var label: String = "%s   [%s]" % [
-			MLBodyPartCatalog.display_name(part),
-			source_path.get_base_dir().get_file(),
-		]
-		if part is DroneCoreDefinition and (part as DroneCoreDefinition).propeller_slot_count != 4:
-			label += "   • 4-prop trainer required"
-		core_picker.add_item(label)
-		core_picker.set_item_metadata(option_index, source_path)
-		if part is DroneCoreDefinition and (part as DroneCoreDefinition).propeller_slot_count != 4:
-			core_picker.set_item_disabled(option_index, true)
+		if part is DroneCoreDefinition:
+			_add_core_option(part, MLBodyPresetLibrary.DRONE_QUAD)
+		elif part is TurretBaseDefinition:
+			_add_core_option(part, MLBodyPresetLibrary.STATIONARY_TURRET)
+
+	# The four-limb trainer does not yet have a standalone saved gameplay Core resource. Expose its
+	# generated rigid Core as one concrete Core choice until that runtime is migrated to fully generic
+	# mount installation.
+	var walker_draft: MLBodyBuildDraft = MLBodyPresetLibrary.instantiate_draft(
+		MLBodyPresetLibrary.FOUR_LIMB_WALKER
+	)
+	if walker_draft != null and walker_draft.core != null:
+		var walker_core: Resource = _physical_core_from_draft(walker_draft)
+		if walker_core != null:
+			_add_core_option(
+				walker_core,
+				MLBodyPresetLibrary.FOUR_LIMB_WALKER,
+				"builtin:four_limb_walker_core"
+			)
+
+	if core_picker.item_count <= 0:
+		core_picker.add_item("No physical Cores found")
+		core_picker.disabled = true
+
+
+func _add_core_option(
+	core_resource: Resource,
+	preset_id: StringName,
+	explicit_key: String = ""
+) -> void:
+	if core_resource == null:
+		return
+	var source_path: String = MLBodyPartContract.resource_source_path(core_resource)
+	var key: String = explicit_key if not explicit_key.is_empty() else source_path
+	if key.is_empty():
+		key = "builtin:%s:%d" % [str(preset_id), core_picker.item_count]
+	if core_parts.has(key):
+		return
+	core_parts[key] = MLBodyPartContract.deep_duplicate_resource(core_resource)
+	core_preset_ids[key] = str(preset_id)
+	var option_index: int = core_picker.item_count
+	core_picker.add_item(MLBodyPartCatalog.display_name(core_resource))
+	core_picker.set_item_metadata(option_index, key)
+
+
+func _preferred_initial_core_index() -> int:
+	var preferred_path: String = MLBodyPresetLibrary.DRONE_QUAD_LOADOUT_PATH
+	var default_loadout: DroneLoadout = load(preferred_path) as DroneLoadout
+	var default_core_path: String = (
+		MLBodyPartContract.resource_source_path(default_loadout.core)
+		if default_loadout != null and default_loadout.core != null
+		else ""
+	)
+	for index: int in range(core_picker.item_count):
+		var key: String = str(core_picker.get_item_metadata(index))
+		if key == default_core_path:
+			return index
+	return 0
+
 
 
 func _on_core_selected(index: int) -> void:
-	if current_draft == null or index < 0 or index >= core_picker.item_count:
+	if index < 0 or index >= core_picker.item_count:
 		return
 	var key: String = str(core_picker.get_item_metadata(index))
-	if key.begins_with(CURRENT_KEY_PREFIX):
-		return
 	var selected_core: Resource = core_parts.get(key) as Resource
 	if selected_core == null:
 		_set_error("The selected Core is no longer available.")
+		return
+	var preset_id: StringName = StringName(str(core_preset_ids.get(key, "")))
+	var preset: MLBodyPreset = MLBodyPresetLibrary.preset_by_id(preset_id)
+	if preset == null:
+		_set_error("The selected Core has no training runtime adapter.")
 		return
 	var next_draft: MLBodyBuildDraft = null
 	if selected_core is DroneCoreDefinition:
@@ -1052,56 +1206,57 @@ func _on_core_selected(index: int) -> void:
 		next_draft = DroneMLBodyInterfaceFactory.create_draft(empty_loadout)
 	elif selected_core is TurretBaseDefinition:
 		var source_turret: TurretLoadout = (
-			MLBodyPresetLibrary.instantiate_runtime_template(current_preset_id) as TurretLoadout
+			MLBodyPresetLibrary.instantiate_runtime_template(MLBodyPresetLibrary.STATIONARY_TURRET) as TurretLoadout
 		)
 		if source_turret != null:
 			source_turret.base = (
 				MLBodyPartContract.deep_duplicate_resource(selected_core) as TurretBaseDefinition
 			)
 			next_draft = TurretMLBodyInterfaceFactory.create_draft(source_turret)
+	elif selected_core is MLRigidCorePartDefinition:
+		next_draft = MLBodyPresetLibrary.instantiate_draft(MLBodyPresetLibrary.FOUR_LIMB_WALKER)
 	else:
-		_set_error("This body family does not support swapping that Core yet.")
-		_populate_core_picker()
+		_set_error("This Core type does not have a creator runtime adapter yet.")
 		return
 	if next_draft == null or next_draft.core == null or not next_draft.last_error.is_empty():
-		_set_error("The selected Core could not rebuild the body slot topology.")
-		_populate_core_picker()
+		_set_error("The selected Core could not build its editable body.")
 		return
-	next_draft.core_contract["preset_id"] = str(current_preset_id)
+	current_preset_id = preset_id
 	current_draft = next_draft
+	current_body_kind = str(next_draft.core_contract.get("body_kind", preset.body_kind))
+	next_draft.core_contract["preset_id"] = str(current_preset_id)
 	changed_slot_ids.clear()
 	initial_slot_keys.clear()
 	slot_parts.clear()
-	status_label.text = "Core changed. Place the attachment slots you want on its 3D surface."
+	status_label.text = "Core changed. Place only the slots this body should actually have."
 	status_label.add_theme_color_override("font_color", MUTED)
-	core_label.text = "Core: %s   •   Family: %s" % [
-		MLBodyPartCatalog.display_name(_current_physical_core()),
-		current_body_kind.replace("_", " ").capitalize(),
-	]
-	_populate_core_picker()
+	description_label.text = _creator_description_for_core(selected_core, preset)
+	core_label.text = "Core: %s" % MLBodyPartCatalog.display_name(_current_physical_core())
+	group_name_input.text = "%s group" % MLBodyPartCatalog.display_name(_current_physical_core())
 	_initialize_layout_for_current_core()
-	_refresh_training_settings_for_body(false)
+	_refresh_training_settings_for_body(true)
+	_set_creator_stage(STAGE_CORE_LAYOUT)
 	_refresh_summary()
 
 
+func _creator_description_for_core(core: Resource, preset: MLBodyPreset) -> String:
+	if core is DroneCoreDefinition:
+		return "Drone Core. Battery is intrinsic; every propeller and attachment mount is authored explicitly in the 3D layout below."
+	if preset != null:
+		return preset.description
+	return "Select the Core and configure the physical slots supported by its runtime."
+
+
 func _current_physical_core() -> Resource:
-	if current_draft == null or current_draft.core == null:
+	return _physical_core_from_draft(current_draft)
+
+
+func _physical_core_from_draft(draft: MLBodyBuildDraft) -> Resource:
+	if draft == null or draft.core == null:
 		return null
-	if current_draft.core is MLBodyCoreDefinition:
-		return (current_draft.core as MLBodyCoreDefinition).physical_core
-	return current_draft.core
-
-
-func _same_core_family(candidate: Resource, current_core: Resource) -> bool:
-	if candidate == null or current_core == null:
-		return false
-	if current_core is DroneCoreDefinition:
-		return candidate is DroneCoreDefinition
-	if current_core is TurretBaseDefinition:
-		return candidate is TurretBaseDefinition
-	if current_core is MLRigidCorePartDefinition:
-		return candidate is MLRigidCorePartDefinition
-	return candidate.get_script() == current_core.get_script()
+	if draft.core is MLBodyCoreDefinition:
+		return (draft.core as MLBodyCoreDefinition).physical_core
+	return draft.core
 
 
 func _rebuild_slot_rows() -> void:
@@ -1258,13 +1413,15 @@ func _refresh_summary() -> void:
 	if creator_stage == STAGE_CORE_LAYOUT:
 		var core_name: String = MLBodyPartCatalog.display_name(_current_physical_core())
 		if current_body_kind == "drone":
-			summary_label.text = "Core: %s   •   %d/%d attachment slots placed   •   right-drag to orbit" % [
+			summary_label.text = "Core: %s   •   %d/%d mounts placed   •   P %d / A %d   •   middle-drag orbit · RMB remove" % [
 				core_name,
-				layout_attachment_transforms.size(),
-				layout_attachment_capacity,
+				layout_slot_transforms.size(),
+				layout_slot_capacity,
+				_layout_slot_kind_count(&"propeller"),
+				_layout_slot_kind_count(&"attachment"),
 			]
 		else:
-			summary_label.text = "Core: %s   •   this body family currently uses its authored fixed mount topology" % core_name
+			summary_label.text = "Core: %s   •   this runtime currently uses its authored fixed mount topology" % core_name
 		return
 	var snapshot: Dictionary = current_draft.ui_snapshot()
 	var algorithm_name: String = (
@@ -1289,7 +1446,7 @@ func _refresh_summary() -> void:
 
 func _accept_current_build() -> void:
 	if current_draft == null:
-		_set_error("Choose a body first.")
+		_set_error("Choose a Core first.")
 		return
 	var missing_required_slot: String = _missing_required_slot_name()
 	if not missing_required_slot.is_empty():
@@ -1331,7 +1488,8 @@ func _accept_current_build() -> void:
 	# point for the next + click; in particular its reduced custom Core slot count belongs only to
 	# the group we just emitted. Cancel/close still preserves an unfinished draft.
 	current_draft = null
-	layout_attachment_transforms.clear()
+	layout_slot_transforms.clear()
+	layout_slot_kinds.clear()
 	layout_selected_slot_index = -1
 	changed_slot_ids.clear()
 	initial_slot_keys.clear()

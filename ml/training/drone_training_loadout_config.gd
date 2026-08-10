@@ -29,6 +29,10 @@ static func duplicate_loadout(source: DroneLoadout) -> DroneLoadout:
 	# destroy additional creator-authored slots while cloning or serializing a body.
 	for slot_index in range(_propeller_slot_count(source)):
 		result.propellers.append(_duplicate_propeller(source.get_propeller(slot_index)))
+	var source_propeller_mounts: Array[Transform3D] = source.get_propeller_slot_transforms()
+	for slot_index: int in range(source_propeller_mounts.size()):
+		if not result.set_propeller_slot_transform(slot_index, source_propeller_mounts[slot_index]):
+			return DroneLoadout.new()
 	# Training/model-forge loadouts intentionally discard the legacy scripted AI chips. The
 	# learned model owns control; carrying old behavior chips into a worker body would mix two
 	# independent control systems and exposes meaningless creator slots.
@@ -277,15 +281,19 @@ static func to_record(loadout: DroneLoadout) -> Dictionary:
 		or attachment_snapshots.size() != maxi(loadout.core.attachment_slot_count, 0)
 	):
 		return {}
+	var propeller_mounts: Array[Dictionary] = []
+	for slot_transform: Transform3D in loadout.get_propeller_slot_transforms():
+		propeller_mounts.append(_transform_to_record(slot_transform))
 	var attachment_mounts: Array[Dictionary] = []
 	for slot_transform: Transform3D in loadout.get_attachment_slot_transforms():
 		attachment_mounts.append(_transform_to_record(slot_transform))
 	return {
-		"schema_version": 5,
+		"schema_version": 6,
 		"core": core_snapshot,
 		"battery": battery_snapshot,
 		"propellers": propeller_snapshots,
 		"attachments": attachment_snapshots,
+		"propeller_mounts": propeller_mounts,
 		"attachment_mounts": attachment_mounts,
 		"summary": physical_summary(loadout),
 	}
@@ -325,7 +333,7 @@ static func from_record(record: Dictionary) -> DroneLoadout:
 	if record.is_empty():
 		return null
 	var schema_version: int = int(record.get("schema_version", -1))
-	if schema_version != 4 and schema_version != 5:
+	if schema_version != 4 and schema_version != 5 and schema_version != 6:
 		return null
 	var core_value: Variant = record.get("core", {})
 	var battery_value: Variant = record.get("battery", {})
@@ -346,6 +354,23 @@ static func from_record(record: Dictionary) -> DroneLoadout:
 		return null
 	if not _restore_part_slots(result, record.get("attachments", []), &"attachment"):
 		return null
+	if schema_version >= 6:
+		var propeller_mounts_value: Variant = record.get("propeller_mounts", [])
+		if not (propeller_mounts_value is Array):
+			return null
+		var propeller_mounts: Array = propeller_mounts_value as Array
+		if propeller_mounts.size() != result.core.propeller_slot_count:
+			return null
+		for slot_index: int in range(propeller_mounts.size()):
+			var propeller_mount_value: Variant = propeller_mounts[slot_index]
+			if not (propeller_mount_value is Dictionary):
+				return null
+			var decoded_propeller_mount: Dictionary = _transform_from_record(propeller_mount_value as Dictionary)
+			if not bool(decoded_propeller_mount.get("valid", false)):
+				return null
+			var propeller_slot_transform: Transform3D = decoded_propeller_mount.get("transform", Transform3D.IDENTITY)
+			if not result.set_propeller_slot_transform(slot_index, propeller_slot_transform):
+				return null
 	if schema_version >= 5:
 		var mounts_value: Variant = record.get("attachment_mounts", [])
 		if not (mounts_value is Array):

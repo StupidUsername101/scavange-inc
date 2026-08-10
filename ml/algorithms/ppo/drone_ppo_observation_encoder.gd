@@ -473,6 +473,19 @@ static func is_valid_quad_observation(observation: Dictionary) -> bool:
 	)
 
 
+static func has_valid_propeller_topology(observation: Dictionary) -> bool:
+	var propellers: Array = observation.get("propellers", [])
+	if propellers.is_empty() or propellers.size() > QUAD_PROPELLER_COUNT:
+		return false
+	for index: int in range(propellers.size()):
+		if not (propellers[index] is Dictionary):
+			return false
+		var propeller: Dictionary = propellers[index]
+		if int(propeller.get("slot_index", -1)) != index:
+			return false
+	return true
+
+
 static func has_valid_quad_topology(observation: Dictionary) -> bool:
 	# The policy owns four stable *slots*, not four guaranteed-working propellers. A damaged
 	# or intentionally degraded drone must keep producing one command per slot so the remaining
@@ -749,18 +762,91 @@ static func _append_sector_clearances(
 
 
 static func _append_rotor_modes(target: PackedFloat64Array, propellers: Array) -> void:
-	var front_left: float = _normalized_rotor_thrust(propellers[0])
-	var front_right: float = _normalized_rotor_thrust(propellers[1])
-	var back_left: float = _normalized_rotor_thrust(propellers[2])
-	var back_right: float = _normalized_rotor_thrust(propellers[3])
-	var collective: float = (front_left + front_right + back_left + back_right) * 0.25
-	var roll: float = (front_left + front_right - back_left - back_right) * 0.5
-	var pitch: float = (-front_left + front_right - back_left + back_right) * 0.5
-	var yaw: float = (front_left - front_right - back_left + back_right) * 0.5
-	target.append(_unit_interval_to_signed(collective))
-	target.append(clampf(roll, -1.0, 1.0))
-	target.append(clampf(pitch, -1.0, 1.0))
-	target.append(clampf(yaw, -1.0, 1.0))
+	# Existing stock quads keep their exact historical feature semantics. Creator-authored layouts
+	# may reorder the four rotors or point them along arbitrary Core surfaces, so those bodies use
+	# geometry-aware force/torque aggregates instead of pretending slot 0 is always front-left.
+	if _uses_legacy_quad_layout(propellers):
+		var front_left: float = _normalized_rotor_thrust(propellers[0])
+		var front_right: float = _normalized_rotor_thrust(propellers[1])
+		var back_left: float = _normalized_rotor_thrust(propellers[2])
+		var back_right: float = _normalized_rotor_thrust(propellers[3])
+		var collective_quad: float = (front_left + front_right + back_left + back_right) * 0.25
+		var roll_quad: float = (front_left + front_right - back_left - back_right) * 0.5
+		var pitch_quad: float = (-front_left + front_right - back_left + back_right) * 0.5
+		var yaw_quad: float = (front_left - front_right - back_left + back_right) * 0.5
+		target.append(_unit_interval_to_signed(collective_quad))
+		target.append(clampf(roll_quad, -1.0, 1.0))
+		target.append(clampf(pitch_quad, -1.0, 1.0))
+		target.append(clampf(yaw_quad, -1.0, 1.0))
+		return
+	if propellers.is_empty():
+		target.append(-1.0)
+		target.append(0.0)
+		target.append(0.0)
+		target.append(0.0)
+		return
+	var collective_up: float = 0.0
+	var torque_sum: Vector3 = Vector3.ZERO
+	var yaw_reaction: float = 0.0
+	var lever_scale: float = 0.000001
+	for propeller_value: Variant in propellers:
+		var propeller: Dictionary = propeller_value as Dictionary
+		var position: Vector3 = propeller.get("position_local", Vector3.ZERO)
+		lever_scale = maxf(lever_scale, position.length())
+	for propeller_value: Variant in propellers:
+		var propeller: Dictionary = propeller_value as Dictionary
+		var thrust: float = _normalized_rotor_thrust(propeller)
+		var position: Vector3 = propeller.get("position_local", Vector3.ZERO)
+		var lift_axis: Vector3 = propeller.get("lift_axis_local", Vector3.UP)
+		if not lift_axis.is_finite() or lift_axis.length_squared() <= 0.000001:
+			lift_axis = Vector3.UP
+		lift_axis = lift_axis.normalized()
+		var normalized_force: Vector3 = lift_axis * thrust
+		collective_up += normalized_force.y
+		torque_sum += position.cross(normalized_force) / lever_scale
+		yaw_reaction += float(propeller.get("spin_direction", 0.0)) * thrust
+	var count: float = float(propellers.size())
+	# These four columns keep the same fixed tensor width, but for a custom body they now describe
+	# the actual current body-space force/torque tendency rather than a fictional stock-X mixer.
+	target.append(clampf(collective_up / count, -1.0, 1.0))
+	target.append(clampf(torque_sum.x / count, -1.0, 1.0))
+	target.append(clampf(torque_sum.z / count, -1.0, 1.0))
+	target.append(clampf((torque_sum.y / count) + (yaw_reaction / count), -1.0, 1.0))
+
+
+static func _uses_legacy_quad_layout(propellers: Array) -> bool:
+	if propellers.size() != QUAD_PROPELLER_COUNT:
+		return false
+	# Schema-era observations/checkpoint tests created before free rotor placement have no geometry
+	# keys at all. Treat that exact case as the historical stock quad rather than changing its inputs.
+	var has_any_geometry: bool = false
+	for propeller_value: Variant in propellers:
+		if not (propeller_value is Dictionary):
+			return false
+		var geometry_probe: Dictionary = propeller_value as Dictionary
+		if geometry_probe.has("position_local") or geometry_probe.has("lift_axis_local"):
+			has_any_geometry = true
+	if not has_any_geometry:
+		return true
+	var expected_x_signs: Array[int] = [-1, 1, -1, 1]
+	var expected_z_signs: Array[int] = [-1, -1, 1, 1]
+	for index: int in range(QUAD_PROPELLER_COUNT):
+		if not (propellers[index] is Dictionary):
+			return false
+		var propeller: Dictionary = propellers[index]
+		var position: Vector3 = propeller.get("position_local", Vector3.ZERO)
+		var lift_axis: Vector3 = propeller.get("lift_axis_local", Vector3.UP)
+		if not position.is_finite() or not lift_axis.is_finite():
+			return false
+		if absf(position.x) <= 0.000001 or absf(position.z) <= 0.000001:
+			return false
+		if (position.x < 0.0) != (expected_x_signs[index] < 0):
+			return false
+		if (position.z < 0.0) != (expected_z_signs[index] < 0):
+			return false
+		if lift_axis.normalized().dot(Vector3.UP) < 0.999:
+			return false
+	return true
 
 
 static func _normalized_rotor_thrust(propeller: Dictionary) -> float:

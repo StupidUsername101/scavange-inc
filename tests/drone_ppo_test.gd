@@ -412,8 +412,29 @@ func _test_observation_tensor(observation: Dictionary) -> void:
 	var wrong_topology = observation.duplicate(true)
 	wrong_topology["propellers"] = (wrong_topology["propellers"] as Array).slice(0, 3)
 	_expect(
-		not DronePPOObservationEncoder.is_valid_quad_observation(wrong_topology),
-		"non-quad PPO observation fails closed"
+		not DronePPOObservationEncoder.is_valid_quad_observation(wrong_topology)
+		and DronePPOObservationEncoder.has_valid_propeller_topology(wrong_topology),
+		"legacy quad validation stays exact while generic PPO accepts a stable three-propeller topology"
+	)
+	var custom_geometry: Array = (observation["propellers"] as Array).duplicate(true)
+	var custom_positions: Array[Vector3] = [
+		Vector3(0.45, 0.0, 0.0),
+		Vector3(-0.45, 0.0, 0.0),
+		Vector3(0.0, 0.0, -0.45),
+		Vector3(0.0, 0.0, 0.45),
+	]
+	for rotor_index: int in range(custom_geometry.size()):
+		var custom_rotor: Dictionary = custom_geometry[rotor_index]
+		custom_rotor["position_local"] = custom_positions[rotor_index]
+		custom_rotor["lift_axis_local"] = Vector3.RIGHT if rotor_index == 0 else Vector3.UP
+		custom_rotor["spin_direction"] = 1 if rotor_index % 2 == 0 else -1
+	var custom_modes: PackedFloat64Array = PackedFloat64Array()
+	DronePPOObservationEncoder._append_rotor_modes(custom_modes, custom_geometry)
+	_expect(
+		custom_modes.size() == 4
+		and absf(custom_modes[0]) < 1.0
+		and not DronePPOObservationEncoder._uses_legacy_quad_layout(custom_geometry),
+		"creator-authored four-rotor geometry uses real lift axes instead of the stock slot-index mixer"
 	)
 
 

@@ -119,11 +119,13 @@ static func inspect_checkpoint(checkpoint: Dictionary) -> Dictionary:
 				== DronePPOTrainer.CHECKPOINT_SCHEMA_VERSION
 				and str(checkpoint.get("algorithm", "")) == DronePPOTrainer.ALGORITHM_NAME
 				and RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1)
-				== DronePPOObservationEncoder.QUAD_PROPELLER_COUNT
+				== _body_propeller_control_count(body_contract)
+				and _body_propeller_control_count(body_contract) >= 1
+				and _body_propeller_control_count(body_contract) <= DronePPOObservationEncoder.QUAD_PROPELLER_COUNT
 				and RLTrainingMath.finite_int_or(network.get("schema_version", 0), -1)
 				== DronePPOActorCritic.STATE_SCHEMA_VERSION
 				and DronePPOObservationEncoder.is_trainable_schema(observation_schema)
-				and network_action_count >= DronePPOActorCritic.PROPELLER_ACTION_COUNT
+				and network_action_count >= DronePPOActorCritic.MINIMUM_ACTION_COUNT
 				and network_action_count <= DronePPOActorCritic.MAXIMUM_ACTION_COUNT
 				and body_feature_count >= 0
 				and not body_signature.is_empty()
@@ -212,6 +214,17 @@ static func inspect_checkpoint(checkpoint: Dictionary) -> Dictionary:
 				if compatible
 				else "The SAC-HER checkpoint architecture/schema does not match this build."
 			)
+	return result
+
+
+static func _body_propeller_control_count(contract: Dictionary) -> int:
+	var result: int = 0
+	var controls_value: Variant = contract.get("controls", [])
+	if not (controls_value is Array):
+		return 0
+	for control_value: Variant in controls_value:
+		if control_value is Dictionary and str((control_value as Dictionary).get("kind", "")) == "propeller_throttle":
+			result += 1
 	return result
 
 

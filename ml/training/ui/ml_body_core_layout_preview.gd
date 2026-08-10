@@ -3,17 +3,18 @@ extends SubViewportContainer
 
 signal surface_clicked(mount_transform: Transform3D)
 signal slot_selected(slot_index: int)
+signal slot_remove_requested(slot_index: int)
 
 const PART_GEOMETRY = preload("res://scripts/drones/drone_part_geometry.gd")
 const BACKGROUND_COLOR: Color = Color("071713")
 const CORE_FALLBACK_COLOR: Color = Color("4a6b61")
 const SLOT_COLOR: Color = Color("54e6b1")
+const PROPELLER_SLOT_COLOR: Color = Color("67c7ff")
 const SLOT_SELECTED_COLOR: Color = Color("ffad42")
 const PLACEMENT_OFFSET_M: float = 0.10
 const MARKER_RADIUS_PX: float = 18.0
 const ORBIT_SENSITIVITY: float = 0.009
 const ZOOM_STEP: float = 0.12
-const CREATOR_SCROLL_STEP_PX: int = 72
 const MIN_PITCH: float = -1.25
 const MAX_PITCH: float = 1.25
 
@@ -24,6 +25,7 @@ var marker_root: Node3D
 var camera: Camera3D
 var core_size: Vector3 = Vector3(0.65, 0.24, 0.65)
 var slot_transforms: Array[Transform3D] = []
+var slot_kinds: Array[StringName] = []
 var selected_slot_index: int = -1
 var placement_enabled: bool = true
 var orbit_dragging: bool = false
@@ -107,10 +109,27 @@ func set_core_resource(core: Resource) -> void:
 	_update_camera()
 
 
-func set_slot_transforms(value: Array[Transform3D], selected_index: int = -1) -> void:
+func set_slots(
+	value: Array[Transform3D],
+	kinds: Array[StringName],
+	selected_index: int = -1
+) -> void:
 	slot_transforms = value.duplicate()
+	slot_kinds = kinds.duplicate()
+	while slot_kinds.size() < slot_transforms.size():
+		slot_kinds.append(&"attachment")
+	if slot_kinds.size() > slot_transforms.size():
+		slot_kinds.resize(slot_transforms.size())
 	selected_slot_index = selected_index if selected_index >= 0 and selected_index < slot_transforms.size() else -1
 	_rebuild_markers()
+
+
+func set_slot_transforms(value: Array[Transform3D], selected_index: int = -1) -> void:
+	# Compatibility wrapper for older tests/callers. The staged creator supplies explicit kinds.
+	var kinds: Array[StringName] = []
+	for _slot_index: int in range(value.size()):
+		kinds.append(&"attachment")
+	set_slots(value, kinds, selected_index)
 
 
 func set_selected_slot(index: int) -> void:
@@ -129,8 +148,15 @@ func reset_view() -> void:
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mouse_button: InputEventMouseButton = event as InputEventMouseButton
-		if mouse_button.button_index == MOUSE_BUTTON_RIGHT:
+		if mouse_button.button_index == MOUSE_BUTTON_MIDDLE:
 			orbit_dragging = mouse_button.pressed
+			accept_event()
+			return
+		if mouse_button.pressed and mouse_button.button_index == MOUSE_BUTTON_RIGHT:
+			var viewport_position: Vector2 = _to_viewport_position(mouse_button.position)
+			var marker_index: int = _marker_at(viewport_position)
+			if marker_index >= 0:
+				slot_remove_requested.emit(marker_index)
 			accept_event()
 			return
 		if mouse_button.pressed and mouse_button.ctrl_pressed and mouse_button.button_index == MOUSE_BUTTON_WHEEL_UP:
@@ -141,14 +167,6 @@ func _gui_input(event: InputEvent) -> void:
 		if mouse_button.pressed and mouse_button.ctrl_pressed and mouse_button.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			orbit_distance = minf(orbit_distance * (1.0 + ZOOM_STEP), maximum_orbit_distance)
 			_update_camera()
-			accept_event()
-			return
-		if (
-			mouse_button.pressed
-			and not mouse_button.ctrl_pressed
-			and mouse_button.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]
-		):
-			_scroll_creator_from_wheel(mouse_button.button_index)
 			accept_event()
 			return
 		if mouse_button.pressed and mouse_button.button_index == MOUSE_BUTTON_LEFT:
@@ -165,17 +183,6 @@ func _gui_input(event: InputEvent) -> void:
 		)
 		_update_camera()
 		accept_event()
-
-
-func _scroll_creator_from_wheel(button_index: int) -> void:
-	var ancestor: Node = get_parent()
-	while ancestor != null and not (ancestor is ScrollContainer):
-		ancestor = ancestor.get_parent()
-	var creator_scroll: ScrollContainer = ancestor as ScrollContainer
-	if creator_scroll == null:
-		return
-	var direction: int = -1 if button_index == MOUSE_BUTTON_WHEEL_UP else 1
-	creator_scroll.scroll_vertical += direction * CREATOR_SCROLL_STEP_PX
 
 
 func _handle_left_click(local_position: Vector2) -> void:
@@ -303,13 +310,23 @@ func _rebuild_markers() -> void:
 		marker.mesh = sphere
 		marker.transform = slot_transforms[slot_index]
 		var material: StandardMaterial3D = StandardMaterial3D.new()
-		material.albedo_color = SLOT_SELECTED_COLOR if slot_index == selected_slot_index else SLOT_COLOR
+		var slot_kind: StringName = (
+			slot_kinds[slot_index]
+			if slot_index < slot_kinds.size()
+			else &"attachment"
+		)
+		var base_color: Color = PROPELLER_SLOT_COLOR if slot_kind == &"propeller" else SLOT_COLOR
+		material.albedo_color = SLOT_SELECTED_COLOR if slot_index == selected_slot_index else base_color
 		material.emission_enabled = true
 		material.emission = material.albedo_color * 0.35
 		marker.material_override = material
 		marker_root.add_child(marker)
 		var label: Label3D = Label3D.new()
-		label.text = str(slot_index + 1)
+		var kind_ordinal: int = 1
+		for previous_index: int in range(slot_index):
+			if previous_index < slot_kinds.size() and slot_kinds[previous_index] == slot_kind:
+				kind_ordinal += 1
+		label.text = "%s%d" % ["P" if slot_kind == &"propeller" else "A", kind_ordinal]
 		label.font_size = 42
 		label.modulate = Color.WHITE
 		label.position = slot_transforms[slot_index].origin + Vector3.UP * 0.09

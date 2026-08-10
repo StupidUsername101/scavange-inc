@@ -99,15 +99,16 @@ func save_training_checkpoint(
 	)
 	var training_value: Variant = checkpoint.get("training", {})
 	var training_environment_value: Variant = checkpoint.get("training_environment", {})
+	var checkpoint_inspection: Dictionary = DroneTrainingAlgorithmCatalog.inspect_checkpoint(checkpoint)
 	if (
 		algorithm_descriptor.is_empty()
+		or not bool(checkpoint_inspection.get("compatible", false))
 		or not (training_value is Dictionary)
 		or not (training_environment_value is Dictionary)
-		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) != QUAD_PROPELLER_COUNT
 		or not (checkpoint.get("network", {}) is Dictionary)
 		or DroneTrainingAlgorithmCatalog.create_runtime_model(checkpoint) == null
 	):
-		last_error = "The training checkpoint is incomplete, unknown or is not a quadrotor model."
+		last_error = "The training checkpoint is incomplete, unknown or incompatible with its drone body."
 		return {}
 	var clean_name = model_name.strip_edges()
 	if clean_name.is_empty():
@@ -168,7 +169,7 @@ func save_training_checkpoint(
 			"display_name",
 			"Learning algorithm"
 		)),
-		"propeller_count": QUAD_PROPELLER_COUNT,
+		"propeller_count": RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), 0),
 		"created_unix_ms": created_unix_ms,
 		"created_utc": created_utc,
 		"training_updated_unix_ms": created_unix_ms,
@@ -242,11 +243,12 @@ func overwrite_training_checkpoint(
 	var algorithm_descriptor = DroneTrainingAlgorithmCatalog.descriptor_for_checkpoint(checkpoint)
 	var training_value: Variant = checkpoint.get("training", {})
 	var training_environment_value: Variant = checkpoint.get("training_environment", {})
+	var checkpoint_inspection: Dictionary = DroneTrainingAlgorithmCatalog.inspect_checkpoint(checkpoint)
 	if (
 		algorithm_descriptor.is_empty()
+		or not bool(checkpoint_inspection.get("compatible", false))
 		or not (training_value is Dictionary)
 		or not (training_environment_value is Dictionary)
-		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) != QUAD_PROPELLER_COUNT
 		or not (checkpoint.get("network", {}) is Dictionary)
 		or DroneTrainingAlgorithmCatalog.create_runtime_model(checkpoint) == null
 	):
@@ -307,6 +309,7 @@ func overwrite_training_checkpoint(
 	))
 	record["algorithm"] = str(checkpoint.get("algorithm", ""))
 	record["training_algorithm_id"] = str(algorithm_descriptor.get("id", ""))
+	record["propeller_count"] = RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), 0)
 	record["training_algorithm_name"] = str(algorithm_descriptor.get(
 		"display_name",
 		"Learning algorithm"

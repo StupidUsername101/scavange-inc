@@ -313,7 +313,7 @@ func add_transition(
 	# observation here can silently discard the final crash/death transition and its
 	# strongest failure reward. Truncations remain bootstrap-eligible and therefore
 	# still require a valid successor below.
-	if not terminated and not DronePPOObservationEncoder.has_valid_quad_topology(next_observation):
+	if not terminated and not DronePPOObservationEncoder.has_valid_propeller_topology(next_observation):
 		last_error = "The PPO transition contains an invalid next observation."
 		return false
 	var observation_schema = behavior_actor_critic.observation_schema_version
@@ -1144,13 +1144,13 @@ func load_checkpoint(checkpoint: Dictionary) -> bool:
 	if (
 		RLTrainingMath.finite_int_or(checkpoint.get("schema_version", 0), -1) != CHECKPOINT_SCHEMA_VERSION
 		or str(checkpoint.get("algorithm", "")) != ALGORITHM_NAME
-		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1)
-		!= DronePPOObservationEncoder.QUAD_PROPELLER_COUNT
+		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) < 1
+		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) > DronePPOObservationEncoder.QUAD_PROPELLER_COUNT
 		or not DronePPOObservationEncoder.is_trainable_schema(
 			RLTrainingMath.finite_int_or(network.get("observation_schema_version", 0), -1)
 		)
 	):
-		last_error = "The checkpoint schema or quadrotor topology is incompatible."
+		last_error = "The checkpoint schema or drone-body topology is incompatible."
 		return false
 	var staged_actor_critic: DronePPOActorCritic = DronePPOActorCritic.new()
 	var staged_behavior_actor_critic: DronePPOActorCritic = DronePPOActorCritic.new()
@@ -1163,6 +1163,9 @@ func load_checkpoint(checkpoint: Dictionary) -> bool:
 		and _body_contract_matches_network(checkpoint_body_value as Dictionary, staged_actor_critic)
 	):
 		last_error = "The checkpoint body-interface manifest is missing or inconsistent with its network."
+		return false
+	if RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) != _body_propeller_control_count(checkpoint_body_value as Dictionary):
+		last_error = "The checkpoint propeller topology does not match its body-interface manifest."
 		return false
 	if (
 		body_interface_locked
@@ -1597,7 +1600,7 @@ func _checkpoint_with_network(
 		"schema_version": CHECKPOINT_SCHEMA_VERSION,
 		"algorithm": ALGORITHM_NAME,
 		"training_algorithm_id": TRAINING_ALGORITHM_ID,
-		"propeller_count": DronePPOObservationEncoder.QUAD_PROPELLER_COUNT,
+		"propeller_count": _body_propeller_control_count(body_interface_contract_data),
 		"body_interface": body_interface_contract_data.duplicate(true),
 		"config": config.duplicate(true),
 		"discount_time_base": {
@@ -2001,7 +2004,7 @@ func _valid_body_interface_contract(contract: Dictionary) -> bool:
 	if (
 		RLTrainingMath.finite_int_or(contract.get("schema_version", -1), -1)
 		!= MLBodyInterfaceManifest.SCHEMA_VERSION
-		or control_count < DronePPOActorCritic.PROPELLER_ACTION_COUNT
+		or control_count < DronePPOActorCritic.MINIMUM_ACTION_COUNT
 		or control_count > DronePPOActorCritic.MAXIMUM_ACTION_COUNT
 		or controls.size() != control_count
 		or observation_count < 0
@@ -2040,6 +2043,17 @@ func _body_contract_matches_network(
 		and str(contract.get("contract_signature", "")) == network.body_interface_signature
 		and _dictionary_array(contract.get("controls", [])) == network.control_descriptors
 	)
+
+
+static func _body_propeller_control_count(contract: Dictionary) -> int:
+	var result: int = 0
+	var controls_value: Variant = contract.get("controls", [])
+	if not (controls_value is Array):
+		return 0
+	for control_value: Variant in controls_value:
+		if control_value is Dictionary and str((control_value as Dictionary).get("kind", "")) == "propeller_throttle":
+			result += 1
+	return result
 
 
 static func _dictionary_array(value: Variant) -> Array[Dictionary]:
@@ -2105,6 +2119,6 @@ func _sanitize_config() -> void:
 		body_control_descriptors.size() if not body_control_descriptors.is_empty() else RLTrainingMath.finite_int_or(
 			config.get("action_count"), DEFAULT_CONFIG["action_count"]
 		),
-		DronePPOActorCritic.PROPELLER_ACTION_COUNT,
+		DronePPOActorCritic.MINIMUM_ACTION_COUNT,
 		DronePPOActorCritic.MAXIMUM_ACTION_COUNT
 	)

@@ -12,6 +12,7 @@ const SLOT_LAYOUT = preload("res://scripts/drones/drone_slot_layout.gd")
 @export var core: DroneCoreDefinition
 @export var battery: DroneBatteryDefinition
 @export var propellers: Array[DronePropellerDefinition] = []
+@export var propeller_slot_transforms: Array[Transform3D] = []
 @export var ai_chips: Array[DroneAIChipDefinition] = []
 @export var attachments: Array[DroneAttachmentDefinition] = []
 @export var attachment_slot_transforms: Array[Transform3D] = []
@@ -23,15 +24,18 @@ func install_core(value: DroneCoreDefinition) -> void:
 	# default slot layout. Exact creator/frozen-body copies deliberately reapply their serialized
 	# custom transforms after installing the Core.
 	core = value
+	propeller_slot_transforms.clear()
 	attachment_slot_transforms.clear()
 	_trim_unsupported_propellers()
 	_trim_unsupported_ai_chips()
 	_trim_unsupported_attachments()
+	_ensure_propeller_slot_transforms()
 	_ensure_attachment_slot_transforms()
 
 
 func remove_core() -> void:
 	core = null
+	propeller_slot_transforms.clear()
 	ai_chips.clear()
 	attachments.clear()
 	attachment_slot_transforms.clear()
@@ -73,6 +77,31 @@ func get_propeller(slot_index: int) -> DronePropellerDefinition:
 		return null
 
 	return propellers[slot_index]
+
+
+func set_propeller_slot_transform(slot_index: int, value: Transform3D) -> bool:
+	if core == null or slot_index < 0 or slot_index >= core.propeller_slot_count:
+		return false
+	if not _mount_transform_is_valid(value):
+		return false
+	_ensure_propeller_slot_transforms()
+	propeller_slot_transforms[slot_index] = Transform3D(
+		value.basis.orthonormalized(),
+		value.origin
+	)
+	return true
+
+
+func get_propeller_slot_transform(slot_index: int) -> Transform3D:
+	if core == null or slot_index < 0 or slot_index >= core.propeller_slot_count:
+		return Transform3D.IDENTITY
+	_ensure_propeller_slot_transforms()
+	return propeller_slot_transforms[slot_index]
+
+
+func get_propeller_slot_transforms() -> Array[Transform3D]:
+	_ensure_propeller_slot_transforms()
+	return propeller_slot_transforms.duplicate()
 
 
 func install_ai_chip(
@@ -144,7 +173,7 @@ func get_attachment(slot_index: int) -> DroneAttachmentDefinition:
 func set_attachment_slot_transform(slot_index: int, value: Transform3D) -> bool:
 	if core == null or slot_index < 0 or slot_index >= core.attachment_slot_count:
 		return false
-	if not _attachment_transform_is_valid(value):
+	if not _mount_transform_is_valid(value):
 		return false
 	_ensure_attachment_slot_transforms()
 	attachment_slot_transforms[slot_index] = Transform3D(
@@ -282,6 +311,8 @@ func _trim_unsupported_propellers() -> void:
 	var supported_count = core.propeller_slot_count if core != null else 0
 	if propellers.size() > supported_count:
 		propellers.resize(supported_count)
+	if propeller_slot_transforms.size() > supported_count:
+		propeller_slot_transforms.resize(supported_count)
 
 
 func _trim_unsupported_ai_chips() -> void:
@@ -310,6 +341,35 @@ func _ensure_attachment_slot_transforms() -> void:
 		)
 
 
+func _ensure_propeller_slot_transforms() -> void:
+	var supported_count: int = core.propeller_slot_count if core != null else 0
+	if propeller_slot_transforms.size() > supported_count:
+		propeller_slot_transforms.resize(supported_count)
+	while propeller_slot_transforms.size() < supported_count:
+		var slot_index: int = propeller_slot_transforms.size()
+		propeller_slot_transforms.append(_default_propeller_transform(slot_index))
+	for slot_index: int in range(propeller_slot_transforms.size()):
+		propeller_slot_transforms[slot_index] = _sanitized_propeller_transform(
+			slot_index,
+			propeller_slot_transforms[slot_index]
+		)
+
+
+func _default_propeller_transform(slot_index: int) -> Transform3D:
+	if core == null:
+		return Transform3D.IDENTITY
+	return Transform3D(
+		Basis.IDENTITY,
+		SLOT_LAYOUT.get_propeller_position(slot_index, core.body_size)
+	)
+
+
+func _sanitized_propeller_transform(slot_index: int, value: Transform3D) -> Transform3D:
+	if not _mount_transform_is_valid(value):
+		return _default_propeller_transform(slot_index)
+	return Transform3D(value.basis.orthonormalized(), value.origin)
+
+
 func _default_attachment_transform(slot_index: int) -> Transform3D:
 	if core == null:
 		return Transform3D.IDENTITY
@@ -320,12 +380,12 @@ func _default_attachment_transform(slot_index: int) -> Transform3D:
 
 
 func _sanitized_attachment_transform(slot_index: int, value: Transform3D) -> Transform3D:
-	if not _attachment_transform_is_valid(value):
+	if not _mount_transform_is_valid(value):
 		return _default_attachment_transform(slot_index)
 	return Transform3D(value.basis.orthonormalized(), value.origin)
 
 
-func _attachment_transform_is_valid(value: Transform3D) -> bool:
+func _mount_transform_is_valid(value: Transform3D) -> bool:
 	return (
 		value.origin.is_finite()
 		and value.basis.x.is_finite()

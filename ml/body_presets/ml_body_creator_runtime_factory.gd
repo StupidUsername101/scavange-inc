@@ -71,7 +71,12 @@ static func _drone_loadout(draft: MLBodyBuildDraft) -> DroneLoadout:
 				if not (part is DronePropellerDefinition):
 					return _fail("%s requires a propeller." % slot.display_name) as DroneLoadout
 				var propeller_index: int = _slot_suffix_index(slot_id)
-				if propeller_index < 0 or not result.install_propeller(
+				if propeller_index < 0 or not result.set_propeller_slot_transform(
+					propeller_index,
+					slot.mount_transform
+				):
+					return _fail("Could not apply the mount transform for %s." % slot.display_name) as DroneLoadout
+				if not result.install_propeller(
 					propeller_index,
 					MLBodyPartContract.deep_duplicate_resource(part) as DronePropellerDefinition
 				):

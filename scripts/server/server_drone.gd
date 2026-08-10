@@ -138,14 +138,28 @@ func _exit_tree() -> void:
 
 func _collect_propeller_slots() -> void:
 	propeller_slots.clear()
+	var available_slots: Array[DronePropellerSlot] = []
 	for child in $PropellerSlots.get_children():
 		if child is DronePropellerSlot:
-			propeller_slots.append(child as DronePropellerSlot)
+			available_slots.append(child as DronePropellerSlot)
 
-	propeller_slots.sort_custom(
+	available_slots.sort_custom(
 		func(a: DronePropellerSlot, b: DronePropellerSlot) -> bool:
 			return a.slot_index < b.slot_index
 	)
+	var supported_count: int = (
+		mini(maxi(loadout.core.propeller_slot_count, 0), MAX_PROPELLER_SLOTS)
+		if loadout != null and loadout.core != null
+		else 0
+	)
+	for array_index: int in range(available_slots.size()):
+		var slot: DronePropellerSlot = available_slots[array_index]
+		slot.visible = array_index < supported_count
+		if array_index >= supported_count:
+			continue
+		slot.slot_index = array_index
+		slot.transform = loadout.get_propeller_slot_transform(array_index)
+		propeller_slots.append(slot)
 
 	$CoreCollision.set_meta("edit_slot_kind", &"core")
 	$CoreCollision.set_meta("edit_slot_index", -1)
@@ -180,6 +194,7 @@ func _apply_loadout(
 	reset_health := false,
 	reset_battery := false
 ) -> void:
+	_collect_propeller_slots()
 	if loadout == null or loadout.core == null:
 		mass = (
 			loadout.get_total_mass()
@@ -586,8 +601,19 @@ func _refresh_propeller_collisions() -> void:
 		) as CollisionShape3D
 		if collision == null:
 			continue
-		var has_propeller := (
+		var slot_supported: bool = (
 			loadout != null
+			and loadout.core != null
+			and slot_index < loadout.core.propeller_slot_count
+			and slot_index < MAX_PROPELLER_SLOTS
+		)
+		collision.transform = (
+			loadout.get_propeller_slot_transform(slot_index)
+			if slot_supported
+			else Transform3D.IDENTITY
+		)
+		var has_propeller: bool = (
+			slot_supported
 			and loadout.get_propeller(slot_index) != null
 		)
 		var propeller: DronePropellerDefinition = (
@@ -603,7 +629,10 @@ func _refresh_propeller_collisions() -> void:
 		)
 		propeller_shape.height = DEFAULT_PROPELLER_COLLISION_HEIGHT
 		collision.shape = propeller_shape
-		collision.disabled = not is_edit_preview and not has_propeller
+		collision.disabled = (
+			not slot_supported
+			or (not is_edit_preview and not has_propeller)
+		)
 
 
 func _refresh_ai_chip_collisions(
@@ -1590,7 +1619,8 @@ func _refresh_ground_effect_cache(
 				air_environment.calculate_ground_effect(
 					space_state,
 					propeller_slots[array_index].global_position,
-					get_rid()
+					get_rid(),
+					propeller_slots[array_index].global_basis.y
 				)
 				if propeller_disk_area_by_slot[array_index] > 0.0
 				else 1.0
@@ -1612,7 +1642,8 @@ func _refresh_ground_effect_cache(
 			air_environment.calculate_ground_effect(
 				space_state,
 				propeller_slots[array_index].global_position,
-				get_rid()
+				get_rid(),
+				propeller_slots[array_index].global_basis.y
 			)
 		)
 
@@ -2323,6 +2354,11 @@ func to_state_dict() -> Dictionary:
 		),
 		"propeller_definition_paths": (
 			loadout.get_propeller_definition_paths()
+			if loadout != null
+			else []
+		),
+		"propeller_slot_transforms": (
+			loadout.get_propeller_slot_transforms()
 			if loadout != null
 			else []
 		),

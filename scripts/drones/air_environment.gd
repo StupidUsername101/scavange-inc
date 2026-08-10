@@ -70,24 +70,32 @@ func calculate_induced_velocity(
 func calculate_ground_effect(
 	space_state: PhysicsDirectSpaceState3D,
 	rotor_position: Vector3,
-	excluded_body: RID
+	excluded_body: RID,
+	lift_axis: Vector3 = Vector3.UP
 ) -> float:
-	var query := PhysicsRayQueryParameters3D.create(
+	# Ground/wall proximity belongs to the rotor disc, not to world-down. Creator-authored rotors
+	# can point sideways or diagonally, so probe opposite the actual thrust axis. The default keeps
+	# legacy callers identical for conventional upward-facing rotors.
+	var safe_lift_axis: Vector3 = lift_axis
+	if not safe_lift_axis.is_finite() or safe_lift_axis.length_squared() <= 0.000001:
+		safe_lift_axis = Vector3.UP
+	var probe_direction: Vector3 = -safe_lift_axis.normalized()
+	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(
 		rotor_position,
-		rotor_position + Vector3.DOWN * ground_probe_distance
+		rotor_position + probe_direction * ground_probe_distance
 	)
 	query.collision_mask = ground_collision_mask
 	query.exclude = [excluded_body]
 	query.collide_with_areas = false
 
-	var hit := space_state.intersect_ray(query)
+	var hit: Dictionary = space_state.intersect_ray(query)
 	if hit.is_empty():
 		return 1.0
 
 	var hit_position: Vector3 = hit.get("position", rotor_position)
-	var height := maxf(rotor_position.y - hit_position.y, 0.0)
+	var clearance: float = maxf((hit_position - rotor_position).dot(probe_direction), 0.0)
 	return 1.0 + ground_effect_strength * exp(
-		-height / maxf(ground_effect_falloff_distance, 0.01)
+		-clearance / maxf(ground_effect_falloff_distance, 0.01)
 	)
 
 
