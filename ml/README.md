@@ -470,12 +470,17 @@ count limit.
 
 An episode ends for an individual candidate when it:
 
-- touches the floor;
-- remains flipped beyond the tolerance;
 - loses power or is destroyed;
 - leaves the arena;
 - remains trapped in the same wall-contact pocket for three seconds; or
 - reaches the configured timeout.
+
+Ground contact and inverted orientation are deliberately **non-terminal by default**. Drone-family
+groups expose two optional per-group training cutoffs under **Tuning → Workers and Control**:
+`End episode on low ground contact` and `End episode when flipped`. These legacy conveniences are
+kept for tasks that need them, but creator-built ground bodies may otherwise tumble, roll, spin,
+recover, or intentionally use non-upright locomotion. The ground-safety reward remains independent
+of episode termination.
 
 The two left panels and the selected-group panel on the right each have a persistent edge button
 that collapses the panel to a narrow strip without stopping training. Drone terminal sounds are
@@ -523,11 +528,12 @@ shared initial state; incomplete runs are not mixed into evaluation history.
   Sensing follows the policy control interval and uses exact primitive intersections. A small
   penalty applies only while moving into nearby geometry, plus a bounded one-time contact penalty.
   Proximity alone and moving away are not punished.
-- **Failure:** crashes, sustained inversion, destruction, power loss, arena exits and confirmed wall
-  deadlocks terminate the episode. The base penalty is `-1`. During the first five seconds, an
-  additional penalty up to `-2` fades to zero, making deliberate immediate suicide more expensive
-  than spending several seconds attempting recovery. Time limits remain truncations and bootstrap
-  from the critic.
+- **Failure:** destruction, power loss, arena exits and confirmed wall deadlocks terminate the
+  episode. The optional per-group low-ground and flipped cutoffs also count as terminal failures
+  when explicitly enabled. The base penalty is `-1`. During the first five seconds, an additional
+  penalty up to `-2` fades to zero, making deliberate immediate suicide more expensive than spending
+  several seconds attempting recovery. Ground contact and sustained inversion alone are otherwise
+  non-terminal; time limits remain truncations and bootstrap from the critic.
 
 This contract is reward schema v4. Older checkpoint weights remain loadable, but scores from earlier
 reward schemas are not comparable; continuing training clears the old best-score baseline while

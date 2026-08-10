@@ -122,7 +122,7 @@ const REWARD_COMPONENT_LABELS = {
 	"ground_safety": "Keep ground clearance",
 	"smoothness": "Smooth motor commands",
 	"obstacle": "Avoid walls",
-	"failure": "Avoid crashes and escape",
+	"failure": "Avoid terminal failure",
 }
 const GROUP_PLOT_DEFINITIONS = {
 	"progress": {
@@ -461,6 +461,8 @@ var limb_body_stat_inputs: Dictionary = {}
 var limb_body_edit_controls: Array[Control] = []
 var worker_count_slider: HSlider
 var control_rate_slider: HSlider
+var ground_contact_terminal_checkbox: CheckBox
+var flipped_terminal_checkbox: CheckBox
 var algorithm_config_sliders: Dictionary = {}
 var algorithm_controls_body: VBoxContainer
 var algorithm_controls_id = ""
@@ -2298,6 +2300,7 @@ func _evaluation_contract_for_group_id(
 			environment["action_schema_version"] = DroneMLAction.SCHEMA_VERSION
 			environment["reward_schema_version"] = DroneTrainingReward.SCHEMA_VERSION
 			environment["reward_cards"] = _ensure_drone_reward_deck(group).configuration_dictionary()
+			environment["episode_termination"] = _episode_termination_options_for_group(group)
 			environment["unlimited_episode_battery"] = unlimited_episode_battery
 			var hardware_record: Dictionary = LOADOUT_CONFIG.to_record(
 				group.get("drone_loadout") as DroneLoadout
@@ -7512,7 +7515,7 @@ func _build_episode_controls(content: VBoxContainer) -> void:
 		600.0,
 		1.0,
 		episode_duration,
-		"Maximum simulated duration. A drone can still finish earlier after a crash, flip, arena exit, destruction or finite-battery power loss. This does not decide when optimizer updates happen; each algorithm updates after collecting enough experience.",
+		"Maximum simulated duration. A worker can still finish earlier after destruction, power loss, arena exit, wall deadlock, or any optional per-group terminal rules you enabled. Ground contact and flipped orientation are non-terminal by default. This does not decide when optimizer updates happen; each algorithm updates after collecting enough experience.",
 		func(value: float) -> void:
 			episode_duration = value
 			_restart_for_configuration_change("Episode duration changed.", true, true, true)
@@ -8070,6 +8073,110 @@ func _build_worker_controls(content: VBoxContainer) -> void:
 		func(value: float) -> void:
 			_set_selected_control_rate(value)
 	)
+
+
+	var terminal_label: Label = Label.new()
+	terminal_label.text = "Optional episode-ending rules"
+	terminal_label.tooltip_text = (
+		"These are artificial training cutoffs, not physical damage rules. "
+		+ "They are disabled by default so ground bodies can tumble, roll, spin, recover, "
+		+ "or intentionally use unusual orientations. Pause the group before changing them."
+	)
+	content.add_child(terminal_label)
+	ground_contact_terminal_checkbox = CheckBox.new()
+	ground_contact_terminal_checkbox.text = "End episode on low ground contact"
+	ground_contact_terminal_checkbox.tooltip_text = (
+		"Optional low-ground cutoff\n\n"
+		+ "Off by default. A worker may touch, scrape, rest on, or move along the ground and "
+		+ "continue learning. Ground-safety rewards can still discourage this behavior.\n\n"
+		+ "On: the legacy center-height ground-crash rule ends the episode early. "
+		+ "This is a training convenience only; it does not represent collision damage."
+	)
+	ground_contact_terminal_checkbox.toggled.connect(
+		func(enabled: bool) -> void:
+			_set_selected_episode_termination_option("ground_contact", enabled)
+	)
+	content.add_child(ground_contact_terminal_checkbox)
+	flipped_terminal_checkbox = CheckBox.new()
+	flipped_terminal_checkbox.text = "End episode when flipped"
+	flipped_terminal_checkbox.tooltip_text = (
+		"Optional orientation cutoff\n\n"
+		+ "Off by default. A worker may run inverted, roll, spin like a top, or discover its "
+		+ "own recovery strategy.\n\n"
+		+ "On: remaining below the legacy uprightness threshold for "
+		+ String.num(DroneTrainingEpisode.FLIPPED_DURATION_SECONDS, 2)
+		+ " seconds ends the episode."
+	)
+	flipped_terminal_checkbox.toggled.connect(
+		func(enabled: bool) -> void:
+			_set_selected_episode_termination_option("flipped", enabled)
+	)
+	content.add_child(flipped_terminal_checkbox)
+
+
+func _episode_termination_options_for_group(group: Dictionary) -> Dictionary:
+	if group.is_empty():
+		return DroneTrainingEpisode.DEFAULT_TERMINATION_OPTIONS.duplicate(true)
+	return {
+		"ground_contact": bool(group.get("episode_end_on_ground_contact", false)),
+		"flipped": bool(group.get("episode_end_on_flipped", false)),
+	}
+
+
+func _episode_termination_options_for_trial(trial: Dictionary) -> Dictionary:
+	if str(trial.get("mode", "")) == "algorithm_training":
+		var group: Dictionary = _group_by_id(int(trial.get("group_id", -1)))
+		return _episode_termination_options_for_group(group)
+	var saved_value: Variant = trial.get("episode_termination", {})
+	if saved_value is Dictionary:
+		return (saved_value as Dictionary).duplicate(true)
+	return DroneTrainingEpisode.DEFAULT_TERMINATION_OPTIONS.duplicate(true)
+
+
+func _set_selected_episode_termination_option(option_id: String, enabled: bool) -> void:
+	if suppress_ui_callbacks:
+		return
+	var group: Dictionary = _selected_group()
+	if group.is_empty():
+		return
+	if bool(group.get("active", false)):
+		status_label.text = "Pause %s before changing its episode-ending rules." % group["name"]
+		_refresh_selected_group_controls()
+		return
+	match option_id:
+		"ground_contact":
+			group["episode_end_on_ground_contact"] = enabled
+		"flipped":
+			group["episode_end_on_flipped"] = enabled
+		_:
+			return
+	_clear_drone_group_runtime_for_configuration_change(group)
+	var trainer: DroneTrainingAlgorithm = group.get("trainer") as DroneTrainingAlgorithm
+	if trainer != null:
+		trainer.set_evaluation_contract(
+			_evaluation_contract_for_group_id(int(group.get("group_id", -1)), "drone")
+		)
+	_refresh_selected_group_controls()
+	status_label.text = (
+		"%s episode-ending rules updated. Resume the group to start with the new policy."
+		% group["name"]
+	)
+
+
+func _load_episode_termination_options_into_group(
+	group: Dictionary,
+	environment: Dictionary
+) -> void:
+	if group.is_empty():
+		return
+	var saved_value: Variant = environment.get("episode_termination", {})
+	if not (saved_value is Dictionary):
+		group["episode_end_on_ground_contact"] = false
+		group["episode_end_on_flipped"] = false
+		return
+	var saved: Dictionary = saved_value as Dictionary
+	group["episode_end_on_ground_contact"] = bool(saved.get("ground_contact", false))
+	group["episode_end_on_flipped"] = bool(saved.get("flipped", false))
 
 
 func _build_algorithm_controls(content: VBoxContainer) -> void:
@@ -11340,6 +11447,14 @@ func _create_worker_group(
 		"body_interface": accepted_body.to_dictionary(),
 		"body_interface_signature": accepted_body.contract_signature,
 		"belly_grabber": LOADOUT_CONFIG.has_training_belly_grabber(group_loadout),
+		"episode_end_on_ground_contact": bool(initial_setup.get(
+			"episode_end_on_ground_contact",
+			source.get("episode_end_on_ground_contact", false) if cloned_from_group else false
+		)),
+		"episode_end_on_flipped": bool(initial_setup.get(
+			"episode_end_on_flipped",
+			source.get("episode_end_on_flipped", false) if cloned_from_group else false
+		)),
 		"hardware_revision": int(source.get("hardware_revision", 0)) if cloned_from_group else 0,
 		"parent_group_id": int(source.get("group_id", -1)) if cloned_from_group else -1,
 		"branch_weight_variation": (
@@ -13196,7 +13311,7 @@ func _reward_component_tooltip(reward_key: String) -> String:
 		"ground_safety": "Keep ground clearance\n\nPunishes descending while closer than 2 m to solid ground or objects below the drone.\nVery low clearance also receives a small warning cost.",
 		"smoothness": "Use sensible propeller commands\n\nTiny corrections are free. Large command jumps and sustained extreme or heavily uneven output are punished.",
 		"obstacle": "Avoid walls and objects\n\nPunishes moving into nearby geometry and adds a small contact cost.\nStanding safely nearby or moving away is not punished.",
-		"failure": "Avoid terminal failure\n\nCrashing, flipping, losing power, or leaving the arena gives a strong negative score.\nVery early failure is punished extra so immediate suicide is not a shortcut.",
+		"failure": "Avoid terminal failure\n\nDestruction, power loss, arena exit, wall deadlock, and any optional per-group ground/flipped cutoff give a strong negative score.\nGround contact and inverted orientation are non-terminal by default. Very early terminal failure is punished extra so immediate suicide is not a shortcut.",
 	}.get(reward_key, "")
 
 
@@ -13931,6 +14046,7 @@ func _spawn_training_worker(group: Dictionary, worker_index: int) -> bool:
 			DroneTrainingReward.DEFAULT_COMPONENTS
 		).duplicate(),
 		"reward_cards": _ensure_drone_reward_deck(group).configuration_dictionary(),
+		"episode_termination": _episode_termination_options_for_group(group),
 		"version": {},
 		"color": group["color"],
 		"episode": DroneTrainingEpisode.new(),
@@ -14141,6 +14257,12 @@ func _spawn_model_instance(version: Dictionary, policy: DroneMLModel) -> void:
 	)
 	if not saved_reward_cards.is_empty():
 		evaluator_reward_deck.load_configuration(saved_reward_cards)
+	var saved_termination_value: Variant = training_environment.get("episode_termination", {})
+	var saved_episode_termination: Dictionary = (
+		(saved_termination_value as Dictionary).duplicate(true)
+		if saved_termination_value is Dictionary
+		else DroneTrainingEpisode.DEFAULT_TERMINATION_OPTIONS.duplicate(true)
+	)
 	var saved_loadout_value: Variant = training_environment.get("drone_loadout", {})
 	var saved_loadout_record: Dictionary = (
 		(saved_loadout_value as Dictionary)
@@ -14203,6 +14325,7 @@ func _spawn_model_instance(version: Dictionary, policy: DroneMLModel) -> void:
 		"group_id": -1,
 		"reward_components": evaluator_reward_deck.enabled_components_dictionary(),
 		"reward_cards": evaluator_reward_deck.configuration_dictionary(),
+		"episode_termination": saved_episode_termination,
 		"version": version.duplicate(true),
 		"evaluation_model": policy,
 		"evaluation_error": "",
@@ -14599,7 +14722,8 @@ func _start_episode(message: String) -> void:
 			episode_duration,
 			episode_number,
 			episode_seed,
-			trial.get("reward_cards", trial.get("reward_components", {}))
+			trial.get("reward_cards", trial.get("reward_components", {})),
+			_episode_termination_options_for_trial(trial)
 		)
 		trial["episode"] = episode
 		trial["reward"] = episode.latest_result
@@ -16370,6 +16494,7 @@ func _save_group_checkpoint(
 			DroneTrainingReward.DEFAULT_COMPONENTS
 		).duplicate(),
 		"reward_cards": _ensure_drone_reward_deck(group).configuration_dictionary(),
+		"episode_termination": _episode_termination_options_for_group(group),
 		"reward_cardset": {
 			"id": str(group.get("reward_cardset_id", "custom")),
 			"display_name": str(group.get("reward_cardset_name", "Custom")),
@@ -16813,8 +16938,11 @@ func _load_checkpoint_version_into_group(
 	var saved_reward_schema: int = RLTrainingMath.finite_int_or(
 		training_environment.get("reward_schema_version", 1), 1
 	)
-	var reward_statistics_reset = (
+	var saved_termination_value: Variant = training_environment.get("episode_termination", null)
+	var legacy_terminal_semantics: bool = not (saved_termination_value is Dictionary)
+	var reward_statistics_reset: bool = (
 		saved_reward_schema != DroneTrainingReward.SCHEMA_VERSION
+		or legacy_terminal_semantics
 	)
 	var trainer: DroneTrainingAlgorithm = group["trainer"]
 	if checkpoint.is_empty() or not trainer.load_checkpoint(checkpoint):
@@ -16828,6 +16956,7 @@ func _load_checkpoint_version_into_group(
 	# loaded policy/hardware into the next episode. Limb and turret checkpoint loads already do
 	# the same through their coordinator clear-worker paths.
 	_clear_drone_group_runtime_for_configuration_change(group)
+	_load_episode_termination_options_into_group(group, training_environment)
 	if reward_statistics_reset:
 		# The network and optimizer state are compatible, but reward values from the old
 		# projected-motion contract cannot compete with scores from the corrected contract.
@@ -16893,7 +17022,7 @@ func _load_checkpoint_version_into_group(
 		model_registry.display_name(version),
 		group["name"],
 		" and the saved drone hardware was restored" if restored_hardware else "",
-		"; its legacy reward-score baseline was reset while keeping the learned weights"
+		"; its legacy score baseline was reset while keeping the learned weights"
 		if reward_statistics_reset
 		else "",
 	]
@@ -17016,6 +17145,10 @@ func _refresh_selected_group_controls() -> void:
 			"plots":
 				workspace_button.visible = true
 	if not has_any_group:
+		if ground_contact_terminal_checkbox != null:
+			ground_contact_terminal_checkbox.visible = false
+		if flipped_terminal_checkbox != null:
+			flipped_terminal_checkbox.visible = false
 		selected_group_title.text = "ALL MODELS // COMPARISON"
 		training_identity_label.text = "No group selected."
 		selected_group_auto_save_label.visible = false
@@ -17028,6 +17161,10 @@ func _refresh_selected_group_controls() -> void:
 			_set_workspace_page("plots")
 		return
 	if has_turret_group:
+		if ground_contact_terminal_checkbox != null:
+			ground_contact_terminal_checkbox.visible = false
+		if flipped_terminal_checkbox != null:
+			flipped_terminal_checkbox.visible = false
 		var turret_trainer = turret_group["trainer"] as TurretPPOTrainer
 		if algorithm_controls_id != "turret:%s" % TurretPPOTrainer.ALGORITHM_ID:
 			_rebuild_turret_algorithm_controls(turret_trainer)
@@ -17058,6 +17195,10 @@ func _refresh_selected_group_controls() -> void:
 		turret_ui.refresh_selection()
 		return
 	if has_limb_group:
+		if ground_contact_terminal_checkbox != null:
+			ground_contact_terminal_checkbox.visible = false
+		if flipped_terminal_checkbox != null:
+			flipped_terminal_checkbox.visible = false
 		var limb_trainer = limb_group["trainer"] as FourLimbPPOTrainer
 		if algorithm_controls_id != "limb:%s" % FourLimbPPOTrainer.ALGORITHM_ID:
 			_rebuild_limb_algorithm_controls(limb_trainer)
@@ -17087,6 +17228,10 @@ func _refresh_selected_group_controls() -> void:
 		_refresh_selected_loadout_controls()
 		_refresh_loader_identity()
 		return
+	if ground_contact_terminal_checkbox != null:
+		ground_contact_terminal_checkbox.visible = true
+	if flipped_terminal_checkbox != null:
+		flipped_terminal_checkbox.visible = true
 	var trainer: DroneTrainingAlgorithm = group["trainer"]
 	if algorithm_controls_id != trainer.algorithm_id():
 		_rebuild_algorithm_controls(trainer)
@@ -17102,6 +17247,14 @@ func _refresh_selected_group_controls() -> void:
 	worker_count_slider.value = float(group["worker_count"])
 	var config = trainer.config_values()
 	control_rate_slider.value = 1.0 / maxf(float(config.get("control_interval_seconds", 0.05)), 0.000001)
+	if ground_contact_terminal_checkbox != null:
+		ground_contact_terminal_checkbox.button_pressed = bool(
+			group.get("episode_end_on_ground_contact", false)
+		)
+	if flipped_terminal_checkbox != null:
+		flipped_terminal_checkbox.button_pressed = bool(
+			group.get("episode_end_on_flipped", false)
+		)
 	for key in algorithm_config_sliders:
 		var slider = algorithm_config_sliders[key] as HSlider
 		if slider != null and config.has(key):
@@ -17110,6 +17263,10 @@ func _refresh_selected_group_controls() -> void:
 	var editable = not bool(group["active"])
 	for control in selected_group_controls:
 		control.editable = editable
+	if ground_contact_terminal_checkbox != null:
+		ground_contact_terminal_checkbox.disabled = not editable
+	if flipped_terminal_checkbox != null:
+		flipped_terminal_checkbox.disabled = not editable
 	_refresh_selected_loadout_controls()
 	_refresh_limb_body_tuning_controls()
 	_refresh_group_auto_save_label(group, selected_group_auto_save_label)

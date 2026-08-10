@@ -507,7 +507,8 @@ func _test_reward_card_configuration() -> void:
 		20.0,
 		99,
 		99001,
-		source_deck.configuration_dictionary()
+		source_deck.configuration_dictionary(),
+		{"ground_contact": true}
 	)
 	drone.position = Vector3(0.0, 0.1, 0.0)
 	var terminal = episode.step(
@@ -568,6 +569,62 @@ func _test_controlled_episode() -> void:
 		"drone arena bounds do not impose a hidden vertical ceiling on high target pursuit"
 	)
 
+	var permissive_episode = DroneTrainingEpisode.new()
+	drone.current_health = 10.0
+	drone.activated = true
+	drone.position = Vector3(0.0, 0.1, 0.0)
+	drone.rotation = Vector3(PI, 0.0, 0.0)
+	permissive_episode.start(
+		drone.position,
+		Vector3(5.0, 1.0, 0.0),
+		0.5,
+		20.0,
+		30,
+		123451
+	)
+	var permissive_result = permissive_episode.step(
+		drone,
+		Vector3(5.0, 1.0, 0.0),
+		0.5,
+		Vector3(24.0, 8.0, 16.0),
+		1.0
+	)
+	_expect(
+		str(permissive_result.get("termination_reason", "")) == "running",
+		"ground contact and inverted orientation are non-terminal by default"
+	)
+	_expect(
+		not bool(permissive_result.get("episode_termination_options", {}).get("ground_contact", true))
+		and not bool(permissive_result.get("episode_termination_options", {}).get("flipped", true)),
+		"episode results expose the permissive default termination policy"
+	)
+
+	var flipped_episode = DroneTrainingEpisode.new()
+	drone.position = Vector3(0.0, 1.0, 0.0)
+	drone.rotation = Vector3(PI, 0.0, 0.0)
+	flipped_episode.start(
+		drone.position,
+		Vector3(5.0, 1.0, 0.0),
+		0.5,
+		20.0,
+		31,
+		123452,
+		{},
+		{"flipped": true}
+	)
+	var flipped_result = flipped_episode.step(
+		drone,
+		Vector3(5.0, 1.0, 0.0),
+		0.5,
+		Vector3(24.0, 8.0, 16.0),
+		1.0
+	)
+	_expect(
+		str(flipped_result.get("termination_reason", "")) == "flipped",
+		"the legacy flipped cutoff remains available when explicitly enabled"
+	)
+	drone.rotation = Vector3.ZERO
+
 	var crash_episode = DroneTrainingEpisode.new()
 	drone.position = Vector3(0.0, 1.0, 0.0)
 	crash_episode.start(
@@ -576,7 +633,9 @@ func _test_controlled_episode() -> void:
 		0.5,
 		20.0,
 		4,
-		12346
+		12346,
+		{},
+		{"ground_contact": true}
 	)
 	drone.position = Vector3(0.0, 0.1, 0.0)
 	var crashed = crash_episode.step(
@@ -610,7 +669,8 @@ func _test_controlled_episode() -> void:
 			"smoothness": false,
 			"obstacle": false,
 			"failure": true,
-		}
+		},
+		{"ground_contact": true}
 	)
 	for _index in range(18):
 		late_failure_episode.step(
@@ -643,7 +703,8 @@ func _test_controlled_episode() -> void:
 		20.0,
 		5,
 		12347,
-		{"failure": false}
+		{"failure": false},
+		{"ground_contact": true}
 	)
 	drone.position = Vector3(0.0, 0.1, 0.0)
 	var unpunished_crash = no_failure_penalty_episode.step(
@@ -657,6 +718,33 @@ func _test_controlled_episode() -> void:
 		"disabling failure reward does not disable physical episode termination")
 	_expect(not unpunished_crash.has("external_penalty"),
 		"a group can disable the terminal failure score independently")
+
+	var destroyed_episode = DroneTrainingEpisode.new()
+	drone.current_health = 10.0
+	drone.activated = true
+	drone.position = Vector3(0.0, 0.1, 0.0)
+	destroyed_episode.start(
+		drone.position,
+		Vector3(5.0, 1.0, 0.0),
+		0.5,
+		20.0,
+		32,
+		123453
+	)
+	drone.current_health = 0.0
+	var destroyed_result = destroyed_episode.step(
+		drone,
+		Vector3(5.0, 1.0, 0.0),
+		0.5,
+		Vector3(24.0, 8.0, 16.0),
+		1.0
+	)
+	_expect(
+		str(destroyed_result.get("termination_reason", "")) == "destroyed",
+		"zero health remains terminal even when ground and flipped cutoffs are disabled"
+	)
+	drone.current_health = 10.0
+	drone.activated = true
 
 	var arena_exit_episode = DroneTrainingEpisode.new()
 	drone.position = Vector3(0.0, 1.0, 0.0)

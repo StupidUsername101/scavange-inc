@@ -23,6 +23,7 @@ var candidate_hash: String = ""
 var plan: Dictionary = {}
 var target_handler_configuration: Dictionary = {}
 var reward_cards: Dictionary = {}
+var episode_termination_options: Dictionary = {}
 var base_loadout: DroneLoadout
 var spawn_position: Vector3 = Vector3.ZERO
 var arena_size: Vector3 = Vector3(100.0, 8.0, 100.0)
@@ -105,6 +106,12 @@ func configure(
 	var environment: Dictionary = evaluation_contract.get("environment", {})
 	target_handler_configuration = (environment.get("target_handler", target_configuration) as Dictionary).duplicate(true)
 	reward_cards = (environment.get("reward_cards", candidate_reward_cards) as Dictionary).duplicate(true)
+	var termination_value: Variant = environment.get("episode_termination", {})
+	episode_termination_options = (
+		(termination_value as Dictionary).duplicate(true)
+		if termination_value is Dictionary
+		else {}
+	)
 	var hardware_record: Dictionary = environment.get("hardware", {})
 	# The frozen contract is authoritative. For the normal in-session case, use the group's
 	# already-instantiated body only when its canonical serialized hardware is exactly identical
@@ -369,7 +376,8 @@ func _begin_case(next_case_index: int) -> bool:
 		current_case_duration_seconds,
 		case_index + 1,
 		case_seed,
-		reward_cards
+		reward_cards,
+		episode_termination_options
 	)
 	var initial_threat_probe: Dictionary = (
 		TrainingTurretThreatSensor.acquire(

@@ -7,6 +7,10 @@ const GROUND_CRASH_CENTER_HEIGHT_M = 0.2
 const FLIPPED_UPRIGHT_DOT = 0.35
 const FLIPPED_DURATION_SECONDS = 0.5
 const ARENA_EDGE_MARGIN_M = 0.2
+const DEFAULT_TERMINATION_OPTIONS: Dictionary = {
+	"ground_contact": false,
+	"flipped": false,
+}
 const TERMINAL_FAILURE_PENALTY = -1.0
 const EARLY_FAILURE_EXTRA_PENALTY = 2.0
 const EARLY_FAILURE_PENALTY_WINDOW_SECONDS = 5.0
@@ -22,7 +26,8 @@ const WALL_CONTACT_GRACE_SECONDS = 0.2
 
 #######################################################
 # Owns one comparable drone evaluation episode, including reward accumulation, timeout,
-# crash, flip, wall-deadlock, power-loss, and arena-boundary termination.
+# destruction, wall-deadlock, power-loss, arena-boundary termination, and optional legacy
+# ground/flip cutoffs.
 #######################################################
 
 var reward_tracker = DroneTrainingReward.new()
@@ -39,6 +44,8 @@ var finished = false
 var terminated = false
 var truncated = false
 var termination_reason = "running"
+var end_on_ground_contact: bool = false
+var end_on_flipped: bool = false
 var latest_result: Dictionary = {}
 
 
@@ -49,7 +56,8 @@ func start(
 	new_duration_seconds: float,
 	new_episode_number: int,
 	new_seed: int,
-	reward_components: Dictionary = {}
+	reward_components: Dictionary = {},
+	termination_options: Dictionary = {}
 ) -> void:
 	episode_number = new_episode_number
 	episode_seed = new_seed
@@ -67,6 +75,7 @@ func start(
 	terminated = false
 	truncated = false
 	termination_reason = "running"
+	configure_termination_options(termination_options)
 	reward_tracker.configure_components(reward_components)
 	reward_tracker.reset(
 		drone_position,
@@ -75,6 +84,26 @@ func start(
 		duration_seconds
 	)
 	latest_result = _decorate_reward({})
+
+
+func configure_termination_options(options: Dictionary) -> void:
+	end_on_ground_contact = bool(options.get(
+		"ground_contact",
+		DEFAULT_TERMINATION_OPTIONS["ground_contact"]
+	))
+	end_on_flipped = bool(options.get(
+		"flipped",
+		DEFAULT_TERMINATION_OPTIONS["flipped"]
+	))
+	if not end_on_flipped:
+		flipped_seconds = 0.0
+
+
+func termination_options() -> Dictionary:
+	return {
+		"ground_contact": end_on_ground_contact,
+		"flipped": end_on_flipped,
+	}
 
 
 func step(
@@ -103,7 +132,8 @@ func step(
 	)
 
 	if elapsed_seconds >= START_GRACE_SECONDS:
-		_update_flip_timer(drone, safe_delta)
+		if end_on_flipped:
+			_update_flip_timer(drone, safe_delta)
 		_update_wall_deadlock(drone, obstacle_probe, safe_delta)
 		var failure = _failure_reason(drone, arena_size)
 		if not failure.is_empty():
@@ -250,11 +280,11 @@ func _update_wall_deadlock(
 func _failure_reason(drone: ServerDrone, arena_size: Vector3) -> String:
 	if drone.current_health <= 0.0:
 		return "destroyed"
-	if drone.global_position.y <= GROUND_CRASH_CENTER_HEIGHT_M:
+	if end_on_ground_contact and drone.global_position.y <= GROUND_CRASH_CENTER_HEIGHT_M:
 		return "ground_crash"
 	if _is_outside_arena(drone.global_position, arena_size):
 		return "left_arena"
-	if flipped_seconds >= FLIPPED_DURATION_SECONDS:
+	if end_on_flipped and flipped_seconds >= FLIPPED_DURATION_SECONDS:
 		return "flipped"
 	if wall_deadlock_seconds >= WALL_DEADLOCK_SECONDS:
 		return "wall_deadlock"
@@ -285,6 +315,7 @@ func _decorate_reward(reward: Dictionary) -> Dictionary:
 		0.0,
 		1.0
 	)
+	result["episode_termination_options"] = termination_options()
 	result["wall_deadlock_seconds"] = wall_deadlock_seconds
 	result["wall_deadlock_limit_seconds"] = WALL_DEADLOCK_SECONDS
 	result["wall_deadlock_progress_distance_m"] = WALL_DEADLOCK_PROGRESS_DISTANCE_M
