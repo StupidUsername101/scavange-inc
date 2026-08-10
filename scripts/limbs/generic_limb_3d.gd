@@ -98,6 +98,10 @@ func _build() -> void:
 			"joint_basis_parent": joint_basis_parent,
 			"rest_start_local": start_local,
 			"rest_end_local": end_local,
+			"rest_joint_transform_core_local": Transform3D(
+				joint_definition.joint_basis_local,
+				start_local
+			),
 			"smoothed_target_angles": Vector3.ZERO,
 			"current_angles": Vector3.ZERO,
 			"target_angles": Vector3.ZERO,
@@ -346,6 +350,13 @@ func reset_to_rest() -> void:
 	if is_instance_valid(end_effector):
 		end_effector.reset_state()
 	for record: Dictionary in joint_records:
+		var joint: Generic6DOFJoint3D = record.get("joint") as Generic6DOFJoint3D
+		var rest_joint_value: Variant = record.get(
+			"rest_joint_transform_core_local",
+			Transform3D.IDENTITY
+		)
+		if is_instance_valid(joint) and is_instance_valid(core_body) and rest_joint_value is Transform3D:
+			joint.global_transform = core_body.global_transform * (rest_joint_value as Transform3D)
 		record["smoothed_target_angles"] = Vector3.ZERO
 		record["current_angles"] = Vector3.ZERO
 		record["target_angles"] = Vector3.ZERO

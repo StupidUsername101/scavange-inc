@@ -528,6 +528,24 @@ func _test_reset_tracks_current_host_transform() -> void:
 			and segment.global_basis.z.distance_to(expected.basis.z) <= 0.0001,
 			"generic limb reset rebuilds each segment from the Core's current world transform"
 		)
+	for record: Dictionary in chain.joint_records:
+		var joint: Generic6DOFJoint3D = record.get("joint") as Generic6DOFJoint3D
+		var rest_joint_value: Variant = record.get(
+			"rest_joint_transform_core_local",
+			Transform3D.IDENTITY
+		)
+		var rest_joint: Transform3D = (
+			rest_joint_value if rest_joint_value is Transform3D else Transform3D.IDENTITY
+		)
+		var expected_joint: Transform3D = core.global_transform * rest_joint
+		_expect(
+			is_instance_valid(joint)
+			and joint.global_position.distance_to(expected_joint.origin) <= 0.0001
+			and joint.global_basis.x.distance_to(expected_joint.basis.x) <= 0.0001
+			and joint.global_basis.y.distance_to(expected_joint.basis.y) <= 0.0001
+			and joint.global_basis.z.distance_to(expected_joint.basis.z) <= 0.0001,
+			"generic limb reset moves every joint anchor with the teleported Core"
+		)
 	_expect(
 		chain.segments[0].global_position.distance_to(old_segment_position) > 1.0,
 		"a teleported drone/host cannot reset its arm back to the construction-time world position"

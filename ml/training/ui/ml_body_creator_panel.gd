@@ -13,9 +13,11 @@ const WINDOW_EDGE_MARGIN_PX: int = 40
 const SLOT_SCROLL_MINIMUM_HEIGHT_PX: float = 120.0
 
 var root_panel: PanelContainer
+var window_layout: VBoxContainer
 var content_scroll: ScrollContainer
 var root_content: VBoxContainer
 var slots_scroll: ScrollContainer
+var footer_panel: PanelContainer
 var preset_picker: OptionButton
 var core_picker: OptionButton
 var group_name_input: LineEdit
@@ -91,10 +93,12 @@ func _update_slot_scroll_minimum() -> void:
 	if slots_scroll == null or slots_content == null:
 		return
 	var natural_height: float = slots_content.get_combined_minimum_size().y
-	# The whole creator now owns vertical scrolling. Keep the parts container at its natural height
-	# so wheel/trackpad scrolling works from anywhere in the dialog instead of trapping the pointer
-	# inside a nested parts-only scroll region.
-	slots_scroll.custom_minimum_size.y = maxf(natural_height, SLOT_SCROLL_MINIMUM_HEIGHT_PX)
+	# This wrapper is not a second scroll surface. Its minimum follows only the rows that currently
+	# exist. In particular, do not preserve a previous body's larger minimum after queue_free(),
+	# because that creates a giant blank spacer before the pinned action footer.
+	var realized_height: float = natural_height if natural_height > 1.0 else SLOT_SCROLL_MINIMUM_HEIGHT_PX
+	slots_scroll.custom_minimum_size.y = realized_height
+	slots_scroll.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 
 
 func _desired_creator_window_size() -> Vector2i:
@@ -104,8 +108,14 @@ func _desired_creator_window_size() -> Vector2i:
 	var content_minimum: Vector2 = (
 		root_content.get_combined_minimum_size() if root_content != null else Vector2(float(DEFAULT_WINDOW_SIZE.x), float(DEFAULT_WINDOW_SIZE.y))
 	)
-	var desired_width: int = maxi(DEFAULT_WINDOW_SIZE.x, int(ceil(content_minimum.x)))
-	var desired_height: int = maxi(min_size.y, int(ceil(content_minimum.y)))
+	var footer_minimum: Vector2 = (
+		footer_panel.get_combined_minimum_size() if footer_panel != null else Vector2.ZERO
+	)
+	var desired_width: int = maxi(DEFAULT_WINDOW_SIZE.x, int(ceil(maxf(content_minimum.x, footer_minimum.x))))
+	var desired_height: int = maxi(
+		min_size.y,
+		int(ceil(content_minimum.y + footer_minimum.y + 10.0))
+	)
 	return Vector2i(
 		mini(desired_width, available_width),
 		mini(desired_height, available_height)
@@ -151,17 +161,24 @@ func _build_ui() -> void:
 	)
 	add_child(root_panel)
 
+	window_layout = VBoxContainer.new()
+	window_layout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	window_layout.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	window_layout.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	window_layout.add_theme_constant_override("separation", 8)
+	root_panel.add_child(window_layout)
+
 	content_scroll = ScrollContainer.new()
-	content_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	content_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	content_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	content_scroll.follow_focus = true
 	content_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root_panel.add_child(content_scroll)
+	window_layout.add_child(content_scroll)
 
 	root_content = VBoxContainer.new()
 	root_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root_content.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	root_content.add_theme_constant_override("separation", 10)
 	content_scroll.add_child(root_content)
 	var root: VBoxContainer = root_content
@@ -247,18 +264,22 @@ func _build_ui() -> void:
 	slots_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	slots_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	slots_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slots_scroll.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	root.add_child(slots_scroll)
 	slots_content = VBoxContainer.new()
 	slots_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	slots_content.add_theme_constant_override("separation", 7)
 	slots_scroll.add_child(slots_content)
 
-	var footer_panel: PanelContainer = PanelContainer.new()
+	footer_panel = PanelContainer.new()
 	footer_panel.add_theme_stylebox_override(
 		"panel",
 		DroneTrainingRoomPresentation.creator_panel_style(true)
 	)
-	root.add_child(footer_panel)
+	footer_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Keep the decisive actions outside the scrolling form. No body topology or explanatory text can
+	# push CANCEL / CREATE WORKER GROUP below a large blank scroll region again.
+	window_layout.add_child(footer_panel)
 	var footer: VBoxContainer = VBoxContainer.new()
 	footer.add_theme_constant_override("separation", 6)
 	footer_panel.add_child(footer)

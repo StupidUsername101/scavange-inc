@@ -115,7 +115,14 @@ func _test_model_body_creator_fits_realized_content_to_viewport() -> void:
 		and panel.content_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO
 		and panel.content_scroll.follow_focus
 		and panel.root_content != null,
-		"the complete creator dialog owns one vertical scroll surface so every setting stays reachable"
+		"the creator form owns one vertical scroll surface so every body/training setting stays reachable"
+	)
+	_expect(
+		panel.footer_panel != null
+		and panel.window_layout != null
+		and panel.footer_panel.get_parent() == panel.window_layout
+		and not panel.content_scroll.is_ancestor_of(panel.footer_panel),
+		"creator Cancel/Create actions stay pinned outside the scrolling form"
 	)
 	_expect(
 		panel.slots_scroll != null

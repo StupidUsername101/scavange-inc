@@ -306,11 +306,13 @@ func _propeller_array_index_for_slot(slot_index: int) -> int:
 
 
 func set_ml_propeller_degraded(slot_index: int, degraded: bool) -> bool:
-	if slot_index < 0 or slot_index >= propeller_slots.size():
+	# Slot ids are part of the body contract; do not assume they are the same thing as the runtime
+	# array index. Creator-authored layouts may eventually reorder/sparsify physical slot ids.
+	var array_index: int = _propeller_array_index_for_slot(slot_index)
+	if slot_index < 0 or array_index < 0:
 		return false
 	if degraded:
 		ml_degraded_propeller_slots[slot_index] = true
-		var array_index: int = _propeller_array_index_for_slot(slot_index)
 		if array_index >= 0 and array_index < ai_motor_thrust_targets.size():
 			ai_motor_thrust_targets[array_index] = 0.0
 		if array_index >= 0 and array_index < last_propeller_requested_power_w.size():

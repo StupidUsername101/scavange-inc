@@ -343,6 +343,10 @@ func _init() -> void:
 			and degraded_drone.model_body_contract_signature() == topology_signature,
 			"degraded-propeller evaluation disables thrust without deleting the accepted rotor slot/body contract"
 		)
+		_expect(
+			not degraded_drone.set_ml_propeller_degraded(99, true),
+			"degraded-propeller setup rejects unknown authored slot ids instead of treating them as array indices"
+		)
 		var degraded_states: Array[Dictionary] = DroneMLObservation.capture_ppo_propeller_states(degraded_drone)
 		_expect(
 			degraded_states.size() == 4
