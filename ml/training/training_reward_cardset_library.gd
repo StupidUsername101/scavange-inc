@@ -328,36 +328,9 @@ func _save_custom_cardsets() -> bool:
 		"schema_version": SCHEMA_VERSION,
 		"body_types": custom_cardsets,
 	}, "\t")
-	if not _write_text_file_atomic(STORAGE_PATH, content):
+	if not TrainingFileIO.write_text_atomic(STORAGE_PATH, content):
 		last_error = "Could not save reward cardsets."
 		return false
-	return true
-
-
-func _write_text_file_atomic(path: String, content: String) -> bool:
-	var absolute_path = ProjectSettings.globalize_path(path)
-	var temporary_path = "%s.tmp-%d" % [absolute_path, Time.get_ticks_usec()]
-	var backup_path = "%s.backup-%d" % [absolute_path, Time.get_ticks_usec()]
-	var file = FileAccess.open(temporary_path, FileAccess.WRITE)
-	if file == null:
-		return false
-	file.store_string(content)
-	file.flush()
-	file.close()
-	var had_existing = FileAccess.file_exists(absolute_path)
-	if had_existing:
-		var backup_error = DirAccess.rename_absolute(absolute_path, backup_path)
-		if backup_error != OK:
-			DirAccess.remove_absolute(temporary_path)
-			return false
-	var promote_error = DirAccess.rename_absolute(temporary_path, absolute_path)
-	if promote_error != OK:
-		if had_existing:
-			DirAccess.rename_absolute(backup_path, absolute_path)
-		DirAccess.remove_absolute(temporary_path)
-		return false
-	if had_existing:
-		DirAccess.remove_absolute(backup_path)
 	return true
 
 

@@ -277,7 +277,7 @@ func overwrite_training_checkpoint(
 		"checkpoint_file",
 		PPO_CHECKPOINT_FILE_NAME
 	)))
-	var previous_checkpoint = _read_json_dictionary(checkpoint_path)
+	var previous_checkpoint = TrainingFileIO.read_json_dictionary(checkpoint_path)
 	if previous_checkpoint.is_empty():
 		_restore_directory_backup(absolute_run_path, run_backup_path)
 		last_error = "The rolling model's previous checkpoint could not be staged for rollback."
@@ -403,7 +403,7 @@ func load_training_checkpoint(version_record: Dictionary) -> Dictionary:
 		"checkpoint_file",
 		PPO_CHECKPOINT_FILE_NAME
 	))
-	var checkpoint = _read_json_dictionary(version_path.path_join(checkpoint_name))
+	var checkpoint = TrainingFileIO.read_json_dictionary(version_path.path_join(checkpoint_name))
 	if checkpoint.is_empty():
 		last_error = "The selected training checkpoint could not be read."
 	return checkpoint
@@ -553,7 +553,7 @@ func mark_version_used(version_record_or_id: Variant) -> bool:
 		last_error = "The selected model version has no storage path."
 		return false
 	var usage_path = version_path.path_join(USAGE_FILE_NAME)
-	var usage = _read_json_dictionary(usage_path)
+	var usage = TrainingFileIO.read_json_dictionary(usage_path)
 	var now_unix_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	usage["last_used_unix_ms"] = now_unix_ms
 	usage["last_used_utc"] = Time.get_datetime_string_from_system(true, false) + "Z"
@@ -682,7 +682,7 @@ func _collect_model_versions(
 				version_path.path_join(MANIFEST_FILE_NAME)
 			)
 			if not record.is_empty():
-				var usage = _read_json_dictionary(version_path.path_join(USAGE_FILE_NAME))
+				var usage = TrainingFileIO.read_json_dictionary(version_path.path_join(USAGE_FILE_NAME))
 				if not usage.is_empty():
 					record["last_used_unix_ms"] = maxi(RLTrainingMath.finite_int_or(usage.get("last_used_unix_ms", 0), 0), 0)
 					record["last_used_utc"] = str(usage.get("last_used_utc", ""))
@@ -694,7 +694,7 @@ func _collect_model_versions(
 
 
 func _read_record(path: String) -> Dictionary:
-	var record = _read_json_dictionary(path)
+	var record = TrainingFileIO.read_json_dictionary(path)
 	if (
 		str(record.get("version_id", "")).is_empty()
 		or not (record.get("weights", {}) is Dictionary)
@@ -707,42 +707,8 @@ func _dictionary_copy(value: Variant) -> Dictionary:
 	return (value as Dictionary).duplicate(true) if value is Dictionary else {}
 
 
-func _read_json_dictionary(path: String) -> Dictionary:
-	if not FileAccess.file_exists(path):
-		return {}
-	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
-	return parsed as Dictionary if parsed is Dictionary else {}
-
-
 func _write_json_file(path: String, value: Dictionary) -> bool:
-	return _write_text_file_atomic(path, JSON.stringify(value, "\t", true, true))
-
-
-func _write_text_file_atomic(path: String, content: String) -> bool:
-	var absolute_path = ProjectSettings.globalize_path(path)
-	var temporary_path = "%s.tmp-%d" % [absolute_path, Time.get_ticks_usec()]
-	var backup_path = "%s.backup-%d" % [absolute_path, Time.get_ticks_usec()]
-	var file = FileAccess.open(temporary_path, FileAccess.WRITE)
-	if file == null:
-		return false
-	file.store_string(content)
-	file.flush()
-	file.close()
-	var had_existing = FileAccess.file_exists(absolute_path)
-	if had_existing:
-		var backup_error = DirAccess.rename_absolute(absolute_path, backup_path)
-		if backup_error != OK:
-			DirAccess.remove_absolute(temporary_path)
-			return false
-	var promote_error = DirAccess.rename_absolute(temporary_path, absolute_path)
-	if promote_error != OK:
-		if had_existing:
-			DirAccess.rename_absolute(backup_path, absolute_path)
-		DirAccess.remove_absolute(temporary_path)
-		return false
-	if had_existing:
-		DirAccess.remove_absolute(backup_path)
-	return true
+	return TrainingFileIO.write_text_atomic(path, JSON.stringify(value, "\t", true, true))
 
 
 func _restore_directory_backup(original_path: String, backup_path: String) -> bool:
@@ -810,7 +776,7 @@ func _next_version_number(model_path: String) -> int:
 func _record_next_version_floor(model_path: String, requested_floor: int) -> bool:
 	var next_floor = maxi(requested_floor, _next_version_number(model_path))
 	var sequence_path = model_path.path_join(NEXT_VERSION_FILE_NAME)
-	if not _write_text_file_atomic(sequence_path, str(next_floor)):
+	if not TrainingFileIO.write_text_atomic(sequence_path, str(next_floor)):
 		last_error = "Could not preserve the model family's version sequence atomically (%s)." % error_string(
 			FileAccess.get_open_error()
 		)

@@ -119,6 +119,40 @@ func _init() -> void:
 		"linked power readback reflects the real shared bottleneck"
 	)
 
+	var attachment_power_copy: DroneLoadout = DroneTrainingLoadoutConfig.duplicate_loadout(baseline)
+	var powered_attachment: DroneAttachmentDefinition = DroneAttachmentDefinition.new()
+	powered_attachment.idle_power_draw = 19.0
+	_expect(
+		attachment_power_copy.install_attachment(0, powered_attachment),
+		"linked-power overhead test can install a generic powered attachment"
+	)
+	_expect(
+		DroneTrainingLoadoutConfig.set_linked_flight_power_per_rotor(
+			attachment_power_copy,
+			linked_power
+		),
+		"linked power can reserve bus headroom for attachment idle draw"
+	)
+	var linked_total_with_attachment: float = (
+		linked_power * DroneTrainingLoadoutConfig.CURRENT_TRAINING_PROPELLER_COUNT
+		+ powered_attachment.idle_power_draw
+	)
+	_expect(
+		is_equal_approx(
+			attachment_power_copy.battery.nominal_power_output,
+			linked_total_with_attachment
+		)
+		and is_equal_approx(
+			attachment_power_copy.core.max_power_throughput,
+			linked_total_with_attachment
+		)
+		and is_equal_approx(
+			DroneTrainingLoadoutConfig.linked_flight_power_per_rotor(attachment_power_copy),
+			linked_power
+		),
+		"linked flight power accounts for runtime attachment idle draw before rotor allocation"
+	)
+
 	var summary = DroneTrainingLoadoutConfig.physical_summary(private_copy)
 	_expect(not summary.is_empty(), "physical summary is produced")
 	_expect(float(summary.get("mass_kg", 0.0)) > 0.0, "summary has positive mass")
@@ -127,6 +161,73 @@ func _init() -> void:
 		float(summary.get("nominal_lift_to_weight", 0.0)) > 0.0,
 		"summary has a finite positive lift-to-weight ratio"
 	)
+
+	var rotor_for_math: DronePropellerDefinition = private_copy.get_propeller(0)
+	var rotor_test_power: float = rotor_for_math.max_power_draw * 0.63
+	var shared_thrust: float = DroneRotorPhysics.thrust_for_power(
+		rotor_test_power,
+		rotor_for_math.get_disk_area(),
+		rotor_for_math.aerodynamic_efficiency,
+		DroneTrainingLoadoutConfig.DEFAULT_AIR_DENSITY_KG_M3
+	)
+	var runtime_air: AirEnvironment = AirEnvironment.new()
+	runtime_air.air_density = DroneTrainingLoadoutConfig.DEFAULT_AIR_DENSITY_KG_M3
+	_expect(
+		is_equal_approx(
+			runtime_air.calculate_rotor_thrust(
+				rotor_test_power,
+				rotor_for_math.get_disk_area(),
+				rotor_for_math.aerodynamic_efficiency
+			),
+			shared_thrust
+		)
+		and is_equal_approx(
+			DroneTrainingLoadoutConfig._rotor_thrust(
+				rotor_test_power,
+				rotor_for_math,
+				DroneTrainingLoadoutConfig.DEFAULT_AIR_DENSITY_KG_M3
+			),
+			shared_thrust
+		),
+		"training diagnostics and runtime flight use one shared rotor thrust equation"
+	)
+	var recovered_power: float = runtime_air.calculate_rotor_power(
+		shared_thrust,
+		rotor_for_math.get_disk_area(),
+		rotor_for_math.aerodynamic_efficiency
+	)
+	_expect(
+		is_equal_approx(recovered_power, rotor_test_power),
+		"shared rotor power/thrust equations remain inverse for normal flight hardware"
+	)
+	var edge_rotor: DronePropellerDefinition = DronePropellerDefinition.new()
+	edge_rotor.rotor_radius = 0.01
+	edge_rotor.aerodynamic_efficiency = 0.01
+	var edge_air: AirEnvironment = AirEnvironment.new()
+	edge_air.air_density = 0.01
+	var edge_power: float = 7.5
+	var edge_thrust: float = DroneTrainingLoadoutConfig._rotor_thrust(
+		edge_power,
+		edge_rotor,
+		edge_air.air_density
+	)
+	_expect(
+		is_equal_approx(
+			DroneTrainingLoadoutConfig._rotor_power(edge_thrust, edge_rotor, edge_air.air_density),
+			edge_power
+		)
+		and is_equal_approx(
+			edge_air.calculate_rotor_power(
+				edge_thrust,
+				edge_rotor.get_disk_area(),
+				edge_rotor.aerodynamic_efficiency
+			),
+			edge_power
+		),
+		"runtime and diagnostics stay inverse-consistent at the creator's minimum valid rotor radius and efficiency"
+	)
+	edge_air.free()
+	runtime_air.free()
 
 	var stock_quad_manifest: MLBodyInterfaceManifest = DroneMLBodyInterfaceFactory.finalize_loadout(private_copy)
 	_expect(

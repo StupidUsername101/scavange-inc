@@ -146,7 +146,7 @@ func get_map(map_id: String) -> Dictionary:
 	var clean_id := map_id.strip_edges().trim_prefix("/").trim_suffix("/")
 	if clean_id.is_empty() or clean_id.contains(".."):
 		return {}
-	var record := _read_json_dictionary(
+	var record: Dictionary = TrainingFileIO.read_json_dictionary(
 		root_path.path_join(clean_id).path_join(MANIFEST_FILE_NAME)
 	)
 	if str(record.get("map_id", "")) != clean_id:
@@ -206,7 +206,7 @@ func mark_used(map_record_or_id: Variant) -> bool:
 		last_error = "The selected map no longer exists."
 		return false
 	var usage_path := str(record.get("storage_path", "")).path_join(USAGE_FILE_NAME)
-	var usage := _read_json_dictionary(usage_path)
+	var usage: Dictionary = TrainingFileIO.read_json_dictionary(usage_path)
 	usage["last_used_unix_ms"] = int(Time.get_unix_time_from_system() * 1000.0)
 	usage["last_used_utc"] = Time.get_datetime_string_from_system(true, false) + "Z"
 	usage["use_count"] = maxi(RLTrainingMath.finite_int_or(usage.get("use_count", 0), 0), 0) + 1
@@ -236,7 +236,7 @@ func _collect_family(family_path: String, result: Array[Dictionary]) -> void:
 	while not version_name.is_empty():
 		if directory.current_is_dir():
 			var version_path := family_path.path_join(version_name)
-			var record := _read_json_dictionary(version_path.path_join(MANIFEST_FILE_NAME))
+			var record: Dictionary = TrainingFileIO.read_json_dictionary(version_path.path_join(MANIFEST_FILE_NAME))
 			if not record.is_empty() and not str(record.get("map_id", "")).is_empty():
 				_apply_usage(record, version_path)
 				record["storage_path"] = version_path
@@ -246,20 +246,13 @@ func _collect_family(family_path: String, result: Array[Dictionary]) -> void:
 
 
 func _apply_usage(record: Dictionary, version_path: String) -> void:
-	var usage = _read_json_dictionary(version_path.path_join(USAGE_FILE_NAME))
+	var usage = TrainingFileIO.read_json_dictionary(version_path.path_join(USAGE_FILE_NAME))
 	record["last_used_unix_ms"] = maxi(
 		RLTrainingMath.finite_int_or(usage.get("last_used_unix_ms", 0), 0),
 		0
 	)
 	record["last_used_utc"] = str(usage.get("last_used_utc", ""))
 	record["use_count"] = maxi(RLTrainingMath.finite_int_or(usage.get("use_count", 0), 0), 0)
-
-
-func _read_json_dictionary(path: String) -> Dictionary:
-	if not FileAccess.file_exists(path):
-		return {}
-	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
-	return parsed as Dictionary if parsed is Dictionary else {}
 
 
 func _write_json_file(path: String, value: Dictionary) -> bool:
@@ -269,34 +262,7 @@ func _write_json_file(path: String, value: Dictionary) -> bool:
 		stored.erase("last_used_unix_ms")
 		stored.erase("last_used_utc")
 		stored.erase("use_count")
-	return _write_text_file_atomic(path, JSON.stringify(stored, "\t", true, true))
-
-
-func _write_text_file_atomic(path: String, content: String) -> bool:
-	var absolute_path = ProjectSettings.globalize_path(path)
-	var temporary_path = "%s.tmp-%d" % [absolute_path, Time.get_ticks_usec()]
-	var backup_path = "%s.backup-%d" % [absolute_path, Time.get_ticks_usec()]
-	var file = FileAccess.open(temporary_path, FileAccess.WRITE)
-	if file == null:
-		return false
-	file.store_string(content)
-	file.flush()
-	file.close()
-	var had_existing = FileAccess.file_exists(absolute_path)
-	if had_existing:
-		var backup_error = DirAccess.rename_absolute(absolute_path, backup_path)
-		if backup_error != OK:
-			DirAccess.remove_absolute(temporary_path)
-			return false
-	var promote_error = DirAccess.rename_absolute(temporary_path, absolute_path)
-	if promote_error != OK:
-		if had_existing:
-			DirAccess.rename_absolute(backup_path, absolute_path)
-		DirAccess.remove_absolute(temporary_path)
-		return false
-	if had_existing:
-		DirAccess.remove_absolute(backup_path)
-	return true
+	return TrainingFileIO.write_text_atomic(path, JSON.stringify(stored, "\t", true, true))
 
 
 func _remove_directory_recursive_absolute(absolute_path: String) -> bool:
@@ -355,7 +321,7 @@ func _record_next_version_floor(family_path: String, requested_floor: int) -> bo
 		return false
 	var sequence_path := family_path.path_join(NEXT_VERSION_FILE_NAME)
 	var sequence_value = str(maxi(requested_floor, _next_version_number(family_path)))
-	if not _write_text_file_atomic(sequence_path, sequence_value):
+	if not TrainingFileIO.write_text_atomic(sequence_path, sequence_value):
 		last_error = "Could not preserve the map version sequence."
 		return false
 	return true

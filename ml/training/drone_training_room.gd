@@ -800,12 +800,13 @@ func _on_turret_worker_action_applied(
 func _physics_process(delta: float) -> void:
 	if wall_spatial_hash_dirty:
 		_rebuild_wall_spatial_hash()
-	var limb_group_active = false
+	var drone_group_active: bool = _has_active_drone_group()
+	var limb_group_active: bool = false
 	for group: Dictionary in limb_training.groups:
 		if bool(group.get("active", false)):
 			limb_group_active = true
 			break
-	var turret_group_active = false
+	var turret_group_active: bool = false
 	for group: Dictionary in turret_training.groups:
 		if bool(group.get("active", false)):
 			turret_group_active = true
@@ -818,13 +819,13 @@ func _physics_process(delta: float) -> void:
 	# entities for future turret spawning, but do not walk and re-bucket every body each
 	# physics tick until a turret group can actually consume that index.
 	_set_training_items_simulation_active(
-		_has_active_drone_group() or limb_group_active or turret_group_active
+		drone_group_active or limb_group_active or turret_group_active
 	)
-	_recover_lost_training_items()
+	_recover_lost_training_items(false)
 	if turret_group_active:
 		training_entity_spatial_hash.refresh_all()
 	elif not training_items.is_empty():
-		_refresh_training_item_spatial_positions()
+		_refresh_training_item_spatial_positions(false)
 	_tick_target_handlers(delta)
 	_tick_candidate_evaluations(delta)
 	if episode_running:
@@ -840,7 +841,7 @@ func _physics_process(delta: float) -> void:
 		# Match the limb coordinator's respawn-delay pause semantics: an all-paused drone
 		# population freezes its intermission countdown too. Standalone evaluator drones are
 		# not controlled by worker-group pause and therefore keep the shared cycle moving.
-		if _has_active_drone_group() or not _evaluation_trials().is_empty():
+		if drone_group_active or not _evaluation_trials().is_empty():
 			intermission_remaining = maxf(intermission_remaining - delta, 0.0)
 			if intermission_remaining <= 0.0 and auto_restart_episodes:
 				_start_episode("Next controlled episode started.")
@@ -5971,8 +5972,9 @@ func _training_item_is_held_by_paused_limb(item: TrainingItem3D) -> bool:
 	return false
 
 
-func _recover_lost_training_items() -> int:
-	_prune_invalid_training_items()
+func _recover_lost_training_items(prune_first: bool = true) -> int:
+	if prune_first:
+		_prune_invalid_training_items()
 	var recovered_count: int = 0
 	for item: TrainingItem3D in training_items:
 		if not item.needs_recovery(
@@ -6000,8 +6002,9 @@ func _recover_lost_training_items() -> int:
 	return recovered_count
 
 
-func _refresh_training_item_spatial_positions() -> void:
-	_prune_invalid_training_items()
+func _refresh_training_item_spatial_positions(prune_first: bool = true) -> void:
+	if prune_first:
+		_prune_invalid_training_items()
 	for item: TrainingItem3D in training_items:
 		training_entity_spatial_hash.update_entity(item.spatial_key())
 
@@ -7651,7 +7654,7 @@ func _build_loadout_controls(content: VBoxContainer) -> void:
 		1.0,
 		30.0,
 		" W per rotor",
-		"Comfort control for lift authority. It changes all four rotor limits and the battery/core bus ceilings together, so raising it actually increases available thrust instead of being silently bottlenecked by another part.",
+		"Comfort control for lift authority. It changes every installed rotor limit and the battery/core bus ceilings together, so raising it actually increases available thrust instead of being silently bottlenecked by another part.",
 		_set_selected_linked_flight_power
 	)
 	loadout_edit_controls.append(linked_flight_power_input)
@@ -7676,7 +7679,7 @@ func _build_loadout_controls(content: VBoxContainer) -> void:
 	)
 	loadout_propeller_picker = _add_loadout_preset_picker(
 		presets,
-		"All four propellers",
+		"All propellers",
 		LOADOUT_CONFIG.propeller_presets(),
 		&"propeller"
 	)
@@ -7710,7 +7713,7 @@ func _build_loadout_controls(content: VBoxContainer) -> void:
 	)
 	_add_loadout_stat_input(battery_stats, "Battery mass", &"battery", &"mass", 0.01, 20.0, 0.01, " kg", "Contributes directly to total drone mass.")
 	_add_loadout_stat_input(battery_stats, "Capacity", &"battery", &"energy_capacity_wh", 0.001, 10000.0, 0.01, " Wh", "Stored energy used when unlimited episode battery is disabled.")
-	_add_loadout_stat_input(battery_stats, "Nominal output", &"battery", &"nominal_power_output", 0.0, 2000.0, 1.0, " W", "Normal total bus power available to all four propellers.")
+	_add_loadout_stat_input(battery_stats, "Nominal output", &"battery", &"nominal_power_output", 0.0, 2000.0, 1.0, " W", "Normal total bus power available to all installed propellers.")
 	_add_loadout_stat_input(battery_stats, "Maximum output", &"battery", &"maximum_power_output", 0.0, 3000.0, 1.0, " W", "Upper total bus-power ceiling during positive fluctuations or spikes.")
 	_add_loadout_stat_input(battery_stats, "Battery consistency", &"battery", &"power_output_consistency", 0.0, 1.0, 0.001, "", "One means stable battery output. Lower values create stronger power variation.")
 	_add_loadout_stat_input(battery_stats, "Battery fluctuation rate", &"battery", &"fluctuation_rate", 0.0, 20.0, 0.01, " Hz", "How quickly battery-output variation changes.")
@@ -7718,12 +7721,12 @@ func _build_loadout_controls(content: VBoxContainer) -> void:
 
 	var propeller_stats = _add_section(
 		content,
-		"FOUR PROPELLERS",
-		"These values are applied identically to all four rotor definitions so the PPO action layout remains a symmetric quadrotor.",
+		"PROPELLERS",
+		"These values are applied identically to every installed propeller. The accepted body interface still determines how many rotor controls the policy owns.",
 		false
 	)
 	_add_loadout_stat_input(propeller_stats, "Maximum draw per propeller", &"propeller", &"max_power_draw", 0.0, 500.0, 1.0, " W", "Advanced per-rotor power cap. Unlike Linked flight power, this does not automatically change battery or core bus limits.")
-	_add_loadout_stat_input(propeller_stats, "Mass per propeller", &"propeller", &"mass", 0.001, 10.0, 0.001, " kg", "Mass of each rotor assembly; total propeller mass is four times this value.")
+	_add_loadout_stat_input(propeller_stats, "Mass per propeller", &"propeller", &"mass", 0.001, 10.0, 0.001, " kg", "Mass of each rotor assembly; total propeller mass is this value multiplied by the number of installed propellers.")
 	_add_loadout_stat_input(propeller_stats, "Rotor radius", &"propeller", &"rotor_radius", 0.01, 2.0, 0.01, " m", "Rotor disk radius used by the thrust model and visual rotor size.")
 	_add_loadout_stat_input(propeller_stats, "Aerodynamic efficiency", &"propeller", &"aerodynamic_efficiency", 0.01, 1.0, 0.01, "", "Fraction of electrical power converted into useful induced airflow in the thrust model.")
 	_add_loadout_stat_input(propeller_stats, "Reaction torque / newton", &"propeller", &"reaction_torque_per_newton", 0.0, 1.0, 0.001, "", "Yaw reaction torque generated for each newton of rotor thrust.")
@@ -7928,7 +7931,7 @@ func _select_loadout_preset(part_kind: StringName, resource_path: String) -> voi
 		&"propeller":
 			installed = LOADOUT_CONFIG.install_propeller_preset(loadout, resource_path)
 	if not installed:
-		status_label.text = "Could not install that part into the four-propeller training drone."
+		status_label.text = "Could not install that part into this training body."
 		_refresh_selected_loadout_controls()
 		return
 	if not _ensure_group_drone_profile_hardware(group):
@@ -10194,29 +10197,6 @@ func _confirm_delete_selected_maps() -> void:
 		status_label.text = "Deleted %d maps; %d failed: %s" % [deleted, failures.size(), "; ".join(failures)]
 
 
-func _request_delete_selected_model() -> void:
-	# Compatibility helper for older call sites: batch-delete the inspected version only.
-	if selected_model_version_id.is_empty():
-		return
-	model_batch_selected_ids.clear()
-	model_batch_selected_ids[selected_model_version_id] = true
-	_update_model_batch_delete_controls()
-	_request_delete_selected_models()
-
-
-func _request_delete_model(version_id = "") -> void:
-	var requested_id = str(version_id)
-	if requested_id.is_empty():
-		requested_id = selected_model_version_id
-	if requested_id.is_empty():
-		return
-	selected_model_version_id = requested_id
-	model_batch_selected_ids.clear()
-	model_batch_selected_ids[requested_id] = true
-	_update_model_batch_delete_controls()
-	_request_delete_selected_models()
-
-
 func _request_delete_selected_models() -> void:
 	var version_ids = _batch_selected_model_ids()
 	if version_ids.is_empty() or model_delete_dialog == null:
@@ -10354,7 +10334,7 @@ func _build_branch_dialog() -> void:
 	content.add_child(branch_name_edit)
 	var algorithm_label = Label.new()
 	algorithm_label.text = "Learning algorithm"
-	algorithm_label.tooltip_text = "Learning algorithm\n\nPPO learns from the newest collected flight. SAC-HER reuses older flights and safe points reached during failed attempts.\nBoth directly control the four propellers."
+	algorithm_label.tooltip_text = "Learning algorithm\n\nPPO learns from the newest collected flight and follows the accepted creator body interface. SAC-HER reuses older flights and safe points reached during failed attempts, and remains restricted to the stock four-propeller body."
 	content.add_child(algorithm_label)
 	branch_algorithm_picker = OptionButton.new()
 	branch_algorithm_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -12890,15 +12870,6 @@ func _create_turret_worker_group(
 	_begin_turret_placement(group_id, start_active, 0, false)
 
 
-func _open_model_browser_for_evaluator() -> void:
-	_open_model_browser(-1)
-	status_label.text = "Select a saved model and press SPAWN EVALUATOR."
-
-
-func _open_branch_dialog() -> void:
-	_open_selected_branch_dialog()
-
-
 func _open_selected_branch_dialog() -> void:
 	if selected_turret_group_id >= 0 and not _selected_turret_group().is_empty():
 		turret_ui.open_branch_dialog(selected_turret_group_id)
@@ -14797,7 +14768,7 @@ func _start_episode(message: String) -> void:
 				_trial_episode_progress(trial)
 			)
 			if is_evaluation:
-				var preview_observation: Dictionary = _runtime_observation_for_model(drone, policy)
+				var preview_observation: Dictionary = drone.get_ml_snapshot_for_model(policy)
 				var preview_action = policy.predict_action(preview_observation)
 				var preview_validation = DroneMLAction.validate(
 					preview_action,
@@ -15388,19 +15359,6 @@ func _candidate_evaluation_tooltip(group: Dictionary) -> String:
 	if queue_position > 0:
 		return "Frozen candidate %d is waiting in deterministic-evaluation queue position %d. One hidden evaluator is shared across drone, limb, and turret groups to bound simulation cost." % [candidate_id, queue_position]
 	return "Frozen candidate %d has been nominated and is waiting for the hidden deterministic evaluator to start." % candidate_id
-
-
-func _runtime_observation_for_model(
-	body: ServerDrone,
-	model: DroneMLModel
-) -> Dictionary:
-	if body == null or model == null:
-		return {}
-	return (
-		body.get_ppo_snapshot()
-		if model.uses_compact_ppo_observation()
-		else body.get_ml_snapshot()
-	)
 
 
 func _candidate_evaluation_compact_text(group: Dictionary) -> String:
@@ -17648,7 +17606,14 @@ func _record_action_trace_sample(
 		commands = PackedFloat64Array(sample_commands)
 	var expected_action_count = _drone_action_names(group).size()
 	if commands.size() != expected_action_count and is_instance_valid(drone):
-		commands = _drone_policy_unit_commands_from_action(group, sample.get("action", {}))
+		var body_contract_value: Variant = group.get("body_interface", {})
+		var body_contract: Dictionary = (
+			body_contract_value as Dictionary if body_contract_value is Dictionary else {}
+		)
+		commands = DroneTrainingActionCodec.policy_unit_commands_from_action(
+			body_contract,
+			sample.get("action", {})
+		)
 	var group_id = int(group.get("group_id", -1))
 	var source_id = _action_trace_source_id("drone", group_id)
 	var worker_episode_number: int = _trial_episode_number(trial)
@@ -17669,91 +17634,6 @@ func _record_action_trace_sample(
 		_trial_episode_elapsed(trial),
 		commands
 	)
-
-
-func _drone_policy_unit_commands_from_action(
-	group: Dictionary,
-	action_value: Variant
-) -> PackedFloat64Array:
-	if not (action_value is Dictionary):
-		return PackedFloat64Array()
-	var action: Dictionary = action_value
-	var body_contract_value: Variant = group.get("body_interface", {})
-	var body_contract: Dictionary = (
-		body_contract_value as Dictionary if body_contract_value is Dictionary else {}
-	)
-	var controls_value: Variant = body_contract.get("controls", [])
-	var raw_commands: Variant = action.get("body_commands", null)
-	var source: PackedFloat64Array = _packed_numeric_sequence(raw_commands)
-	if controls_value is Array and not source.is_empty():
-		var controls: Array = controls_value
-		if source.size() == controls.size():
-			var result = PackedFloat64Array()
-			result.resize(source.size())
-			for index in range(source.size()):
-				var descriptor_value: Variant = controls[index]
-				if not (descriptor_value is Dictionary):
-					return PackedFloat64Array()
-				var descriptor: Dictionary = descriptor_value
-				var minimum: float = float(descriptor.get("minimum", -1.0))
-				var maximum: float = float(descriptor.get("maximum", 1.0))
-				var value: float = source[index]
-				if not is_finite(value) or not is_finite(minimum) or not is_finite(maximum) or maximum <= minimum:
-					return PackedFloat64Array()
-				result[index] = clampf((value - minimum) / (maximum - minimum), 0.0, 1.0)
-			return result
-	var legacy_value: Variant = action.get("propeller_commands", null)
-	if legacy_value is Array:
-		var legacy_entries: Array = legacy_value
-		if legacy_entries.size() == QUAD_PROPELLER_COUNT:
-			var legacy = PackedFloat64Array()
-			legacy.resize(legacy_entries.size())
-			for index in range(legacy_entries.size()):
-				var entry_value: Variant = legacy_entries[index]
-				var command_value: Variant = (
-					(entry_value as Dictionary).get("command", NAN)
-					if entry_value is Dictionary
-					else entry_value
-				)
-				if not (command_value is int or command_value is float):
-					return PackedFloat64Array()
-				var value: float = float(command_value)
-				if not is_finite(value):
-					return PackedFloat64Array()
-				legacy[index] = clampf(value, 0.0, 1.0)
-			return legacy
-	var legacy_numeric: PackedFloat64Array = _packed_numeric_sequence(legacy_value)
-	if legacy_numeric.size() == QUAD_PROPELLER_COUNT:
-		for index in range(legacy_numeric.size()):
-			legacy_numeric[index] = clampf(legacy_numeric[index], 0.0, 1.0)
-		return legacy_numeric
-	return PackedFloat64Array()
-
-
-func _packed_numeric_sequence(value: Variant) -> PackedFloat64Array:
-	var result = PackedFloat64Array()
-	if value is PackedFloat64Array:
-		var source64: PackedFloat64Array = value
-		result = source64.duplicate()
-	elif value is PackedFloat32Array:
-		var source32: PackedFloat32Array = value
-		result.resize(source32.size())
-		for index in range(source32.size()):
-			result[index] = source32[index]
-	elif value is Array:
-		var source_array: Array = value
-		result.resize(source_array.size())
-		for index in range(source_array.size()):
-			var element: Variant = source_array[index]
-			if not (element is int or element is float):
-				return PackedFloat64Array()
-			result[index] = float(element)
-	else:
-		return PackedFloat64Array()
-	for element: float in result:
-		if not is_finite(element):
-			return PackedFloat64Array()
-	return result
 
 
 func _refresh_action_trace_panel() -> void:
@@ -17929,6 +17809,14 @@ func _append_turret_action_trace_rows(group_rows: Array[Dictionary]) -> void:
 		})
 
 
+func _drone_group_plot_series(
+	group: Dictionary,
+	plot_id: String
+) -> Array[Dictionary]:
+	# Keep the room-level test/debug seam stable while the implementation lives in the pure builder.
+	return DroneTrainingPlotSeriesBuilder.drone_group_series(group, plot_id)
+
+
 func _refresh_plots() -> void:
 	if plots_page != null and not plots_page.visible:
 		plots_dirty = true
@@ -17973,20 +17861,26 @@ func _refresh_plots() -> void:
 		var context_id = _all_plot_context_id(plot_id)
 		if group.is_empty() and limb_group.is_empty() and turret_group.is_empty():
 			plot.call("set_display_context", context_id)
-			plot.call("set_series", _all_group_plot_series(plot_id))
+			plot.call("set_series", DroneTrainingPlotSeriesBuilder.all_group_series(
+				plot_id,
+				worker_groups,
+				limb_training.groups,
+				turret_training.groups,
+				model_versions
+			))
 		elif not turret_group.is_empty():
 			var turret_source_id = "turret:%d" % int(turret_group.get("group_id", -1))
 			plot.call("set_display_context", "%s:%s" % [turret_source_id, plot_id])
-			plot.call("set_series", _tag_plot_series(
-				_turret_group_plot_series(turret_group, plot_id),
+			plot.call("set_series", DroneTrainingPlotSeriesBuilder.tag_series(
+				DroneTrainingPlotSeriesBuilder.turret_group_series(turret_group, plot_id),
 				turret_source_id,
 				"turret"
 			))
 		elif not limb_group.is_empty():
 			var limb_source_id = "limb:%d" % int(limb_group.get("group_id", -1))
 			plot.call("set_display_context", "%s:%s" % [limb_source_id, plot_id])
-			plot.call("set_series", _tag_plot_series(
-				_limb_group_plot_series(limb_group, plot_id),
+			plot.call("set_series", DroneTrainingPlotSeriesBuilder.tag_series(
+				DroneTrainingPlotSeriesBuilder.limb_group_series(limb_group, plot_id),
 				limb_source_id,
 				"limb"
 			))
@@ -17995,15 +17889,15 @@ func _refresh_plots() -> void:
 				"set_display_context",
 				"drone:%d:checkpoints" % int(group.get("group_id", -1))
 			)
-			plot.call("set_series", _checkpoint_improvement_series(
+			plot.call("set_series", DroneTrainingPlotSeriesBuilder.checkpoint_improvement_series(
+				model_versions,
 				str(group.get("model_family_name", ""))
 			))
 		else:
-			var history: DroneTrainingMetricsHistory = group["history"]
 			var drone_source_id = "drone:%d" % int(group.get("group_id", -1))
 			plot.call("set_display_context", "%s:%s" % [drone_source_id, plot_id])
-			plot.call("set_series", _tag_plot_series(
-				_drone_group_plot_series(group, plot_id),
+			plot.call("set_series", DroneTrainingPlotSeriesBuilder.tag_series(
+				DroneTrainingPlotSeriesBuilder.drone_group_series(group, plot_id),
 				drone_source_id,
 				"drone"
 			))
@@ -18045,24 +17939,6 @@ func _toggle_plot_expanded(plot_id: String) -> void:
 	_refresh_plots()
 
 
-func _tag_plot_series(
-	entries: Array[Dictionary],
-	source_id: String,
-	body_type: String,
-	label_prefix: String = ""
-) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	for index in range(entries.size()):
-		var entry = entries[index].duplicate(false)
-		var original_label = str(entry.get("label", "series"))
-		entry["label"] = "%s%s" % [label_prefix, original_label]
-		entry["source_id"] = source_id
-		entry["body_type"] = body_type
-		entry["series_id"] = "%s:%s:%d" % [source_id, original_label, index]
-		result.append(entry)
-	return result
-
-
 func _all_plot_context_id(plot_id: String) -> String:
 	var source_ids: Array[String] = []
 	for group in worker_groups:
@@ -18073,322 +17949,6 @@ func _all_plot_context_id(plot_id: String) -> String:
 		source_ids.append("t%d" % int(turret_group.get("group_id", -1)))
 	source_ids.sort()
 	return "all:%s:%s" % [plot_id, ",".join(source_ids)]
-
-
-func _all_group_plot_series(plot_id: String) -> Array[Dictionary]:
-	if plot_id == "checkpoints":
-		return _tag_plot_series(
-			_checkpoint_improvement_series(),
-			"all:checkpoints",
-			"checkpoint"
-		)
-	var result: Array[Dictionary] = []
-	for group in worker_groups:
-		var history: DroneTrainingMetricsHistory = group["history"]
-		var label = str(group["name"])
-		var color: Color = group["color"]
-		var entries: Array[Dictionary] = []
-		match plot_id:
-			"progress":
-				entries.append(history.episode_mean_series(
-					"mean_reward_per_second", label, color
-				))
-			"tracking":
-				entries.append(history.hover_ratio_mean_series(label, color))
-			"rewards":
-				entries.append(history.episode_mean_series(
-					"distance_m", label, color
-				))
-			"losses":
-				var drone_trainer: DroneTrainingAlgorithm = group.get("trainer") as DroneTrainingAlgorithm
-				var loss_key: String = (
-					"critic_loss"
-					if drone_trainer != null
-					and drone_trainer.algorithm_id() == DroneSACTrainer.TRAINING_ALGORITHM_ID
-					else "value_loss"
-				)
-				entries.append(history.update_metric_series(loss_key, label, color))
-			"stability":
-				entries.append(history.update_metric_series(
-					"approximate_kl", label, color
-				))
-		for entry: Dictionary in _tag_plot_series(
-			entries,
-			"drone:%d" % int(group.get("group_id", -1)),
-			"drone",
-			"Drone · "
-		):
-			result.append(entry)
-	for limb_group: Dictionary in limb_training.groups:
-		var limb_history = limb_group["history"] as DroneTrainingMetricsHistory
-		var limb_label = str(limb_group["name"])
-		var limb_color: Color = limb_group["color"]
-		var limb_entries: Array[Dictionary] = []
-		match plot_id:
-			"progress":
-				limb_entries.append(limb_history.episode_mean_series(
-					"mean_reward_per_second", limb_label, limb_color
-				))
-			"tracking":
-				limb_entries.append(limb_history.hover_ratio_mean_series(
-					limb_label,
-					limb_color
-				))
-			"rewards":
-				limb_entries.append(limb_history.episode_mean_series(
-					"distance_m", limb_label, limb_color
-				))
-			"losses":
-				limb_entries.append(limb_history.update_metric_series(
-					"value_loss", limb_label, limb_color
-				))
-			"stability":
-				limb_entries.append(limb_history.update_metric_series(
-					"approximate_kl", limb_label, limb_color
-				))
-		for entry: Dictionary in _tag_plot_series(
-			limb_entries,
-			"limb:%d" % int(limb_group.get("group_id", -1)),
-			"limb",
-			"Limb · "
-		):
-			result.append(entry)
-	for turret_group: Dictionary in turret_training.groups:
-		var turret_history = turret_group["history"] as DroneTrainingMetricsHistory
-		var turret_label = str(turret_group["name"])
-		var turret_color: Color = turret_group["color"]
-		var turret_entries: Array[Dictionary] = []
-		match plot_id:
-			"progress":
-				turret_entries.append(turret_history.episode_mean_series("mean_reward_per_second", turret_label, turret_color))
-			"tracking":
-				turret_entries.append(turret_history.hover_ratio_mean_series(turret_label, turret_color))
-			"rewards":
-				turret_entries.append(turret_history.episode_mean_series("distance_m", turret_label, turret_color))
-			"losses":
-				turret_entries.append(turret_history.update_metric_series("value_loss", turret_label, turret_color))
-			"stability":
-				turret_entries.append(turret_history.update_metric_series("approximate_kl", turret_label, turret_color))
-		for entry: Dictionary in _tag_plot_series(
-			turret_entries,
-			"turret:%d" % int(turret_group.get("group_id", -1)),
-			"turret",
-			"Turret · "
-		):
-			result.append(entry)
-	return result
-
-
-func _drone_group_plot_series(
-	group: Dictionary,
-	plot_id: String
-) -> Array[Dictionary]:
-	if group.is_empty():
-		return []
-	var history: DroneTrainingMetricsHistory = group.get("history") as DroneTrainingMetricsHistory
-	if history == null:
-		return []
-	var trainer: DroneTrainingAlgorithm = group.get("trainer") as DroneTrainingAlgorithm
-	if (
-		plot_id == "losses"
-		and trainer != null
-		and trainer.algorithm_id() == DroneSACTrainer.TRAINING_ALGORITHM_ID
-	):
-		# SAC has twin Q critics; it never publishes PPO's `value_loss`. The old generic
-		# plot silently substituted zero for that missing key, making a healthy critic look dead.
-		return [
-			history.update_metric_series("actor_loss", "actor", Color("54e6b1")),
-			history.update_metric_series("q_one_loss", "critic Q1", Color("ffad42")),
-			history.update_metric_series("q_two_loss", "critic Q2", Color("b08cff")),
-		]
-	var result: Array[Dictionary] = history.plot_series(plot_id)
-	if plot_id != "stability":
-		return result
-	if trainer == null or trainer.algorithm_id() != DronePPOTrainer.TRAINING_ALGORITHM_ID:
-		return result
-	# PPO exploration metrics use the same names for every body type so the learning
-	# boxes/plots are comparable. The action distribution is latent Gaussian space.
-	return result
-
-
-func _turret_group_plot_series(
-	group: Dictionary,
-	plot_id: String
-) -> Array[Dictionary]:
-	if group.is_empty():
-		return []
-	var history = group["history"] as DroneTrainingMetricsHistory
-	match plot_id:
-		"progress":
-			return [
-				history.episode_mean_series("mean_reward_per_second", "reward/s", Color("54e6b1")),
-				history.hover_ratio_mean_series("precise aim", Color("ffad42")),
-			]
-		"tracking":
-			return [
-				history.episode_mean_series("distance_m", "target distance m", Color("8de1ff")),
-				history.hover_ratio_mean_series("precise aim", Color("ffad42")),
-			]
-		"rewards":
-			var reward_series: Array[Dictionary] = []
-			var cards = (group["reward_deck"] as TurretRewardDeck).card_list()
-			for index in range(cards.size()):
-				var reward_card = cards[index] as FourLimbRewardCard
-				if reward_card == null:
-					continue
-				reward_series.append(history.episode_mean_series(
-					"cumulative_%s_reward" % reward_card.card_id,
-					reward_card.display_name,
-					Color.from_hsv(float(index) / float(maxi(cards.size(), 1)), 0.68, 0.95)
-				))
-			return reward_series
-		"losses":
-			return [
-				history.update_metric_series("actor_loss", "actor", Color("54e6b1")),
-				history.update_metric_series("value_loss", "critic", Color("ffad42")),
-			]
-		"stability":
-			return [
-				history.update_metric_series("entropy", "latent entropy", Color("8de1ff")),
-				history.update_metric_series("approximate_kl", "KL", Color("ff5c77")),
-				history.update_metric_series("clip_fraction", "clip", Color("b08cff")),
-				history.update_metric_series("action_standard_deviation_mean", "latent action std", Color("54e6b1")),
-			]
-	return []
-
-
-func _limb_group_plot_series(
-	group: Dictionary,
-	plot_id: String
-) -> Array[Dictionary]:
-	if group.is_empty():
-		return []
-	var history = group["history"] as DroneTrainingMetricsHistory
-	match plot_id:
-		"progress":
-			return [
-				history.episode_mean_series(
-					"mean_reward_per_second",
-					"reward/s",
-					Color("54e6b1")
-				),
-				history.hover_ratio_mean_series(
-					"target hold",
-					Color("ffad42")
-				),
-			]
-		"tracking":
-			return [
-				history.episode_mean_series(
-					"distance_m",
-					"distance m",
-					Color("8de1ff")
-				),
-				history.episode_mean_series(
-					"maximum_horizontal_displacement_m",
-					"travel m",
-					Color("ffad42")
-				),
-			]
-		"rewards":
-			var reward_series: Array[Dictionary] = []
-			var deck = group["reward_deck"] as FourLimbRewardDeck
-			var cards = deck.card_list()
-			for index in range(cards.size()):
-				var card_value: FourLimbRewardCard = cards[index]
-				if card_value == null:
-					continue
-				reward_series.append(history.episode_mean_series(
-					"cumulative_%s_reward" % card_value.card_id,
-					card_value.display_name,
-					Color.from_hsv(
-						float(index) / float(maxi(cards.size(), 1)),
-						0.68,
-						0.95
-					)
-				))
-			return reward_series
-		"losses":
-			return [
-				history.update_metric_series(
-					"actor_loss", "actor", Color("54e6b1")
-				),
-				history.update_metric_series(
-					"value_loss", "critic", Color("ffad42")
-				),
-			]
-		"stability":
-			return [
-				history.update_metric_series(
-					"entropy", "latent entropy", Color("8de1ff")
-				),
-				history.update_metric_series(
-					"approximate_kl", "KL", Color("ff5c77")
-				),
-				history.update_metric_series(
-					"clip_fraction", "clip", Color("b08cff")
-				),
-				history.update_metric_series(
-					"action_standard_deviation_mean",
-					"latent action std",
-					Color("54e6b1")
-				),
-				history.update_metric_series(
-					"policy_parameter_delta_rms",
-					"policy change",
-					Color("ffd166")
-				),
-			]
-	return []
-
-
-func _checkpoint_improvement_series(model_name_filter = "") -> Array[Dictionary]:
-	var records_by_id: Dictionary = {}
-	var records_by_family: Dictionary = {}
-	for version in model_versions:
-		if not DroneTrainingAlgorithmCatalog.is_training_checkpoint(version):
-			continue
-		if not (str(version.get("checkpoint_kind", "")) in ["best", "auto_best"]):
-			continue
-		if not RLTrainingMath.bool_or(version.get("score_matches_checkpoint", false), false):
-			continue
-		var model_name = str(version.get("model_name", "Model"))
-		if not str(model_name_filter).is_empty() and model_name != str(model_name_filter):
-			continue
-		records_by_id[str(version.get("version_id", ""))] = version
-		if not records_by_family.has(model_name):
-			records_by_family[model_name] = []
-		(records_by_family[model_name] as Array).append(version)
-	var result: Array[Dictionary] = []
-	for model_name in records_by_family:
-		var records: Array = records_by_family[model_name]
-		records.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			return RLTrainingMath.finite_int_or(a.get("version", 0), 0) < RLTrainingMath.finite_int_or(b.get("version", 0), 0)
-		)
-		var points = PackedVector2Array()
-		var previous_score = NAN
-		for record in records:
-			var score = RLTrainingMath.finite_float_or(record.get("best_candidate_score", 0.0), 0.0)
-			var reference_score = previous_score
-			var parent_id = str(record.get("parent_version_id", ""))
-			if records_by_id.has(parent_id):
-				reference_score = RLTrainingMath.finite_float_or(
-					(records_by_id[parent_id] as Dictionary).get("best_candidate_score", score),
-					score
-				)
-			var improvement = 0.0 if not is_finite(reference_score) else score - reference_score
-			points.append(Vector2(
-				float(RLTrainingMath.finite_int_or(record.get("version", 0), 0)),
-				improvement
-			))
-			previous_score = score
-		var hue = float(posmod(str(model_name).hash(), 10000)) / 10000.0
-		result.append({
-			"label": "%s gain" % model_name,
-			"color": Color.from_hsv(hue, 0.68, 0.95),
-			"points": points,
-		})
-	return result
 
 
 func _apply_selection_highlight() -> void:
@@ -18556,14 +18116,6 @@ func _update_model_batch_delete_controls() -> void:
 	if delete_model_button != null:
 		delete_model_button.text = "DELETE SELECTED (%d)" % selected_count
 		delete_model_button.disabled = selected_count == 0
-
-
-func _select_model_version(index: int) -> void:
-	# Retained for older call sites and tests that select by list index.
-	if index < 0 or index >= model_versions.size():
-		return
-	selected_model_version_id = str(model_versions[index].get("version_id", ""))
-	_refresh_model_versions(selected_model_version_id)
 
 
 func _training_identity_text(group: Dictionary) -> String:

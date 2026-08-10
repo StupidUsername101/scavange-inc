@@ -21,6 +21,8 @@ func _init() -> void:
 	_test_model_body_creator_fits_realized_content_to_viewport()
 	_test_model_body_creator_staged_core_layout()
 	_test_model_body_creator_core_geometry_editing()
+	_test_editable_core_geometry_rejects_corrupt_topology()
+	_test_plot_series_builder_preserves_context_tags()
 	_test_model_body_creator_unbounded_attachment_layout()
 	_test_paused_drone_candidate_keeps_frozen_hardware()
 	_test_room_episode_status_is_one_shared_line()
@@ -299,6 +301,59 @@ func _test_model_body_creator_core_geometry_editing() -> void:
 		"edited dynamic Cores use their authored vertices for one convex physics hull instead of reverting to BoxShape3D"
 	)
 	panel.free()
+
+
+func _test_editable_core_geometry_rejects_corrupt_topology() -> void:
+	var mesh: DroneCoreEditableMeshDefinition = DroneCoreEditableMeshDefinition.new()
+	mesh.configure_box(Vector3.ONE)
+	mesh.face_offsets = PackedInt32Array([0, 4, 100, 12, 16, 20, 24])
+	_expect(
+		not mesh.has_geometry(),
+		"editable Core validation rejects an out-of-range intermediate face offset instead of indexing past topology data"
+	)
+	_expect(
+		mesh.face_indices(1).is_empty(),
+		"face lookup on malformed persisted topology fails closed instead of indexing beyond the face-index array"
+	)
+	mesh.configure_box(Vector3.ONE)
+	mesh.face_offsets = PackedInt32Array([0, 4, 3, 12, 16, 20, 24])
+	_expect(
+		not mesh.has_geometry(),
+		"editable Core validation rejects non-monotonic logical face offsets"
+	)
+	mesh.configure_box(Vector3.ONE)
+	mesh.vertices[0] = Vector3(NAN, 0.0, 0.0)
+	_expect(
+		not mesh.has_geometry(),
+		"editable Core validation rejects non-finite persisted vertices before mesh/collision construction"
+	)
+
+
+func _test_plot_series_builder_preserves_context_tags() -> void:
+	var source_entries: Array[Dictionary] = [{
+		"label": "reward",
+		"color": Color.WHITE,
+		"points": PackedVector2Array([Vector2(1.0, 2.0)]),
+	}]
+	var tagged: Array[Dictionary] = DroneTrainingPlotSeriesBuilder.tag_series(
+		source_entries,
+		"drone:7",
+		"drone",
+		"Drone · "
+	)
+	_expect(
+		tagged.size() == 1
+		and str(tagged[0].get("label", "")) == "Drone · reward"
+		and str(tagged[0].get("source_id", "")) == "drone:7"
+		and str(tagged[0].get("body_type", "")) == "drone"
+		and str(tagged[0].get("series_id", "")) == "drone:7:reward:0",
+		"extracted plot-series builder preserves source/body context and stable series identifiers"
+	)
+	_expect(
+		str(source_entries[0].get("label", "")) == "reward"
+		and not source_entries[0].has("source_id"),
+		"plot-series tagging does not mutate the metrics history entry supplied by the room"
+	)
 
 
 func _test_model_body_creator_unbounded_attachment_layout() -> void:

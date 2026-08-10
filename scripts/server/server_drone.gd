@@ -1289,6 +1289,12 @@ func get_ppo_snapshot() -> Dictionary:
 	return ml_controller.ppo_snapshot_now() if ml_controller != null else {}
 
 
+func get_ml_snapshot_for_model(model: DroneMLModel) -> Dictionary:
+	if model == null:
+		return {}
+	return get_ppo_snapshot() if model.uses_compact_ppo_observation() else get_ml_snapshot()
+
+
 func get_ml_normalized_commands() -> Array[float]:
 	return ml_controller.normalized_commands() if ml_controller != null else []
 

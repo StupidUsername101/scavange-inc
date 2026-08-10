@@ -176,15 +176,22 @@ static func linked_flight_power_per_rotor(loadout: DroneLoadout) -> float:
 		if propeller == null:
 			return 0.0
 		rotor_cap = minf(rotor_cap, maxf(propeller.max_power_draw, 0.0))
-	var nominal_bus_per_rotor = minf(
-		maxf(loadout.battery.nominal_power_output, 0.0),
-		maxf(loadout.battery.maximum_power_output, 0.0)
-	) / float(propeller_count)
-	var core_bus_per_rotor = (
-		maxf(loadout.core.max_power_throughput, 0.0)
-		/ float(propeller_count)
+	var attachment_idle_power: float = _attachment_idle_power(loadout)
+	var nominal_rotor_bus: float = maxf(
+		minf(
+			maxf(loadout.battery.nominal_power_output, 0.0),
+			maxf(loadout.battery.maximum_power_output, 0.0)
+		) - attachment_idle_power,
+		0.0
 	)
-	return minf(rotor_cap, minf(nominal_bus_per_rotor, core_bus_per_rotor))
+	var core_rotor_bus: float = maxf(
+		maxf(loadout.core.max_power_throughput, 0.0) - attachment_idle_power,
+		0.0
+	)
+	return minf(
+		rotor_cap,
+		minf(nominal_rotor_bus, core_rotor_bus) / float(propeller_count)
+	)
 
 
 static func set_linked_flight_power_per_rotor(
@@ -206,7 +213,12 @@ static func set_linked_flight_power_per_rotor(
 		if propeller == null:
 			return false
 		propeller.max_power_draw = safe_power
-	var total_power = safe_power * float(propeller_count)
+	# Runtime attachment idle draw is allocated before rotor power. Include that fixed overhead in
+	# every linked bus ceiling so the selected per-rotor value remains physically available.
+	var total_power: float = (
+		safe_power * float(propeller_count)
+		+ _attachment_idle_power(loadout)
+	)
 	loadout.battery.nominal_power_output = total_power
 	loadout.battery.maximum_power_output = total_power
 	loadout.core.max_power_throughput = total_power
@@ -883,14 +895,14 @@ static func _rotor_thrust(
 	propeller: DronePropellerDefinition,
 	air_density: float
 ) -> float:
-	if propeller == null or power_w <= 0.0:
+	if propeller == null:
 		return 0.0
-	var useful_power_term = (
-		power_w
-		* clampf(propeller.aerodynamic_efficiency, 0.01, 1.0)
-		* sqrt(2.0 * maxf(air_density, 0.01) * propeller.get_disk_area())
+	return DroneRotorPhysics.thrust_for_power(
+		power_w,
+		propeller.get_disk_area(),
+		propeller.aerodynamic_efficiency,
+		air_density
 	)
-	return pow(maxf(useful_power_term, 0.0), 2.0 / 3.0)
 
 
 static func _rotor_power(
@@ -898,10 +910,11 @@ static func _rotor_power(
 	propeller: DronePropellerDefinition,
 	air_density: float
 ) -> float:
-	if propeller == null or thrust_n <= 0.0:
+	if propeller == null:
 		return 0.0
-	var denominator = (
-		clampf(propeller.aerodynamic_efficiency, 0.01, 1.0)
-		* sqrt(2.0 * maxf(air_density, 0.01) * propeller.get_disk_area())
+	return DroneRotorPhysics.power_for_thrust(
+		thrust_n,
+		propeller.get_disk_area(),
+		propeller.aerodynamic_efficiency,
+		air_density
 	)
-	return pow(thrust_n, 1.5) / maxf(denominator, MINIMUM_DENOMINATOR)

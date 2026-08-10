@@ -4,6 +4,37 @@ var failure_count = 0
 
 
 func _init() -> void:
+	var normalized_commands: PackedFloat64Array = DroneTrainingActionCodec.policy_unit_commands_from_action(
+		{
+			"controls": [
+				{"minimum": -2.0, "maximum": 2.0},
+				{"minimum": 0.0, "maximum": 10.0},
+			]
+		},
+		{"body_commands": PackedFloat64Array([0.0, 2.5])}
+	)
+	_expect(
+		normalized_commands.size() == 2
+		and is_equal_approx(normalized_commands[0], 0.5)
+		and is_equal_approx(normalized_commands[1], 0.25),
+		"action telemetry codec normalizes generic creator control ranges without room-specific action parsing"
+	)
+	var legacy_commands: PackedFloat64Array = DroneTrainingActionCodec.policy_unit_commands_from_action(
+		{},
+		{
+			"propeller_commands": [
+				{"command": 0.1},
+				{"command": 0.2},
+				{"command": 0.3},
+				{"command": 0.4},
+			]
+		}
+	)
+	_expect(
+		legacy_commands == PackedFloat64Array([0.1, 0.2, 0.3, 0.4]),
+		"action telemetry codec retains legacy quad trace compatibility outside DroneTrainingRoom"
+	)
+
 	var buffer = DroneTrainingActionTraceBuffer.new()
 	var drone_names: Array[String] = ["P0 thrust", "P1 thrust", "P2 thrust", "P3 thrust"]
 	buffer.begin_source_episode(

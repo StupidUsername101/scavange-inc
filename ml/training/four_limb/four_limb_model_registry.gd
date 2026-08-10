@@ -61,7 +61,7 @@ func save_checkpoint(model_name: String, checkpoint: Dictionary) -> Dictionary:
 		return {}
 	record["storage_path"] = version_path
 	var stored_record = _resolve(record)
-	var stored_checkpoint = _read_json(
+	var stored_checkpoint = TrainingFileIO.read_json_dictionary(
 		version_path.path_join(CHECKPOINT_FILE_NAME)
 	)
 	if stored_record.is_empty() or not _is_compatible_checkpoint(stored_checkpoint):
@@ -95,7 +95,7 @@ func overwrite_checkpoint(record_or_id: Variant, checkpoint: Dictionary) -> Dict
 		"checkpoint_file",
 		CHECKPOINT_FILE_NAME
 	)))
-	var previous_checkpoint = _read_json(checkpoint_path)
+	var previous_checkpoint = TrainingFileIO.read_json_dictionary(checkpoint_path)
 	if previous_checkpoint.is_empty() or not _is_compatible_checkpoint(previous_checkpoint):
 		last_error = "The rolling four-limb checkpoint could not be staged for rollback."
 		return {}
@@ -113,7 +113,7 @@ func overwrite_checkpoint(record_or_id: Variant, checkpoint: Dictionary) -> Dict
 			last_error = "Rolling four-limb save failed and checkpoint rollback was incomplete; inspect this model version before using it."
 		return {}
 	var stored_record = _resolve(record)
-	var stored_checkpoint = _read_json(checkpoint_path)
+	var stored_checkpoint = TrainingFileIO.read_json_dictionary(checkpoint_path)
 	if stored_record.is_empty() or not _is_compatible_checkpoint(stored_checkpoint):
 		last_error = "The rolling model was written but failed the save verification check."
 		return {}
@@ -150,7 +150,7 @@ func load_checkpoint(record_or_id: Variant) -> Dictionary:
 	if record.is_empty():
 		last_error = "The selected four-limb model no longer exists."
 		return {}
-	var checkpoint = _read_json(str(record["storage_path"]).path_join(str(record.get("checkpoint_file", CHECKPOINT_FILE_NAME))))
+	var checkpoint = TrainingFileIO.read_json_dictionary(str(record["storage_path"]).path_join(str(record.get("checkpoint_file", CHECKPOINT_FILE_NAME))))
 	if not _is_compatible_checkpoint(checkpoint):
 		last_error = "The selected file is not a compatible four-limb checkpoint."
 		return {}
@@ -195,7 +195,7 @@ func _resolve(record_or_id: Variant) -> Dictionary:
 	):
 		return {}
 	var version_path = root_path.path_join(model_key).path_join(version_name)
-	var record = _read_json(version_path.path_join(MANIFEST_FILE_NAME))
+	var record = TrainingFileIO.read_json_dictionary(version_path.path_join(MANIFEST_FILE_NAME))
 	if (
 		str(record.get("version_id", "")) != version_id
 		or str(record.get("artifact_type", "")) != "trained_four_limb_policy"
@@ -214,7 +214,7 @@ func _collect_family(path: String, result: Array[Dictionary]) -> void:
 	while not entry.is_empty():
 		if directory.current_is_dir():
 			var version_path = path.path_join(entry)
-			var record = _read_json(version_path.path_join(MANIFEST_FILE_NAME))
+			var record = TrainingFileIO.read_json_dictionary(version_path.path_join(MANIFEST_FILE_NAME))
 			if not record.is_empty() and str(record.get("artifact_type", "")) == "trained_four_limb_policy":
 				record["storage_path"] = version_path
 				result.append(record)
@@ -279,44 +279,10 @@ func _key(value: String) -> String:
 	return result.trim_suffix("-") if not result.trim_suffix("-").is_empty() else "four-limb-model"
 
 
-func _read_json(path: String) -> Dictionary:
-	if not FileAccess.file_exists(path):
-		return {}
-	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
-	return parsed as Dictionary if parsed is Dictionary else {}
-
-
 func _write_json(path: String, value: Dictionary) -> bool:
 	var stored = value.duplicate(true)
 	stored.erase("storage_path")
-	return _write_text_atomic(path, JSON.stringify(stored, "\t", true, true))
-
-
-func _write_text_atomic(path: String, content: String) -> bool:
-	var absolute_path: String = ProjectSettings.globalize_path(path)
-	var temporary_path: String = "%s.tmp-%d" % [absolute_path, Time.get_ticks_usec()]
-	var backup_path: String = "%s.backup-%d" % [absolute_path, Time.get_ticks_usec()]
-	var file = FileAccess.open(temporary_path, FileAccess.WRITE)
-	if file == null:
-		return false
-	file.store_string(content)
-	file.flush()
-	file.close()
-	var had_existing: bool = FileAccess.file_exists(absolute_path)
-	if had_existing:
-		var backup_error: Error = DirAccess.rename_absolute(absolute_path, backup_path)
-		if backup_error != OK:
-			DirAccess.remove_absolute(temporary_path)
-			return false
-	var promote_error: Error = DirAccess.rename_absolute(temporary_path, absolute_path)
-	if promote_error != OK:
-		if had_existing:
-			DirAccess.rename_absolute(backup_path, absolute_path)
-		DirAccess.remove_absolute(temporary_path)
-		return false
-	if had_existing:
-		DirAccess.remove_absolute(backup_path)
-	return true
+	return TrainingFileIO.write_text_atomic(path, JSON.stringify(stored, "\t", true, true))
 
 
 func _remove_directory(absolute_path: String) -> bool:

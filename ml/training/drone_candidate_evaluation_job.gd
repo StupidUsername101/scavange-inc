@@ -396,7 +396,7 @@ func _begin_case(next_case_index: int) -> bool:
 		"obstacle_probe": obstacle_probe,
 		"turret_threat_probe": initial_threat_probe,
 	})
-	var preview_observation: Dictionary = _runtime_observation_for_model(drone, runtime_model)
+	var preview_observation: Dictionary = drone.get_ml_snapshot_for_model(runtime_model)
 	var preview_action: Dictionary = runtime_model.predict_action(preview_observation)
 	var preview_validation: Dictionary = DroneMLAction.validate(
 		preview_action,
@@ -426,19 +426,6 @@ func _begin_case(next_case_index: int) -> bool:
 	# synthetic visit so the first physics control decision starts from a genuinely clean case.
 	runtime_model.reset_episode_state(case_seed)
 	return true
-
-
-func _runtime_observation_for_model(
-	body: ServerDrone,
-	model: DroneMLModel
-) -> Dictionary:
-	if body == null or model == null:
-		return {}
-	return (
-		body.get_ppo_snapshot()
-		if model.uses_compact_ppo_observation()
-		else body.get_ml_snapshot()
-	)
 
 
 func _restore_full_loadout() -> void:

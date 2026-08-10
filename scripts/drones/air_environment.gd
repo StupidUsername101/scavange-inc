@@ -27,17 +27,12 @@ func calculate_rotor_thrust(
 	disk_area: float,
 	efficiency: float
 ) -> float:
-	if shaft_power <= 0.0 or disk_area <= 0.0:
-		return 0.0
-
-	# Inverse of ideal rotor induced power:
-	# P = T^(3/2) / sqrt(2 * rho * A).
-	var useful_power_term := (
-		shaft_power
-		* clampf(efficiency, 0.01, 1.0)
-		* sqrt(2.0 * air_density * disk_area)
+	return DroneRotorPhysics.thrust_for_power(
+		shaft_power,
+		disk_area,
+		efficiency,
+		air_density
 	)
-	return pow(maxf(useful_power_term, 0.0), 2.0 / 3.0)
 
 
 func calculate_rotor_power(
@@ -45,16 +40,12 @@ func calculate_rotor_power(
 	disk_area: float,
 	efficiency: float
 ) -> float:
-	if thrust <= 0.0 or disk_area <= 0.0:
-		return 0.0
-
-	# Inverse of calculate_rotor_thrust. Flight control asks for force; the
-	# battery/rotor system then decides whether that force can be afforded.
-	var denominator := (
-		clampf(efficiency, 0.01, 1.0)
-		* sqrt(2.0 * air_density * disk_area)
+	return DroneRotorPhysics.power_for_thrust(
+		thrust,
+		disk_area,
+		efficiency,
+		air_density
 	)
-	return pow(thrust, 1.5) / maxf(denominator, 0.0001)
 
 
 func calculate_induced_velocity(

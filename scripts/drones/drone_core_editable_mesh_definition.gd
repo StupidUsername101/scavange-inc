@@ -23,10 +23,25 @@ func has_geometry() -> bool:
 		return false
 	if face_offsets[0] != 0 or face_offsets[face_offsets.size() - 1] != face_vertex_indices.size():
 		return false
-	for face_index: int in range(face_count()):
-		if _face_end(face_index) - _face_start(face_index) < 3:
+	for vertex: Vector3 in vertices:
+		if not vertex.is_finite():
 			return false
-		for cursor: int in range(_face_start(face_index), _face_end(face_index)):
+	var previous_offset: int = 0
+	for offset_index: int in range(face_offsets.size()):
+		var offset: int = face_offsets[offset_index]
+		if offset < 0 or offset > face_vertex_indices.size():
+			return false
+		if offset_index > 0 and offset < previous_offset:
+			return false
+		previous_offset = offset
+	for face_index: int in range(face_count()):
+		if not _face_span_is_valid(face_index):
+			return false
+		var face_start: int = _face_start(face_index)
+		var face_end: int = _face_end(face_index)
+		if face_end - face_start < 3:
+			return false
+		for cursor: int in range(face_start, face_end):
 			var vertex_index: int = face_vertex_indices[cursor]
 			if vertex_index < 0 or vertex_index >= vertices.size():
 				return false
@@ -74,10 +89,15 @@ func face_count() -> int:
 
 func face_indices(face_index: int) -> PackedInt32Array:
 	var result: PackedInt32Array = PackedInt32Array()
-	if face_index < 0 or face_index >= face_count():
+	if not _face_span_is_valid(face_index):
 		return result
-	for cursor: int in range(_face_start(face_index), _face_end(face_index)):
-		result.append(face_vertex_indices[cursor])
+	var face_start: int = _face_start(face_index)
+	var face_end: int = _face_end(face_index)
+	for cursor: int in range(face_start, face_end):
+		var vertex_index: int = face_vertex_indices[cursor]
+		if vertex_index < 0 or vertex_index >= vertices.size():
+			return PackedInt32Array()
+		result.append(vertex_index)
 	return result
 
 
@@ -263,6 +283,18 @@ func point_is_on_face(point: Vector3, face_index: int, tolerance: float = 0.015)
 		):
 			return true
 	return false
+
+
+func _face_span_is_valid(face_index: int) -> bool:
+	if face_index < 0 or face_index + 1 >= face_offsets.size():
+		return false
+	var face_start: int = face_offsets[face_index]
+	var face_end: int = face_offsets[face_index + 1]
+	return (
+		face_start >= 0
+		and face_end >= face_start
+		and face_end <= face_vertex_indices.size()
+	)
 
 
 func _face_start(face_index: int) -> int:
