@@ -523,15 +523,15 @@ func limb_snapshot(
 		),
 		"grip_candidate_dynamic": bool(effector_snapshot.get("candidate_dynamic", false)),
 		"grip_candidate_target_mass": float(effector_snapshot.get("candidate_target_mass", 0.0)),
-		"grip_candidate_climbable": _surface_tags_have(grip_candidate_tags, "climbable"),
-		"grip_candidate_carryable": _surface_tags_have(grip_candidate_tags, "carryable"),
+		"grip_candidate_climbable": GenericGrip3D.surface_tags_have(grip_candidate_tags, "climbable"),
+		"grip_candidate_carryable": GenericGrip3D.surface_tags_have(grip_candidate_tags, "carryable"),
 		"grip_attached": grip_attached,
 		"grip_attached_dynamic": bool(effector_snapshot.get("attached_dynamic", false)),
 		"grip_attached_target_id": int(effector_snapshot.get("attached_target_id", 0)),
 		"grip_attached_target_mass": float(effector_snapshot.get("attached_target_mass", 0.0)),
 		"grip_attached_surface_tags": grip_attached_tags,
-		"grip_attached_climbable": _surface_tags_have(grip_attached_tags, "climbable"),
-		"grip_attached_carryable": _surface_tags_have(grip_attached_tags, "carryable"),
+		"grip_attached_climbable": GenericGrip3D.surface_tags_have(grip_attached_tags, "climbable"),
+		"grip_attached_carryable": GenericGrip3D.surface_tags_have(grip_attached_tags, "carryable"),
 		"grip_load_ratio": float(effector_snapshot.get("load_ratio", 0.0)),
 		"grip_pickup_sequence": int(effector_snapshot.get("pickup_sequence", 0)),
 		"end_effector": effector_snapshot,
@@ -1316,16 +1316,6 @@ static func _dictionary_vector3(
 ) -> Vector3:
 	var value: Variant = data.get(key, fallback)
 	return value if value is Vector3 and (value as Vector3).is_finite() else fallback
-
-
-static func _surface_tags_have(value: Variant, expected: String) -> bool:
-	if value is PackedStringArray:
-		return (value as PackedStringArray).has(expected)
-	if value is Array:
-		for entry: Variant in value:
-			if str(entry) == expected:
-				return true
-	return false
 
 
 func _contact_array_vector3(contact_snapshot: Dictionary, key: String, index: int) -> Vector3:

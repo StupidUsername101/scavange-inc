@@ -46,38 +46,32 @@ func _ready() -> void:
 
 func apply_player_state(state: Dictionary) -> void:
 	health_ratio = clampf(
-		float(state.get("health_ratio", health_ratio)),
+		SafeVariant.finite_float_or(state.get("health_ratio", health_ratio), health_ratio),
 		0.0,
 		1.0
 	)
 	stamina_ratio = clampf(
-		float(state.get("stamina_ratio", stamina_ratio)),
+		SafeVariant.finite_float_or(state.get("stamina_ratio", stamina_ratio), stamina_ratio),
 		0.0,
 		1.0
 	)
 	interaction_hint = str(state.get("interaction_hint", ""))
 	weapon_reload_ratio = clampf(
-		float(state.get("weapon_reload_ratio", 0.0)),
+		SafeVariant.finite_float_or(state.get("weapon_reload_ratio", 0.0), 0.0),
 		0.0,
 		1.0
 	)
 
-	var inventory: Dictionary = state.get("inventory", {})
-	var next_capacity := clampi(
-		int(inventory.get("capacity", 1)),
-		1,
-		PlayerInventoryRules.MAX_CAPACITY
+	var inventory: Dictionary = PlayerInventoryRules.sanitize_public_inventory(
+		state.get("inventory", {})
 	)
+	var next_capacity: int = int(inventory["capacity"])
 	if next_capacity != capacity:
 		capacity = next_capacity
 		capacity_pulse = 1.0
-	selected_slot = clampi(
-		int(inventory.get("selected_slot", 0)),
-		0,
-		capacity - 1
-	)
-	inventory_entries = inventory.get("entries", []).duplicate(true)
-	equipment = inventory.get("equipment", {}).duplicate(true)
+	selected_slot = int(inventory["selected_slot"])
+	inventory_entries = (inventory["entries"] as Array).duplicate(true)
+	equipment = (inventory["equipment"] as Dictionary).duplicate(true)
 	queue_redraw()
 
 

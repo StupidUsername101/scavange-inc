@@ -41,14 +41,11 @@ static func build_layout() -> Dictionary:
 
 static func _load_definitions() -> Array[EnemyDefinition]:
 	var result: Array[EnemyDefinition] = []
-	var directory := DirAccess.open(ENEMY_DIRECTORY)
-	if directory == null:
+	if DirAccess.open(ENEMY_DIRECTORY) == null:
 		push_error("Dev zoo cannot open catalog: %s" % ENEMY_DIRECTORY)
 		return result
-	for file_name: String in directory.get_files():
-		if not file_name.ends_with(".tres"):
-			continue
-		var definition := load(ENEMY_DIRECTORY.path_join(file_name))
+	for resource_path: String in ResourcePathDiscovery.collect_shallow(ENEMY_DIRECTORY, ["tres"]):
+		var definition: Resource = load(resource_path)
 		if definition is EnemyDefinition:
 			result.append(definition as EnemyDefinition)
 	result.sort_custom(

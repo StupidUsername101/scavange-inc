@@ -301,7 +301,7 @@ func refresh_group_cards() -> void:
 				if reward_card.enabled:
 					enabled_count += 1
 			reward_label.text = "Reward cards: %d/%d enabled" % [enabled_count, card_count]
-		_refresh_rolling_button(group)
+		DroneTrainingRollingSaveButton.refresh_group(group)
 
 
 func selected_group() -> Dictionary:
@@ -366,7 +366,7 @@ func save_group(
 		_set_status(registry.last_error)
 	else:
 		_set_status("%s %s." % ["Updated" if overwritten else "Saved", registry.display_name(record)])
-	_refresh_rolling_button(group)
+	DroneTrainingRollingSaveButton.refresh_group(group)
 	return record
 
 
@@ -414,7 +414,7 @@ func set_group_overwrite(group_id: int, enabled: bool) -> void:
 		return
 	group["overwrite_saved_versions"] = enabled
 	group["rolling_version_id"] = ""
-	_refresh_rolling_button(group)
+	DroneTrainingRollingSaveButton.refresh_group(group)
 	_set_status(
 		"%s will keep one newest group-owned turret model. Its source checkpoint remains untouched."
 		% str(group.get("name", "Turret group"))
@@ -792,7 +792,7 @@ func _add_group_card(parent: VBoxContainer, group: Dictionary) -> void:
 	group["reward_label"] = reward_label
 	group["hardware_label"] = null
 	group["overwrite_button"] = overwrite_button
-	_refresh_rolling_button(group)
+	DroneTrainingRollingSaveButton.refresh_group(group)
 	if selected:
 		room.call_deferred("_animate_box_open", details)
 
@@ -1307,16 +1307,6 @@ func _confirm_delete_model() -> void:
 	else:
 		_set_status(registry.last_error)
 	pending_delete_record = {}
-
-
-func _refresh_rolling_button(group: Dictionary) -> void:
-	var button = group.get("overwrite_button") as Button
-	if button == null:
-		return
-	var enabled = bool(group.get("overwrite_saved_versions", true))
-	button.set_pressed_no_signal(enabled)
-	button.text = "KEEP NEWEST: ON" if enabled else "KEEP NEWEST: OFF"
-	button.call("set_rolling_active", enabled)
 
 
 func _set_status(text: String) -> void:

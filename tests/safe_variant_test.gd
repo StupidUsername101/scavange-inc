@@ -64,6 +64,42 @@ func _init() -> void:
 		) == Vector3(1.0, 2.0, 3.0),
 		"strict vector decoding retains dictionary support where legacy callers had it"
 	)
+	_expect(
+		SafeVariant.vector2_strict_or("broken", Vector2(2.0, 3.0)) == Vector2(2.0, 3.0),
+		"strict Vector2 decoding rejects wrong-type public state"
+	)
+	_expect(
+		SafeVariant.color_strict_or(Color(NAN, 0.0, 0.0), Color.WHITE) == Color.WHITE,
+		"strict Color decoding rejects non-finite public state"
+	)
+	var fallback_transform: Transform3D = Transform3D(Basis.IDENTITY, Vector3(9.0, 8.0, 7.0))
+	var valid_transform: Transform3D = Transform3D(Basis.IDENTITY, Vector3(1.0, 2.0, 3.0))
+	var invalid_transform: Transform3D = Transform3D(
+		Basis.IDENTITY,
+		Vector3(NAN, 0.0, 0.0)
+	)
+	_expect(
+		SafeVariant.transform3d_strict_or(valid_transform, fallback_transform) == valid_transform,
+		"strict Transform3D decoding preserves finite transforms"
+	)
+	_expect(
+		SafeVariant.transform3d_strict_or(invalid_transform, fallback_transform) == fallback_transform,
+		"strict Transform3D decoding rejects non-finite transforms"
+	)
+	_expect(
+		SafeVariant.transform3d_strict_or("broken", fallback_transform) == fallback_transform,
+		"strict Transform3D decoding rejects wrong-type public state"
+	)
+	var safe_points: PackedVector3Array = PackedVector3Array([Vector3.ONE, Vector3(2.0, 3.0, 4.0)])
+	var bad_points: PackedVector3Array = PackedVector3Array([Vector3.ONE, Vector3(NAN, 0.0, 0.0)])
+	_expect(
+		SafeVariant.packed_vector3_array_strict_or(safe_points, PackedVector3Array()).size() == 2,
+		"strict PackedVector3Array decoding preserves finite rope state"
+	)
+	_expect(
+		SafeVariant.packed_vector3_array_strict_or(bad_points, PackedVector3Array()).is_empty(),
+		"strict PackedVector3Array decoding rejects non-finite rope points"
+	)
 
 	var source: Dictionary = {"nested": {"value": 3}}
 	var copied: Dictionary = SafeVariant.dictionary_copy(source)
@@ -77,6 +113,18 @@ func _init() -> void:
 	_expect(
 		SafeVariant.dictionary_copy("not a dictionary").is_empty(),
 		"wrong-type dictionary values fail closed"
+	)
+
+	var array_source: Array = [{"value": 1}, 2]
+	var array_copy: Array = SafeVariant.array_copy(array_source)
+	(array_copy[0] as Dictionary)["value"] = 9
+	_expect(
+		int((array_source[0] as Dictionary).get("value", 0)) == 1,
+		"array_copy is deep by default"
+	)
+	_expect(
+		SafeVariant.array_copy("not an array").is_empty(),
+		"wrong-type array values fail closed"
 	)
 
 	var dictionary_array_source: Array = [{"value": 1}, "skip", {"value": 2}]

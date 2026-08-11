@@ -62,6 +62,7 @@ static func decode_resource(snapshot: Dictionary) -> Resource:
 		snapshot.is_empty()
 		or _contains_unsupported(snapshot)
 		or _contains_unknown_type_tag(snapshot)
+		or not _encoded_payload_is_well_formed(snapshot, 0)
 	):
 		return null
 	return _decode_resource(snapshot, 0)
@@ -122,10 +123,14 @@ static func _encode_resource(
 static func _decode_resource(snapshot: Dictionary, depth: int) -> Resource:
 	if snapshot.is_empty() or depth > MAXIMUM_RECURSION_DEPTH:
 		return null
-	if int(snapshot.get("schema_version", -1)) != SCHEMA_VERSION:
+	if SafeVariant.integral_int_or(snapshot.get("schema_version", -1), -1) != SCHEMA_VERSION:
 		return null
-	var resource_path: String = str(snapshot.get("resource_path", ""))
-	var script_path: String = str(snapshot.get("script_path", ""))
+	var resource_path_value: Variant = snapshot.get("resource_path", "")
+	var script_path_value: Variant = snapshot.get("script_path", "")
+	if not (resource_path_value is String) or not (script_path_value is String):
+		return null
+	var resource_path: String = resource_path_value
+	var script_path: String = script_path_value
 	var accepted_resource_path: String = ""
 	var result: Resource = null
 	if not resource_path.is_empty() and ResourceLoader.exists(resource_path):
@@ -149,13 +154,20 @@ static func _decode_resource(snapshot: Dictionary, depth: int) -> Resource:
 	var known_properties: Dictionary = {}
 	for property_value: Variant in result.get_property_list():
 		if property_value is Dictionary:
-			known_properties[str((property_value as Dictionary).get("name", ""))] = true
+			var property_info: Dictionary = property_value as Dictionary
+			known_properties[str(property_info.get("name", ""))] = property_info
 	for property_name_value: Variant in properties.keys():
 		var property_name: String = str(property_name_value)
 		if not known_properties.has(property_name):
 			return null
 		var template: Variant = result.get(property_name)
-		var decoded: Variant = _decode_variant(properties[property_name_value], template, depth + 1)
+		var property_info: Dictionary = known_properties[property_name]
+		var encoded_property: Variant = properties[property_name_value]
+		if not _encoded_value_matches_property(encoded_property, template, property_info):
+			return null
+		var decoded: Variant = _decode_variant(encoded_property, template, depth + 1)
+		if decoded == null and encoded_property != null:
+			return null
 		result.set(property_name, decoded)
 	if not accepted_resource_path.is_empty():
 		result.set_meta("ml_snapshot_source_path", accepted_resource_path)
@@ -339,15 +351,22 @@ static func _decode_variant(encoded: Variant, template: Variant, depth: int) -> 
 	return null
 
 
-static func _decode_array(encoded_items: Variant, template: Variant, depth: int) -> Array:
-	var result: Array = template.duplicate() if template is Array else []
-	result.clear()
+static func _decode_array(encoded_items: Variant, template: Variant, depth: int) -> Variant:
 	if not (encoded_items is Array):
-		return result
+		return null
 	var template_array: Array = template if template is Array else []
-	for index in range((encoded_items as Array).size()):
+	var result: Array = template_array.duplicate()
+	result.clear()
+	for index: int in range((encoded_items as Array).size()):
 		var item_template: Variant = template_array[index] if index < template_array.size() else null
-		result.append(_decode_variant((encoded_items as Array)[index], item_template, depth + 1))
+		var decoded_item: Variant = _decode_variant(
+			(encoded_items as Array)[index],
+			item_template,
+			depth + 1
+		)
+		if not _typed_array_accepts_value(template_array, decoded_item):
+			return null
+		result.append(decoded_item)
 	return result
 
 
@@ -431,6 +450,334 @@ static func _decode_packed_color_array(value: Variant, depth: int) -> PackedColo
 
 static func _unsupported_record(reason: String) -> Dictionary:
 	return {UNSUPPORTED_KEY: true, "reason": reason}
+
+
+static func _encoded_payload_is_well_formed(value: Variant, depth: int) -> bool:
+	if depth > MAXIMUM_RECURSION_DEPTH:
+		return false
+	if value is float:
+		return is_finite(float(value))
+	if value is Array:
+		for nested: Variant in (value as Array):
+			if not _encoded_payload_is_well_formed(nested, depth + 1):
+				return false
+		return true
+	if not (value is Dictionary):
+		return true
+	var record: Dictionary = value as Dictionary
+	if not record.has(TYPE_KEY):
+		for nested: Variant in record.values():
+			if not _encoded_payload_is_well_formed(nested, depth + 1):
+				return false
+		return true
+	var kind: String = str(record.get(TYPE_KEY, ""))
+	var payload: Variant = record.get("value", null)
+	match kind:
+		"int":
+			return _is_integral_number(payload)
+		"string_name", "node_path":
+			return payload is String
+		"vector2":
+			return _numeric_array_has_exact_size(payload, 2, false)
+		"vector2i":
+			return _numeric_array_has_exact_size(payload, 2, true)
+		"vector3":
+			return _numeric_array_has_exact_size(payload, 3, false)
+		"vector3i":
+			return _numeric_array_has_exact_size(payload, 3, true)
+		"vector4", "color", "quaternion":
+			return _numeric_array_has_exact_size(payload, 4, false)
+		"vector4i":
+			return _numeric_array_has_exact_size(payload, 4, true)
+		"basis":
+			if not (payload is Array) or (payload as Array).size() != 3:
+				return false
+			for row_index: int in range(3):
+				if not _numeric_array_has_exact_size((payload as Array)[row_index], 3, false):
+					return false
+			return true
+		"transform3d":
+			return (
+				_tag_is(record.get("basis", null), "basis")
+				and _tag_is(record.get("origin", null), "vector3")
+				and _encoded_payload_is_well_formed(record.get("basis"), depth + 1)
+				and _encoded_payload_is_well_formed(record.get("origin"), depth + 1)
+			)
+		"array":
+			var items: Variant = record.get("items", [])
+			if not (items is Array):
+				return false
+			for item: Variant in (items as Array):
+				if not _encoded_payload_is_well_formed(item, depth + 1):
+					return false
+			return true
+		"dictionary":
+			var entries: Variant = record.get("entries", [])
+			if not (entries is Array):
+				return false
+			for entry_value: Variant in (entries as Array):
+				if not (entry_value is Dictionary):
+					return false
+				var entry: Dictionary = entry_value as Dictionary
+				if (
+					not entry.has("key")
+					or not entry.has("value")
+					or not _encoded_payload_is_well_formed(entry["key"], depth + 1)
+					or not _encoded_payload_is_well_formed(entry["value"], depth + 1)
+				):
+					return false
+			return true
+		"packed_byte_array":
+			return _integral_array_in_range(payload, 0, 255)
+		"packed_int32_array":
+			return _integral_array_in_range(payload, -2147483648, 2147483647)
+		"packed_int64_array":
+			return _numeric_array_is_valid(payload, 0, true)
+		"packed_float32_array", "packed_float64_array":
+			return _numeric_array_is_valid(payload, 0, false)
+		"packed_string_array":
+			if not (payload is Array):
+				return false
+			for item: Variant in (payload as Array):
+				if not (item is String):
+					return false
+			return true
+		"packed_vector2_array":
+			return _tagged_array_is_valid(payload, "vector2", depth + 1)
+		"packed_vector3_array":
+			return _tagged_array_is_valid(payload, "vector3", depth + 1)
+		"packed_vector4_array":
+			return _tagged_array_is_valid(payload, "vector4", depth + 1)
+		"packed_color_array":
+			return _tagged_array_is_valid(payload, "color", depth + 1)
+		"resource":
+			return (
+				payload is Dictionary
+				and not (payload as Dictionary).is_empty()
+				and _encoded_payload_is_well_formed(payload, depth + 1)
+			)
+	return false
+
+
+static func _encoded_value_matches_property(
+	encoded: Variant,
+	template: Variant,
+	property_info: Dictionary
+) -> bool:
+	if template == null:
+		var declared_type: int = SafeVariant.integral_int_or(
+			property_info.get("type", TYPE_NIL),
+			TYPE_NIL
+		)
+		if declared_type == TYPE_OBJECT:
+			return encoded == null or _tag_is(encoded, "resource")
+	return _encoded_value_matches_template(encoded, template)
+
+
+static func _encoded_value_matches_template(encoded: Variant, template: Variant) -> bool:
+	match typeof(template):
+		TYPE_NIL:
+			return true
+		TYPE_BOOL:
+			return encoded is bool
+		TYPE_INT:
+			return _tag_is(encoded, "int")
+		TYPE_FLOAT:
+			return SafeVariant.is_finite_number(encoded)
+		TYPE_STRING:
+			return encoded is String
+		TYPE_STRING_NAME:
+			return _tag_is(encoded, "string_name")
+		TYPE_NODE_PATH:
+			return _tag_is(encoded, "node_path")
+		TYPE_VECTOR2:
+			return _tag_is(encoded, "vector2")
+		TYPE_VECTOR2I:
+			return _tag_is(encoded, "vector2i")
+		TYPE_VECTOR3:
+			return _tag_is(encoded, "vector3")
+		TYPE_VECTOR3I:
+			return _tag_is(encoded, "vector3i")
+		TYPE_VECTOR4:
+			return _tag_is(encoded, "vector4")
+		TYPE_VECTOR4I:
+			return _tag_is(encoded, "vector4i")
+		TYPE_COLOR:
+			return _tag_is(encoded, "color")
+		TYPE_QUATERNION:
+			return _tag_is(encoded, "quaternion")
+		TYPE_BASIS:
+			return _tag_is(encoded, "basis")
+		TYPE_TRANSFORM3D:
+			return _tag_is(encoded, "transform3d")
+		TYPE_ARRAY:
+			return (
+				_tag_is(encoded, "array")
+				and _encoded_array_matches_typed_template(encoded, template as Array)
+			)
+		TYPE_DICTIONARY:
+			return _tag_is(encoded, "dictionary")
+		TYPE_PACKED_BYTE_ARRAY:
+			return _tag_is(encoded, "packed_byte_array")
+		TYPE_PACKED_INT32_ARRAY:
+			return _tag_is(encoded, "packed_int32_array")
+		TYPE_PACKED_INT64_ARRAY:
+			return _tag_is(encoded, "packed_int64_array")
+		TYPE_PACKED_FLOAT32_ARRAY:
+			return _tag_is(encoded, "packed_float32_array")
+		TYPE_PACKED_FLOAT64_ARRAY:
+			return _tag_is(encoded, "packed_float64_array")
+		TYPE_PACKED_STRING_ARRAY:
+			return _tag_is(encoded, "packed_string_array")
+		TYPE_PACKED_VECTOR2_ARRAY:
+			return _tag_is(encoded, "packed_vector2_array")
+		TYPE_PACKED_VECTOR3_ARRAY:
+			return _tag_is(encoded, "packed_vector3_array")
+		TYPE_PACKED_VECTOR4_ARRAY:
+			return _tag_is(encoded, "packed_vector4_array")
+		TYPE_PACKED_COLOR_ARRAY:
+			return _tag_is(encoded, "packed_color_array")
+		TYPE_OBJECT:
+			return _tag_is(encoded, "resource") if template is Resource else false
+	return true
+
+
+static func _encoded_array_matches_typed_template(encoded: Variant, template: Array) -> bool:
+	if not template.is_typed():
+		return true
+	var record: Dictionary = encoded as Dictionary
+	var items_value: Variant = record.get("items", [])
+	if not (items_value is Array):
+		return false
+	var builtin_type: int = template.get_typed_builtin()
+	for item: Variant in (items_value as Array):
+		if not _encoded_value_matches_builtin_type(item, builtin_type):
+			return false
+	return true
+
+
+static func _encoded_value_matches_builtin_type(encoded: Variant, builtin_type: int) -> bool:
+	match builtin_type:
+		TYPE_NIL:
+			return true
+		TYPE_BOOL:
+			return encoded is bool
+		TYPE_INT:
+			return _tag_is(encoded, "int")
+		TYPE_FLOAT:
+			return SafeVariant.is_finite_number(encoded)
+		TYPE_STRING:
+			return encoded is String
+		TYPE_STRING_NAME:
+			return _tag_is(encoded, "string_name")
+		TYPE_NODE_PATH:
+			return _tag_is(encoded, "node_path")
+		TYPE_VECTOR2:
+			return _tag_is(encoded, "vector2")
+		TYPE_VECTOR2I:
+			return _tag_is(encoded, "vector2i")
+		TYPE_VECTOR3:
+			return _tag_is(encoded, "vector3")
+		TYPE_VECTOR3I:
+			return _tag_is(encoded, "vector3i")
+		TYPE_VECTOR4:
+			return _tag_is(encoded, "vector4")
+		TYPE_VECTOR4I:
+			return _tag_is(encoded, "vector4i")
+		TYPE_COLOR:
+			return _tag_is(encoded, "color")
+		TYPE_QUATERNION:
+			return _tag_is(encoded, "quaternion")
+		TYPE_BASIS:
+			return _tag_is(encoded, "basis")
+		TYPE_TRANSFORM3D:
+			return _tag_is(encoded, "transform3d")
+		TYPE_OBJECT:
+			return encoded == null or _tag_is(encoded, "resource")
+	return false
+
+
+static func _typed_array_accepts_value(template: Array, value: Variant) -> bool:
+	if not template.is_typed():
+		return true
+	var builtin_type: int = template.get_typed_builtin()
+	if builtin_type == TYPE_OBJECT:
+		if value == null:
+			return true
+		if not (value is Object):
+			return false
+		var typed_script_value: Variant = template.get_typed_script()
+		if typed_script_value is Script:
+			return is_instance_of(value, typed_script_value)
+		var typed_class_name: StringName = template.get_typed_class_name()
+		return (
+			str(typed_class_name).is_empty()
+			or (value as Object).is_class(str(typed_class_name))
+		)
+	return typeof(value) == builtin_type
+
+
+static func _tag_is(value: Variant, expected: String) -> bool:
+	return (
+		value is Dictionary
+		and str((value as Dictionary).get(TYPE_KEY, "")) == expected
+	)
+
+
+static func _is_integral_number(value: Variant) -> bool:
+	if value is int:
+		return true
+	if value is float and is_finite(float(value)):
+		return float(value) == round(float(value))
+	return false
+
+
+static func _numeric_array_has_exact_size(
+	value: Variant,
+	expected_size: int,
+	require_integral: bool
+) -> bool:
+	return (
+		value is Array
+		and (value as Array).size() == expected_size
+		and _numeric_array_is_valid(value, expected_size, require_integral)
+	)
+
+
+static func _numeric_array_is_valid(value: Variant, minimum_size: int, require_integral: bool) -> bool:
+	if not (value is Array):
+		return false
+	var items: Array = value as Array
+	if items.size() < minimum_size:
+		return false
+	for item: Variant in items:
+		if require_integral:
+			if not _is_integral_number(item):
+				return false
+		elif not SafeVariant.is_finite_number(item):
+			return false
+	return true
+
+
+static func _integral_array_in_range(value: Variant, minimum: int, maximum: int) -> bool:
+	if not (value is Array):
+		return false
+	for item: Variant in (value as Array):
+		if not _is_integral_number(item):
+			return false
+		var numeric_value: float = float(item)
+		if numeric_value < float(minimum) or numeric_value > float(maximum):
+			return false
+	return true
+
+
+static func _tagged_array_is_valid(value: Variant, expected_tag: String, depth: int) -> bool:
+	if not (value is Array):
+		return false
+	for item: Variant in (value as Array):
+		if not _tag_is(item, expected_tag) or not _encoded_payload_is_well_formed(item, depth + 1):
+			return false
+	return true
 
 
 static func _contains_unknown_type_tag(value: Variant) -> bool:

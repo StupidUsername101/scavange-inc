@@ -9298,7 +9298,7 @@ func _save_limb_group(
 	else:
 		var save_verb = "Updated" if overwritten_existing else "Saved"
 		status_label.text = "%s %s." % [save_verb, limb_model_registry.display_name(record)]
-	_refresh_limb_group_rolling_save_button(group)
+	DroneTrainingRollingSaveButton.refresh_group(group)
 	return record
 
 
@@ -9321,7 +9321,7 @@ func _load_selected_limb_model() -> void:
 	# Loading may use someone else's saved checkpoint. Keep-newest must create a fresh
 	# group-owned version on the next save rather than modifying that source artifact.
 	group["rolling_version_id"] = ""
-	_refresh_limb_group_rolling_save_button(group)
+	DroneTrainingRollingSaveButton.refresh_group(group)
 	var group_id: int = int(group["group_id"])
 	var loaded_room_settings = checkpoint.get("room_settings", {}) as Dictionary
 	var target_handler_value: Variant = loaded_room_settings.get("target_handler", {})
@@ -11895,7 +11895,7 @@ func _refresh_group_card_texts() -> void:
 		if activity_label != null:
 			activity_label.visible = is_active
 			activity_label.text = GROUP_ACTIVITY_FRAMES[group_activity_animation_frame]
-		_refresh_group_rolling_save_button(group)
+		DroneTrainingRollingSaveButton.refresh_group(group)
 		var compact_worker_slider = group.get("worker_slider") as HSlider
 		if compact_worker_slider != null:
 			compact_worker_slider.max_value = float(trainer.maximum_worker_count())
@@ -13074,7 +13074,7 @@ func _set_group_overwrite_saved_versions(group_id: int, enabled: bool) -> void:
 	# Enabling starts a new group-owned rolling chain on the next save. Disabling also
 	# forgets the old target, so re-enabling later cannot unexpectedly overwrite it.
 	group["rolling_version_id"] = ""
-	_refresh_group_rolling_save_button(group)
+	DroneTrainingRollingSaveButton.refresh_group(group)
 	status_label.text = (
 		"%s will keep one newest group-owned model version. Its source checkpoint remains untouched."
 		% str(group.get("name", "Worker group"))
@@ -13092,7 +13092,7 @@ func _set_limb_group_overwrite_saved_versions(group_id: int, enabled: bool) -> v
 	# As with drones, toggling never revives an old target. This makes it impossible for a
 	# loaded or branched source checkpoint to become an accidental overwrite destination.
 	group["rolling_version_id"] = ""
-	_refresh_limb_group_rolling_save_button(group)
+	DroneTrainingRollingSaveButton.refresh_group(group)
 	status_label.text = (
 		"%s will keep one newest group-owned limb model version. Its source checkpoint remains untouched."
 		% str(group.get("name", "Four-limb group"))
@@ -13100,25 +13100,6 @@ func _set_limb_group_overwrite_saved_versions(group_id: int, enabled: bool) -> v
 		else "%s will create a new numbered limb-model version for every save."
 		% str(group.get("name", "Four-limb group"))
 	)
-
-
-func _refresh_group_rolling_save_button(group: Dictionary) -> void:
-	var button = group.get("overwrite_button") as Button
-	if button == null:
-		return
-	var enabled = bool(group.get("overwrite_saved_versions", true))
-	button.text = "KEEP NEWEST: ON" if enabled else "KEEP NEWEST: OFF"
-	button.call("set_rolling_active", enabled)
-
-
-func _refresh_limb_group_rolling_save_button(group: Dictionary) -> void:
-	var button = group.get("overwrite_button") as Button
-	if button == null:
-		return
-	var enabled = bool(group.get("overwrite_saved_versions", true))
-	button.set_pressed_no_signal(enabled)
-	button.text = "KEEP NEWEST: ON" if enabled else "KEEP NEWEST: OFF"
-	button.call("set_rolling_active", enabled)
 
 
 func _refresh_all_groups_pause_button() -> void:

@@ -42,7 +42,10 @@ static func encode_draft(draft: MLBodyBuildDraft) -> Dictionary:
 
 
 static func decode_draft(snapshot: Dictionary) -> MLBodyBuildDraft:
-	if snapshot.is_empty() or int(snapshot.get("schema_version", -1)) != SCHEMA_VERSION:
+	if (
+		snapshot.is_empty()
+		or SafeVariant.integral_int_or(snapshot.get("schema_version", -1), -1) != SCHEMA_VERSION
+	):
 		return null
 	var core_value: Variant = snapshot.get("core", {})
 	var slots_value: Variant = snapshot.get("slots", [])
@@ -68,7 +71,10 @@ static func decode_draft(snapshot: Dictionary) -> MLBodyBuildDraft:
 		if not (record_value is Dictionary):
 			return null
 		var record: Dictionary = record_value
-		var slot_id: StringName = StringName(str(record.get("slot_id", "")))
+		var slot_id_value: Variant = record.get("slot_id", "")
+		if not (slot_id_value is String):
+			return null
+		var slot_id: StringName = StringName(slot_id_value)
 		var definition_value: Variant = record.get("definition", {})
 		var part_value: Variant = record.get("part", {})
 		if str(slot_id).is_empty() or not (definition_value is Dictionary) or not (part_value is Dictionary):

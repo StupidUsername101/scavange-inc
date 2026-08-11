@@ -34,15 +34,15 @@ func _ready() -> void:
 
 
 func apply_server_state(state: Dictionary) -> void:
-	rope_id = int(state.get("rope_id", -1))
+	rope_id = SafeVariant.integral_int_or(state.get("rope_id", -1), -1)
 	_apply_definition(str(state.get("definition_path", "")))
-	preview = bool(state.get("preview", false))
-	placement_valid = bool(state.get("valid", true))
-	tension_ratio = float(state.get("tension_ratio", 0.0))
-	current_flow_w = float(state.get("current_flow_w", 0.0))
-	current_direction = int(state.get("current_direction", 0))
-	var received_points: PackedVector3Array = state.get(
-		"points",
+	preview = SafeVariant.strict_bool_or(state.get("preview", false), false)
+	placement_valid = SafeVariant.strict_bool_or(state.get("valid", true), true)
+	tension_ratio = SafeVariant.finite_float_or(state.get("tension_ratio", 0.0), 0.0)
+	current_flow_w = SafeVariant.finite_float_or(state.get("current_flow_w", 0.0), 0.0)
+	current_direction = SafeVariant.integral_int_or(state.get("current_direction", 0), 0)
+	var received_points: PackedVector3Array = SafeVariant.packed_vector3_array_strict_or(
+		state.get("points", PackedVector3Array()),
 		PackedVector3Array()
 	)
 	target_points = received_points.duplicate()

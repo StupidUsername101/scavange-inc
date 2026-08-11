@@ -71,7 +71,7 @@ func _build_chassis() -> void:
 
 
 func _build_spider_chassis() -> void:
-	var material := _make_material(definition.visual_color, 0.06, 0.82)
+	var material: StandardMaterial3D = VisualMaterialFactory.standard(definition.visual_color, 0.06, 0.82)
 	var abdomen := MeshInstance3D.new()
 	abdomen.name = "Abdomen"
 	var abdomen_mesh := SphereMesh.new()
@@ -110,7 +110,7 @@ func _build_spider_chassis() -> void:
 	)
 	add_child(thorax)
 
-	var eye_material := _make_material(Color(1.0, 0.13, 0.025, 1.0), 0.0, 0.3)
+	var eye_material: StandardMaterial3D = VisualMaterialFactory.standard(Color(1.0, 0.13, 0.025, 1.0), 0.0, 0.3)
 	eye_material.emission_enabled = true
 	eye_material.emission = Color(0.55, 0.018, 0.002, 1.0)
 	for eye_index: int in range(6):
@@ -133,8 +133,8 @@ func _build_spider_chassis() -> void:
 
 
 func _build_block_chassis() -> void:
-	var body_material := _make_material(definition.visual_color, 0.12, 0.76)
-	var trim_material := _make_material(
+	var body_material: StandardMaterial3D = VisualMaterialFactory.standard(definition.visual_color, 0.12, 0.76)
+	var trim_material: StandardMaterial3D = VisualMaterialFactory.standard(
 		definition.visual_color.darkened(0.2),
 		0.18,
 		0.68
@@ -165,7 +165,7 @@ func _build_block_chassis() -> void:
 	)
 	add_child(head)
 
-	var eye_material := _make_material(Color(0.9, 0.72, 0.12, 1.0), 0.04, 0.38)
+	var eye_material: StandardMaterial3D = VisualMaterialFactory.standard(Color(0.9, 0.72, 0.12, 1.0), 0.04, 0.38)
 	eye_material.emission_enabled = true
 	eye_material.emission = Color(0.42, 0.23, 0.015, 1.0)
 	for side: float in [-1.0, 1.0]:
@@ -186,12 +186,12 @@ func _build_block_chassis() -> void:
 func _build_limbs() -> void:
 	if definition == null or definition.physical_anatomy == null:
 		return
-	var segment_material := _make_material(
+	var segment_material: StandardMaterial3D = VisualMaterialFactory.standard(
 		definition.visual_color.lightened(0.08),
 		0.04,
 		0.88
 	)
-	var joint_material := _make_material(
+	var joint_material: StandardMaterial3D = VisualMaterialFactory.standard(
 		definition.visual_color.darkened(0.16),
 		0.03,
 		0.92
@@ -343,15 +343,3 @@ static func basis_from_y(direction: Vector3) -> Basis:
 	var x_axis := y_axis.cross(reference).normalized()
 	var z_axis := x_axis.cross(y_axis).normalized()
 	return Basis(x_axis, y_axis, z_axis)
-
-
-func _make_material(
-	color: Color,
-	metallic: float,
-	roughness: float
-) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.metallic = metallic
-	material.roughness = roughness
-	return material

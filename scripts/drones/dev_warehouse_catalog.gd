@@ -174,17 +174,14 @@ static func build_layout() -> Dictionary:
 
 static func _load_definitions(directory_path: String) -> Array[Resource]:
 	var definitions: Array[Resource] = []
-	var directory := DirAccess.open(directory_path)
-	if directory == null:
+	if DirAccess.open(directory_path) == null:
 		push_error("Dev warehouse cannot open catalog: %s" % directory_path)
 		return definitions
 
-	for file_name: String in directory.get_files():
-		if not file_name.ends_with(".tres"):
-			continue
-		var definition := load(directory_path.path_join(file_name))
+	for resource_path: String in ResourcePathDiscovery.collect_shallow(directory_path, ["tres"]):
+		var definition: Resource = load(resource_path)
 		if definition is DronePartDefinition or definition is ItemDefinition:
-			definitions.append(definition as Resource)
+			definitions.append(definition)
 
 	definitions.sort_custom(
 		func(

@@ -118,6 +118,7 @@ func overwrite_checkpoint(record_or_id: Variant, checkpoint: Dictionary) -> Dict
 		"checkpoint_file",
 		CHECKPOINT_FILE_NAME
 	)))
+	var previous_manifest: Dictionary = record.duplicate(true)
 	var previous_checkpoint: Dictionary = TrainingFileIO.read_json_dictionary(checkpoint_path)
 	if previous_checkpoint.is_empty() or not _is_compatible_checkpoint(previous_checkpoint):
 		last_error = "The rolling %s checkpoint could not be staged for rollback." % _body_label()
@@ -147,7 +148,19 @@ func overwrite_checkpoint(record_or_id: Variant, checkpoint: Dictionary) -> Dict
 	var stored_record: Dictionary = _resolve(record)
 	var stored_checkpoint: Dictionary = TrainingFileIO.read_json_dictionary(checkpoint_path)
 	if stored_record.is_empty() or not _is_compatible_checkpoint(stored_checkpoint):
-		last_error = "The rolling model was written but failed the save verification check."
+		var checkpoint_restored: bool = _write_json(checkpoint_path, previous_checkpoint)
+		var manifest_restored: bool = _write_json(
+			version_path.path_join(MANIFEST_FILE_NAME),
+			previous_manifest
+		)
+		if checkpoint_restored and manifest_restored:
+			last_error = (
+				"The rolling model failed its save verification check; the previous version was restored."
+			)
+		else:
+			last_error = (
+				"The rolling model failed its save verification check and rollback was incomplete; inspect this model version before using it."
+			)
 		return {}
 	stored_record["overwritten_existing"] = true
 	return stored_record

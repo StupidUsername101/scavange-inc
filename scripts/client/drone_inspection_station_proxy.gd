@@ -45,14 +45,19 @@ func _process(_delta: float) -> void:
 
 
 func apply_server_state(state: Dictionary) -> void:
-	inserted_part_id = int(state.get("inserted_part_id", -1))
-	var next_occupied := bool(state.get("occupied", false))
+	inserted_part_id = SafeVariant.integral_int_or(state.get("inserted_part_id", -1), -1)
+	var next_occupied: bool = SafeVariant.strict_bool_or(state.get("occupied", false), false)
 	if next_occupied != occupied:
 		occupied = next_occupied
 		_update_indicator(occupied)
 
-	var next_document: Dictionary = state.get("report_document", {})
-	var all_paths: Dictionary = state.get("view_paths", {})
+	var next_document: Dictionary = SafeVariant.dictionary_copy(
+		state.get("report_document", {})
+	)
+	var all_paths: Dictionary = SafeVariant.dictionary_copy(
+		state.get("view_paths", {}),
+		false
+	)
 	var next_path: Array[int] = _get_local_view_path(all_paths)
 	if next_document != report_document or next_path != view_path:
 		report_document = next_document.duplicate(true)
@@ -105,24 +110,19 @@ func _update_terminal_aim_indicator() -> void:
 
 func _get_local_view_path(all_paths: Dictionary) -> Array[int]:
 	var result: Array[int] = []
-	var raw_path: Array = []
+	var raw_path_value: Variant = []
 	if all_paths.has(Client.local_player_id):
-		raw_path = all_paths[Client.local_player_id]
+		raw_path_value = all_paths[Client.local_player_id]
 	elif all_paths.has(str(Client.local_player_id)):
-		raw_path = all_paths[str(Client.local_player_id)]
-	for child_index_value: Variant in raw_path:
-		result.append(int(child_index_value))
+		raw_path_value = all_paths[str(Client.local_player_id)]
+	if not (raw_path_value is Array):
+		return result
+	for child_index_value: Variant in (raw_path_value as Array):
+		var child_index: int = SafeVariant.integral_int_or(child_index_value, -1)
+		if child_index >= 0:
+			result.append(child_index)
 	return result
 
 
 func _update_indicator(is_occupied: bool) -> void:
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.emission_enabled = true
-	if is_occupied:
-		material.albedo_color = Color(0.12, 0.9, 0.42, 1.0)
-		material.emission = Color(0.04, 0.7, 0.22, 1.0)
-	else:
-		material.albedo_color = Color(0.9, 0.56, 0.08, 1.0)
-		material.emission = Color(0.55, 0.24, 0.015, 1.0)
-	occupied_light.material_override = material
+	occupied_light.material_override = VisualMaterialFactory.binary_status_light(is_occupied)

@@ -29,9 +29,13 @@ func _ready() -> void:
 
 
 func apply_server_state(state: Dictionary) -> void:
-	drone_part_id = state.get("drone_part_id", -1)
-	_apply_definition(state.get("definition_path", ""))
-	broken = state.get("broken", false)
+	drone_part_id = SafeVariant.integral_int_or(state.get("drone_part_id", -1), -1)
+	var was_broken: bool = broken
+	broken = SafeVariant.strict_bool_or(state.get("broken", false), false)
+	_apply_definition(
+		str(state.get("definition_path", "")),
+		was_broken and not broken
+	)
 	_apply_broken_visual()
 	WarehouseNameLabel.set_display_name(
 		warehouse_label,
@@ -39,23 +43,20 @@ func apply_server_state(state: Dictionary) -> void:
 		global_position,
 		warehouse_label_height
 	)
-	target_position = state.get("pos", global_position)
-	target_rotation = Quaternion.from_euler(
-		state.get("rot", global_rotation)
+	var rigid_state: Dictionary = ClientProxyMotion.decode_rigid_state(
+		state,
+		global_position,
+		global_rotation
 	)
-	target_linear_velocity = state.get(
-		"linear_velocity",
-		Vector3.ZERO
-	)
-	target_angular_velocity = state.get(
-		"angular_velocity",
-		Vector3.ZERO
-	)
+	target_position = rigid_state["position"]
+	target_rotation = rigid_state["rotation"]
+	target_linear_velocity = rigid_state["linear_velocity"]
+	target_angular_velocity = rigid_state["angular_velocity"]
 	time_since_last_state = 0.0
 
 
-func _apply_definition(new_path: String) -> void:
-	if new_path.is_empty() or new_path == definition_path:
+func _apply_definition(new_path: String, force_rebuild: bool = false) -> void:
+	if new_path.is_empty() or (new_path == definition_path and not force_rebuild):
 		return
 
 	var resource := load(new_path) as DronePartDefinition

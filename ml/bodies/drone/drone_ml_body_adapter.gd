@@ -30,8 +30,7 @@ func action_schema_version() -> int:
 
 
 func action_count() -> int:
-	var manifest: MLBodyInterfaceManifest = model_body_interface()
-	return manifest.control_count() if manifest != null else 0
+	return drone.model_body_control_count() if is_instance_valid(drone) else 0
 
 
 func model_body_interface() -> MLBodyInterfaceManifest:

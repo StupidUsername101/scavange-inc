@@ -26,25 +26,22 @@ func _ready() -> void:
 
 
 func from_server_state(state: Dictionary) -> void:
-	item_id = state.get("item_id", -1)
+	item_id = SafeVariant.integral_int_or(state.get("item_id", -1), -1)
 
 	_apply_definition(
-		state.get("definition_path", ""),
-		state.get("instance_state", {})
+		str(state.get("definition_path", "")),
+		SafeVariant.dictionary_copy(state.get("instance_state", {}))
 	)
 
-	target_position = state.get("pos", global_position)
-	target_rotation = Quaternion.from_euler(
-		state.get("rot", global_rotation)
+	var rigid_state: Dictionary = ClientProxyMotion.decode_rigid_state(
+		state,
+		global_position,
+		global_rotation
 	)
-	target_linear_velocity = state.get(
-		"linear_velocity",
-		Vector3.ZERO
-	)
-	target_angular_velocity = state.get(
-		"angular_velocity",
-		Vector3.ZERO
-	)
+	target_position = rigid_state["position"]
+	target_rotation = rigid_state["rotation"]
+	target_linear_velocity = rigid_state["linear_velocity"]
+	target_angular_velocity = rigid_state["angular_velocity"]
 	WarehouseNameLabel.set_display_name(
 		warehouse_label,
 		str(state.get("warehouse_display_name", "")),

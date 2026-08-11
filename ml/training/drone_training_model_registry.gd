@@ -88,20 +88,8 @@ func save_training_checkpoint(
 	checkpoint_kind = "current"
 ) -> Dictionary:
 	last_error = ""
-	var algorithm_descriptor = DroneTrainingAlgorithmCatalog.descriptor_for_checkpoint(
-		checkpoint
-	)
-	var training_value: Variant = checkpoint.get("training", {})
-	var training_environment_value: Variant = checkpoint.get("training_environment", {})
-	var checkpoint_inspection: Dictionary = DroneTrainingAlgorithmCatalog.inspect_checkpoint(checkpoint)
-	if (
-		algorithm_descriptor.is_empty()
-		or not bool(checkpoint_inspection.get("compatible", false))
-		or not (training_value is Dictionary)
-		or not (training_environment_value is Dictionary)
-		or not (checkpoint.get("network", {}) is Dictionary)
-		or DroneTrainingAlgorithmCatalog.create_runtime_model(checkpoint) == null
-	):
+	var algorithm_descriptor: Dictionary = _compatible_training_descriptor(checkpoint)
+	if algorithm_descriptor.is_empty():
 		last_error = "The training checkpoint is incomplete, unknown or incompatible with its drone body."
 		return {}
 	var location: Dictionary = _create_version_location(model_name, "training version")
@@ -146,13 +134,21 @@ func save_training_checkpoint(
 		_remove_directory_recursive_absolute(ProjectSettings.globalize_path(version_path))
 		last_error = "Could not write the training model manifest atomically."
 		return {}
+	var verified_record: Dictionary = _verified_training_version(
+		record["version_id"],
+		str(algorithm_descriptor.get("id", "")),
+		1
+	)
+	if verified_record.is_empty():
+		_remove_directory_recursive_absolute(ProjectSettings.globalize_path(version_path))
+		last_error = "The training model files were written but failed the save verification check."
+		return {}
 	if not _record_next_version_floor(root_path.path_join(model_key), version_number + 1):
 		TrainingFileIO.remove_directory_recursive_absolute(
 			ProjectSettings.globalize_path(version_path)
 		)
 		return {}
-	record["storage_path"] = version_path
-	return record
+	return verified_record
 
 
 func overwrite_training_checkpoint(
@@ -171,18 +167,8 @@ func overwrite_training_checkpoint(
 		last_error = "The rolling model version no longer exists."
 		return {}
 	var record: Dictionary = existing.duplicate(true)
-	var algorithm_descriptor = DroneTrainingAlgorithmCatalog.descriptor_for_checkpoint(checkpoint)
-	var training_value: Variant = checkpoint.get("training", {})
-	var training_environment_value: Variant = checkpoint.get("training_environment", {})
-	var checkpoint_inspection: Dictionary = DroneTrainingAlgorithmCatalog.inspect_checkpoint(checkpoint)
-	if (
-		algorithm_descriptor.is_empty()
-		or not bool(checkpoint_inspection.get("compatible", false))
-		or not (training_value is Dictionary)
-		or not (training_environment_value is Dictionary)
-		or not (checkpoint.get("network", {}) is Dictionary)
-		or DroneTrainingAlgorithmCatalog.create_runtime_model(checkpoint) == null
-	):
+	var algorithm_descriptor: Dictionary = _compatible_training_descriptor(checkpoint)
+	if algorithm_descriptor.is_empty():
 		last_error = "The replacement training checkpoint is incomplete or incompatible."
 		return {}
 	if (
@@ -204,12 +190,14 @@ func overwrite_training_checkpoint(
 		if run_backup_error != OK:
 			last_error = "Could not stage the rolling evaluation results for replacement (%s)." % error_string(run_backup_error)
 			return {}
-	var checkpoint_path = version_path.path_join(str(record.get(
+	var checkpoint_path: String = version_path.path_join(str(record.get(
 		"checkpoint_file",
 		PPO_CHECKPOINT_FILE_NAME
 	)))
-	var previous_checkpoint = TrainingFileIO.read_json_dictionary(checkpoint_path)
-	if previous_checkpoint.is_empty():
+	var manifest_path: String = version_path.path_join(MANIFEST_FILE_NAME)
+	var previous_manifest: Dictionary = TrainingFileIO.read_json_dictionary(manifest_path)
+	var previous_checkpoint: Dictionary = TrainingFileIO.read_json_dictionary(checkpoint_path)
+	if previous_manifest.is_empty() or previous_checkpoint.is_empty():
 		_restore_directory_backup(absolute_run_path, run_backup_path)
 		last_error = "The rolling model's previous checkpoint could not be staged for rollback."
 		return {}
@@ -235,19 +223,32 @@ func overwrite_training_checkpoint(
 		now_utc,
 		next_revision
 	), true)
-	var manifest_path = version_path.path_join(MANIFEST_FILE_NAME)
-	var stored_record = record.duplicate(true)
+	var stored_record: Dictionary = record.duplicate(true)
 	stored_record.erase("storage_path")
 	stored_record.erase("last_used_unix_ms")
 	stored_record.erase("last_used_utc")
 	stored_record.erase("use_count")
 	if not _write_json_file(manifest_path, stored_record):
-		var checkpoint_restored = _write_json_file(checkpoint_path, previous_checkpoint)
-		var run_restored = _restore_directory_backup(absolute_run_path, run_backup_path)
+		var checkpoint_restored: bool = _write_json_file(checkpoint_path, previous_checkpoint)
+		var run_restored: bool = _restore_directory_backup(absolute_run_path, run_backup_path)
 		if checkpoint_restored and run_restored:
 			last_error = "Could not update the rolling training manifest atomically; the previous checkpoint and evaluation results were restored."
 		else:
 			last_error = "Rolling save failed while updating the manifest and rollback was incomplete; inspect this model version before using it."
+		return {}
+	var verified_record: Dictionary = _verified_training_version(
+		record["version_id"],
+		str(algorithm_descriptor.get("id", "")),
+		next_revision
+	)
+	if verified_record.is_empty():
+		var checkpoint_restored: bool = _write_json_file(checkpoint_path, previous_checkpoint)
+		var manifest_restored: bool = _write_json_file(manifest_path, previous_manifest)
+		var run_restored: bool = _restore_directory_backup(absolute_run_path, run_backup_path)
+		if checkpoint_restored and manifest_restored and run_restored:
+			last_error = "The rolling training model failed its save verification check; the previous checkpoint, manifest, and evaluation results were restored."
+		else:
+			last_error = "The rolling training model failed its save verification check and rollback was incomplete; inspect this model version before using it."
 		return {}
 	if not run_backup_path.is_empty() and DirAccess.dir_exists_absolute(run_backup_path):
 		var saved_last_error = last_error
@@ -544,6 +545,47 @@ func _create_version_location(model_name: String, directory_label: String) -> Di
 		"version_id": "%s/%s" % [model_key, version_name],
 		"storage_path": version_path,
 	}
+
+
+func _compatible_training_descriptor(checkpoint: Dictionary) -> Dictionary:
+	var descriptor: Dictionary = DroneTrainingAlgorithmCatalog.descriptor_for_checkpoint(checkpoint)
+	if descriptor.is_empty():
+		return {}
+	var inspection: Dictionary = DroneTrainingAlgorithmCatalog.inspect_checkpoint(checkpoint)
+	if (
+		not bool(inspection.get("compatible", false))
+		or not (checkpoint.get("training", {}) is Dictionary)
+		or not (checkpoint.get("training_environment", {}) is Dictionary)
+		or not (checkpoint.get("network", {}) is Dictionary)
+		or DroneTrainingAlgorithmCatalog.create_runtime_model(checkpoint) == null
+	):
+		return {}
+	return descriptor
+
+
+func _verified_training_version(
+	record_or_id: Variant,
+	expected_algorithm_id: String,
+	expected_revision: int
+) -> Dictionary:
+	var stored_record: Dictionary = _resolve_version(record_or_id)
+	if (
+		stored_record.is_empty()
+		or str(stored_record.get("training_algorithm_id", "")) != expected_algorithm_id
+		or SafeVariant.integral_int_or(stored_record.get("checkpoint_revision", 0), 0)
+		!= expected_revision
+	):
+		return {}
+	var version_path: String = str(stored_record.get("storage_path", ""))
+	if version_path.is_empty():
+		return {}
+	var checkpoint: Dictionary = TrainingFileIO.read_json_dictionary(
+		version_path.path_join(PPO_CHECKPOINT_FILE_NAME)
+	)
+	var descriptor: Dictionary = _compatible_training_descriptor(checkpoint)
+	if descriptor.is_empty() or str(descriptor.get("id", "")) != expected_algorithm_id:
+		return {}
+	return stored_record
 
 
 func _training_manifest_fields(

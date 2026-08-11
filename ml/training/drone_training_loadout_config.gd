@@ -765,14 +765,8 @@ static func _part_presets(
 	part_kind: StringName
 ) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
-	var directory = DirAccess.open(directory_path)
-	if directory == null:
-		return result
-	for file_name in directory.get_files():
-		if not file_name.ends_with(".tres"):
-			continue
-		var path = directory_path.path_join(file_name)
-		var part = load(path) as DronePartDefinition
+	for path: String in ResourcePathDiscovery.collect_shallow(directory_path, ["tres"]):
+		var part: DronePartDefinition = load(path) as DronePartDefinition
 		var valid = (
 			(part_kind == &"core" and part is DroneCoreDefinition)
 			or (part_kind == &"battery" and part is DroneBatteryDefinition)

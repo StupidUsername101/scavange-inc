@@ -26,6 +26,16 @@ func set_rolling_active(enabled: bool) -> void:
 	queue_redraw()
 
 
+static func refresh_group(group: Dictionary) -> void:
+	var button: Button = group.get("overwrite_button") as Button
+	if button == null:
+		return
+	var enabled: bool = bool(group.get("overwrite_saved_versions", true))
+	button.set_pressed_no_signal(enabled)
+	button.text = "KEEP NEWEST: ON" if enabled else "KEEP NEWEST: OFF"
+	button.call("set_rolling_active", enabled)
+
+
 func _process(delta: float) -> void:
 	if not rolling_active:
 		return

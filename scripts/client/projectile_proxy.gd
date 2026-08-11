@@ -24,9 +24,13 @@ var visual_signature := ""
 
 
 func apply_server_state(state: Dictionary) -> void:
-	projectile_id = int(state.get("projectile_id", -1))
-	target_position = state.get("pos", global_position)
-	velocity = state.get("velocity", Vector3.ZERO)
+	projectile_id = SafeVariant.integral_int_or(state.get("projectile_id", -1), -1)
+	target_position = SafeVariant.vector3_strict_or(
+		state.get("pos", global_position), global_position
+	)
+	velocity = SafeVariant.vector3_strict_or(
+		state.get("velocity", Vector3.ZERO), Vector3.ZERO
+	)
 	time_since_last_state = 0.0
 	if not initialized:
 		global_position = target_position
@@ -61,22 +65,22 @@ func _process(delta: float) -> void:
 
 
 func _apply_visual(state: Dictionary) -> void:
-	var color: Color = state.get(
-		"tracer_color",
+	var color: Color = SafeVariant.color_strict_or(
+		state.get("tracer_color", BallisticProjectileDefinition.DEFAULT_TRACER_COLOR),
 		BallisticProjectileDefinition.DEFAULT_TRACER_COLOR
 	)
 	var length := maxf(
-		float(state.get(
-			"tracer_length",
+		SafeVariant.finite_float_or(
+			state.get("tracer_length", BallisticProjectileDefinition.DEFAULT_TRACER_LENGTH),
 			BallisticProjectileDefinition.DEFAULT_TRACER_LENGTH
-		)),
+		),
 		BallisticProjectileDefinition.MIN_TRACER_LENGTH
 	)
 	var radius := maxf(
-		float(state.get(
-			"tracer_radius",
+		SafeVariant.finite_float_or(
+			state.get("tracer_radius", BallisticProjectileDefinition.DEFAULT_TRACER_RADIUS),
 			BallisticProjectileDefinition.DEFAULT_TRACER_RADIUS
-		)),
+		),
 		BallisticProjectileDefinition.MIN_TRACER_RADIUS
 	)
 	var signature := "%s|%.4f|%.4f" % [color.to_html(), length, radius]
@@ -86,12 +90,11 @@ func _apply_visual(state: Dictionary) -> void:
 	for child: Node in get_children():
 		child.queue_free()
 
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.albedo_color = color
-	material.emission_enabled = true
-	material.emission = color
-	material.emission_energy_multiplier = TRACER_EMISSION_ENERGY
+	var material: StandardMaterial3D = VisualMaterialFactory.unshaded_emissive(
+		color,
+		color,
+		TRACER_EMISSION_ENERGY
+	)
 
 	var tracer_mesh := CylinderMesh.new()
 	tracer_mesh.top_radius = radius

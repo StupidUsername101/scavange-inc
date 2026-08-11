@@ -50,6 +50,18 @@ func _init() -> void:
 		],
 		"resource discovery is recursive, extension-normalized, excluded-subtree aware, and sorted"
 	)
+	var shallow: Array[String] = ResourcePathDiscovery.collect_shallow(
+		root_path + "/",
+		[".TRES", "res"]
+	)
+	_expect(
+		shallow == [root_path.path_join("zeta.tres")],
+		"shallow resource discovery preserves catalog behavior without leaking nested resources"
+	)
+	_expect(
+		ResourcePathDiscovery.collect_shallow("", ["tres"]).is_empty(),
+		"shallow discovery also rejects empty roots"
+	)
 	if DirAccess.dir_exists_absolute(absolute_root):
 		TrainingFileIO.remove_directory_recursive_absolute(absolute_root)
 	quit(0 if failure_count == 0 else 1)

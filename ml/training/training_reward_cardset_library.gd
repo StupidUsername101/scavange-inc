@@ -314,8 +314,13 @@ func _load_custom_cardsets() -> void:
 		last_error = "Saved reward cardsets are not valid JSON."
 		return
 	var root: Dictionary = parsed as Dictionary
+	var schema_version: int = SafeVariant.integral_int_or(root.get("schema_version", -1), -1)
+	if schema_version != SCHEMA_VERSION:
+		last_error = "Saved reward cardsets use an unsupported schema version."
+		return
 	var body_records: Variant = root.get("body_types", {})
 	if not (body_records is Dictionary):
+		last_error = "Saved reward cardsets have a malformed body-type index."
 		return
 	for body_type in [BODY_TYPE_DRONE, BODY_TYPE_FOUR_LIMB, BODY_TYPE_TURRET]:
 		var loaded: Variant = (body_records as Dictionary).get(body_type, [])

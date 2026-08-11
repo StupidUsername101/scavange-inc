@@ -10,7 +10,14 @@ const LIMB_DIRECTORY := "res://resources/limbs"
 
 static func load_buyable_limbs() -> Array[LimbDefinition]:
 	var result: Array[LimbDefinition] = []
-	_collect_buyable_limbs(LIMB_DIRECTORY, result)
+	if DirAccess.open(LIMB_DIRECTORY) == null:
+		push_error("Body-parts shop cannot open catalog: %s" % LIMB_DIRECTORY)
+		return result
+	for resource_path: String in ResourcePathDiscovery.collect(LIMB_DIRECTORY, ["tres"]):
+		var resource: Resource = load(resource_path)
+		var limb: LimbDefinition = resource as LimbDefinition
+		if limb != null and limb.shop_buyable:
+			result.append(limb)
 	result.sort_custom(
 		func(left: LimbDefinition, right: LimbDefinition) -> bool:
 			return (
@@ -74,36 +81,6 @@ static func get_slot_name(slot: int) -> String:
 		LimbDefinition.Slot.RIGHT_LEG:
 			return "Right leg"
 	return "Unknown socket"
-
-
-static func _collect_buyable_limbs(
-	directory_path: String,
-	result: Array[LimbDefinition]
-) -> void:
-	var directory := DirAccess.open(directory_path)
-	if directory == null:
-		push_error(
-			"Body-parts shop cannot open catalog: %s" % directory_path
-		)
-		return
-
-	var subdirectories := directory.get_directories()
-	subdirectories.sort()
-	for subdirectory: String in subdirectories:
-		_collect_buyable_limbs(
-			directory_path.path_join(subdirectory),
-			result
-		)
-
-	var files := directory.get_files()
-	files.sort()
-	for file_name: String in files:
-		if not file_name.ends_with(".tres"):
-			continue
-		var resource := load(directory_path.path_join(file_name))
-		var limb := resource as LimbDefinition
-		if limb != null and limb.shop_buyable:
-			result.append(limb)
 
 
 static func _insert_limb(root: Dictionary, limb: LimbDefinition) -> void:
@@ -196,11 +173,14 @@ static func get_category_products(
 	document: Dictionary,
 	category_index: int
 ) -> Array[Dictionary]:
-	var categories: Array = document.get("children", [])
+	var categories: Array = SafeVariant.array_copy(document.get("children", []), false)
 	if category_index < 0 or category_index >= categories.size():
 		return []
+	var category: Dictionary = SafeVariant.dictionary_copy(categories[category_index], false)
+	if category.is_empty():
+		return []
 	var result: Array[Dictionary] = []
-	_collect_limb_leaves(categories[category_index], result)
+	_collect_limb_leaves(category, result)
 	return result
 
 
@@ -211,8 +191,10 @@ static func _collect_limb_leaves(
 	if is_limb_leaf(node):
 		result.append(node)
 		return
-	for child_value: Variant in node.get("children", []):
-		_collect_limb_leaves(child_value, result)
+	for child_value: Variant in SafeVariant.array_copy(node.get("children", []), false):
+		var child: Dictionary = SafeVariant.dictionary_copy(child_value, false)
+		if not child.is_empty():
+			_collect_limb_leaves(child, result)
 
 
 static func _finalize_node(node: Dictionary) -> int:

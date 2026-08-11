@@ -15,9 +15,9 @@ var active_material: StandardMaterial3D
 
 
 func _ready() -> void:
-	rail_material = _make_material(Color(0.17, 0.2, 0.23, 1.0), 0.68, 0.38)
-	floor_material = _make_material(Color(0.09, 0.105, 0.115, 1.0), 0.15, 0.84)
-	active_material = _make_material(Color(0.9, 0.24, 0.1, 1.0), 0.2, 0.42)
+	rail_material = VisualMaterialFactory.standard(Color(0.17, 0.2, 0.23, 1.0), 0.68, 0.38)
+	floor_material = VisualMaterialFactory.standard(Color(0.09, 0.105, 0.115, 1.0), 0.15, 0.84)
+	active_material = VisualMaterialFactory.standard(Color(0.9, 0.24, 0.1, 1.0), 0.2, 0.42)
 	active_material.emission_enabled = true
 	active_material.emission = Color(0.36, 0.035, 0.012, 1.0)
 	_build_zoo(CATALOG.build_layout())
@@ -123,15 +123,3 @@ func _add_label(
 	label.modulate = color
 	label.outline_modulate = Color(0.005, 0.007, 0.01, 1.0)
 	add_child(label)
-
-
-func _make_material(
-	color: Color,
-	metallic: float,
-	roughness: float
-) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.metallic = metallic
-	material.roughness = roughness
-	return material

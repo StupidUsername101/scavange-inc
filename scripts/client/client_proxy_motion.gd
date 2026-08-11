@@ -7,6 +7,34 @@ extends RefCounted
 #######################################################
 
 
+static func decode_rigid_state(
+	state: Dictionary,
+	fallback_position: Vector3,
+	fallback_rotation_euler: Vector3,
+	linear_velocity_key: String = "linear_velocity",
+	angular_velocity_key: String = "angular_velocity"
+) -> Dictionary:
+	var rotation_euler: Vector3 = SafeVariant.vector3_strict_or(
+		state.get("rot", fallback_rotation_euler),
+		fallback_rotation_euler
+	)
+	return {
+		"position": SafeVariant.vector3_strict_or(
+			state.get("pos", fallback_position),
+			fallback_position
+		),
+		"rotation": Quaternion.from_euler(rotation_euler),
+		"linear_velocity": SafeVariant.vector3_strict_or(
+			state.get(linear_velocity_key, Vector3.ZERO),
+			Vector3.ZERO
+		),
+		"angular_velocity": SafeVariant.vector3_strict_or(
+			state.get(angular_velocity_key, Vector3.ZERO),
+			Vector3.ZERO
+		),
+	}
+
+
 static func apply_smoothed_motion(
 	proxy: Node3D,
 	delta: float,

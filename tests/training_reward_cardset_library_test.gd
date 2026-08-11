@@ -15,6 +15,38 @@ func _init() -> void:
 		TrainingFileIO.remove_directory_recursive_absolute(absolute_root)
 	DirAccess.make_dir_recursive_absolute(absolute_root)
 
+	var unsupported_path: String = root_path.path_join("unsupported-cardsets.json")
+	_expect(
+		TrainingFileIO.write_json_dictionary_atomic(unsupported_path, {
+			"schema_version": TrainingRewardCardsetLibrary.SCHEMA_VERSION + 1,
+			"body_types": {},
+		}),
+		"unsupported reward-cardset schema fixture can be written"
+	)
+	var unsupported_library: TrainingRewardCardsetLibrary = TrainingRewardCardsetLibrary.new(
+		unsupported_path
+	)
+	_expect(
+		not unsupported_library.last_error.is_empty()
+		and _user_cardset_count(unsupported_library, "drone") == 0,
+		"unknown reward-cardset schemas fail closed instead of being interpreted as the current format"
+	)
+	var malformed_index_path: String = root_path.path_join("malformed-index-cardsets.json")
+	_expect(
+		TrainingFileIO.write_json_dictionary_atomic(malformed_index_path, {
+			"schema_version": TrainingRewardCardsetLibrary.SCHEMA_VERSION,
+			"body_types": "broken",
+		}),
+		"malformed reward-cardset body-index fixture can be written"
+	)
+	var malformed_index_library: TrainingRewardCardsetLibrary = TrainingRewardCardsetLibrary.new(
+		malformed_index_path
+	)
+	_expect(
+		not malformed_index_library.last_error.is_empty(),
+		"wrong-type reward-cardset body indexes are reported instead of silently ignored"
+	)
+
 	var storage_path: String = root_path.path_join("cardsets.json")
 	var library: TrainingRewardCardsetLibrary = TrainingRewardCardsetLibrary.new(storage_path)
 	var configuration: Dictionary = DroneTrainingRewardDeck.new().configuration_dictionary()

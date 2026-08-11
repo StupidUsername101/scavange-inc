@@ -33,6 +33,7 @@ func _init() -> void:
 func _run() -> void:
 	_test_definition_contracts()
 	_test_inventory_and_equipment_transactions()
+	_test_public_inventory_sanitization()
 	_test_ocular_distortion_contract()
 	_test_client_draw_order()
 	_test_server_wiring()
@@ -211,6 +212,56 @@ func _test_inventory_and_equipment_transactions() -> void:
 	)
 
 	player.free()
+
+
+func _test_public_inventory_sanitization() -> void:
+	var sanitized: Dictionary = PlayerInventoryRules.sanitize_public_inventory({
+		"capacity": 6.0,
+		"selected_slot": 99,
+		"entries": [
+			{"definition_path": "res://one.tres", "instance_state": "broken"},
+			"broken-slot",
+			{"definition_path": "res://three.tres"},
+		],
+		"equipment": {
+			"eyes": "broken-equipment",
+			"backpack": {
+				"definition_path": "res://pack.tres",
+				"instance_state": ["broken"],
+			},
+		},
+	})
+	_expect(int(sanitized.get("capacity", 0)) == 6, "public inventory keeps valid integral capacity")
+	_expect(int(sanitized.get("selected_slot", -1)) == 5, "public inventory clamps selected slot to capacity")
+	var entries_value: Variant = sanitized.get("entries", [])
+	var entries: Array = entries_value as Array if entries_value is Array else []
+	_expect(entries.size() == 3, "malformed public inventory entries do not shift later slot indices")
+	if entries.size() == 3:
+		var first: Dictionary = entries[0] as Dictionary if entries[0] is Dictionary else {}
+		var second: Dictionary = entries[1] as Dictionary if entries[1] is Dictionary else {}
+		var third: Dictionary = entries[2] as Dictionary if entries[2] is Dictionary else {}
+		_expect(not first.has("instance_state"), "wrong-type public instance state is discarded")
+		_expect(second.is_empty(), "wrong-type public slot becomes an empty slot")
+		_expect(str(third.get("definition_path", "")) == "res://three.tres", "later public slots retain their original index")
+	var equipment_value: Variant = sanitized.get("equipment", {})
+	var sanitized_equipment: Dictionary = (
+		equipment_value as Dictionary if equipment_value is Dictionary else {}
+	)
+	_expect(not sanitized_equipment.has("eyes"), "wrong-type public equipment entries are discarded")
+	var backpack_value: Variant = sanitized_equipment.get("backpack", {})
+	var backpack: Dictionary = backpack_value as Dictionary if backpack_value is Dictionary else {}
+	_expect(not backpack.has("instance_state"), "wrong-type equipment instance state is discarded")
+	_expect(
+		PlayerInventoryRules.get_capacity({PlayerInventoryRules.BACKPACK_SLOT: "broken"})
+		== PlayerInventoryRules.BASE_CAPACITY,
+		"malformed internal backpack state falls back to base capacity"
+	)
+	var empty_state: Dictionary = PlayerInventoryRules.sanitize_public_inventory("broken")
+	_expect(
+		int(empty_state.get("capacity", 0)) == PlayerInventoryRules.BASE_CAPACITY
+		and int(empty_state.get("selected_slot", -1)) == 0,
+		"wrong-type top-level public inventory fails closed to defaults"
+	)
 
 
 func _test_ocular_distortion_contract() -> void:

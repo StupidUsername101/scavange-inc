@@ -616,6 +616,16 @@ static func surface_grip_is_disabled(node: Node) -> bool:
 	return false
 
 
+static func surface_tags_have(value: Variant, expected: String) -> bool:
+	if value is PackedStringArray:
+		return (value as PackedStringArray).has(expected)
+	if value is Array:
+		for entry: Variant in value:
+			if str(entry) == expected:
+				return true
+	return false
+
+
 static func surface_tags_for(node: Node) -> PackedStringArray:
 	var result := PackedStringArray()
 	var current := node

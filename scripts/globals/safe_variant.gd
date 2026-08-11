@@ -51,6 +51,10 @@ static func dictionary_copy(value: Variant, deep: bool = true) -> Dictionary:
 	return (value as Dictionary).duplicate(deep) if value is Dictionary else {}
 
 
+static func array_copy(value: Variant, deep: bool = true) -> Array:
+	return (value as Array).duplicate(deep) if value is Array else []
+
+
 static func dictionary_array_copy(value: Variant, deep: bool = true) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	if not (value is Array):
@@ -102,6 +106,48 @@ static func vector3_strict_or(value: Variant, fallback: Vector3) -> Vector3:
 				float(dictionary_values["z"])
 			)
 	return fallback
+
+
+static func vector2_strict_or(value: Variant, fallback: Vector2) -> Vector2:
+	if value is Vector2:
+		var vector_value: Vector2 = value as Vector2
+		if is_finite(vector_value.x) and is_finite(vector_value.y):
+			return vector_value
+	return fallback
+
+
+static func color_strict_or(value: Variant, fallback: Color) -> Color:
+	if value is Color:
+		var color_value: Color = value as Color
+		if (
+			is_finite(color_value.r)
+			and is_finite(color_value.g)
+			and is_finite(color_value.b)
+			and is_finite(color_value.a)
+		):
+			return color_value
+	return fallback
+
+
+static func transform3d_strict_or(value: Variant, fallback: Transform3D) -> Transform3D:
+	if value is Transform3D:
+		var transform_value: Transform3D = value as Transform3D
+		if transform_value.origin.is_finite() and transform_value.basis.is_finite():
+			return transform_value
+	return fallback
+
+
+static func packed_vector3_array_strict_or(
+	value: Variant,
+	fallback: PackedVector3Array
+) -> PackedVector3Array:
+	if value is PackedVector3Array:
+		var points: PackedVector3Array = value
+		for point: Vector3 in points:
+			if not point.is_finite():
+				return fallback.duplicate()
+		return points.duplicate()
+	return fallback.duplicate()
 
 
 static func vector3_to_array(value: Vector3) -> Array[float]:

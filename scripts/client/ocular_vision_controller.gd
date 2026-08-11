@@ -74,12 +74,12 @@ func set_eye_entry(entry: Dictionary) -> bool:
 
 func apply_distortion_state(state: Dictionary) -> void:
 	target_external_distortion = Vector3(
-		clampf(float(state.get("warp", 0.0)), 0.0, 1.0),
-		clampf(float(state.get("glitch", 0.0)), 0.0, 1.0),
-		clampf(float(state.get("smear", 0.0)), 0.0, 1.0)
+		clampf(SafeVariant.finite_float_or(state.get("warp", 0.0), 0.0), 0.0, 1.0),
+		clampf(SafeVariant.finite_float_or(state.get("glitch", 0.0), 0.0), 0.0, 1.0),
+		clampf(SafeVariant.finite_float_or(state.get("smear", 0.0), 0.0), 0.0, 1.0)
 	)
-	var center: Vector2 = state.get(
-		"center",
+	var center: Vector2 = SafeVariant.vector2_strict_or(
+		state.get("center", DEFAULT_DISTORTION_CENTER),
 		DEFAULT_DISTORTION_CENTER
 	)
 	target_distortion_center = Vector2(
@@ -87,7 +87,7 @@ func apply_distortion_state(state: Dictionary) -> void:
 		clampf(center.y, 0.0, 1.0)
 	)
 	pulse_hz = clampf(
-		float(state.get("pulse_hz", DEFAULT_PULSE_HZ)),
+		SafeVariant.finite_float_or(state.get("pulse_hz", DEFAULT_PULSE_HZ), DEFAULT_PULSE_HZ),
 		MIN_PULSE_HZ,
 		MAX_PULSE_HZ
 	)

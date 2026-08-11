@@ -103,22 +103,28 @@ func apply_server_state(state: Dictionary) -> void:
 
 
 func _apply_primary_state(state: Dictionary) -> bool:
-	drone_id = state.get("drone_id", -1)
-	target_position = state.get("pos", global_position)
-	target_rotation = Quaternion.from_euler(
-		state.get("rot", global_rotation)
+	drone_id = SafeVariant.integral_int_or(state.get("drone_id", -1), -1)
+	var rigid_state: Dictionary = ClientProxyMotion.decode_rigid_state(
+		state,
+		global_position,
+		global_rotation
 	)
-	target_linear_velocity = state.get("linear_velocity", Vector3.ZERO)
-	target_angular_velocity = state.get("angular_velocity", Vector3.ZERO)
-	activated = state.get("activated", false)
-	power_ratio = state.get("power_ratio", 0.0)
-	battery_charge_ratio = state.get("battery_charge_ratio", 0.0)
-	visible = state.get("visible", true)
-	var edit_preview: bool = state.get("edit_preview", false)
-	var core_present: bool = state.get("core_present", true)
-	var battery_present: bool = state.get("battery_present", false)
-	_apply_core_definition(state.get("core_definition_path", ""))
-	_apply_battery_definition(state.get("battery_definition_path", ""))
+	target_position = rigid_state["position"]
+	target_rotation = rigid_state["rotation"]
+	target_linear_velocity = rigid_state["linear_velocity"]
+	target_angular_velocity = rigid_state["angular_velocity"]
+	activated = SafeVariant.bool_or(state.get("activated", false), false)
+	power_ratio = SafeVariant.finite_float_or(state.get("power_ratio", 0.0), 0.0)
+	battery_charge_ratio = SafeVariant.finite_float_or(
+		state.get("battery_charge_ratio", 0.0),
+		0.0
+	)
+	visible = SafeVariant.bool_or(state.get("visible", true), true)
+	var edit_preview: bool = SafeVariant.bool_or(state.get("edit_preview", false), false)
+	var core_present: bool = SafeVariant.bool_or(state.get("core_present", true), true)
+	var battery_present: bool = SafeVariant.bool_or(state.get("battery_present", false), false)
+	_apply_core_definition(str(state.get("core_definition_path", "")))
+	_apply_battery_definition(str(state.get("battery_definition_path", "")))
 	core_visual.visible = core_present
 	battery_visual.visible = battery_present
 	core_guide.visible = edit_preview and not core_present
@@ -131,16 +137,25 @@ func _apply_propeller_state(
 	state: Dictionary,
 	edit_preview: bool
 ) -> void:
-	var presence: Array = state.get("propellers", [])
-	var definition_paths: Array = state.get(
-		"propeller_definition_paths",
-		[]
+	var presence: Array = SafeVariant.array_copy(state.get("propellers", []), false)
+	var definition_paths: Array = SafeVariant.array_copy(
+		state.get("propeller_definition_paths", []),
+		false
 	)
 	propeller_slot_transforms.clear()
-	var mount_values: Array = state.get("propeller_slot_transforms", [])
-	for mount_value: Variant in mount_values:
-		if mount_value is Transform3D:
-			propeller_slot_transforms.append(mount_value as Transform3D)
+	var mount_values: Array = SafeVariant.array_copy(
+		state.get("propeller_slot_transforms", []),
+		false
+	)
+	for slot_index: int in range(mini(mount_values.size(), propeller_visuals.size())):
+		var fallback_transform: Transform3D = Transform3D(
+			Basis.IDENTITY,
+			SLOT_LAYOUT.get_propeller_position(slot_index, current_core_size)
+		)
+		propeller_slot_transforms.append(SafeVariant.transform3d_strict_or(
+			mount_values[slot_index],
+			fallback_transform
+		))
 	for slot_index in range(propeller_visuals.size()):
 		_apply_propeller_definition(
 			slot_index,
@@ -169,8 +184,14 @@ func _apply_ai_chip_state(
 	state: Dictionary,
 	edit_preview: bool
 ) -> void:
-	var ai_chip_slot_count := int(state.get("ai_chip_slot_count", 0))
-	var ai_paths: Array = state.get("ai_chip_definition_paths", [])
+	var ai_chip_slot_count: int = maxi(
+		SafeVariant.integral_int_or(state.get("ai_chip_slot_count", 0), 0),
+		0
+	)
+	var ai_paths: Array = SafeVariant.array_copy(
+		state.get("ai_chip_definition_paths", []),
+		false
+	)
 	for slot_index in range(ai_chip_visuals.size()):
 		var chip_path := (
 			str(ai_paths[slot_index])
@@ -196,16 +217,28 @@ func _apply_attachment_state(
 	state: Dictionary,
 	edit_preview: bool
 ) -> void:
-	var attachment_slot_count := int(state.get("attachment_slot_count", 0))
-	var attachment_paths: Array = state.get(
-		"attachment_definition_paths",
-		[]
+	var attachment_slot_count: int = maxi(
+		SafeVariant.integral_int_or(state.get("attachment_slot_count", 0), 0),
+		0
+	)
+	var attachment_paths: Array = SafeVariant.array_copy(
+		state.get("attachment_definition_paths", []),
+		false
 	)
 	attachment_slot_transforms.clear()
-	var mount_values: Array = state.get("attachment_slot_transforms", [])
-	for mount_value: Variant in mount_values:
-		if mount_value is Transform3D:
-			attachment_slot_transforms.append(mount_value as Transform3D)
+	var mount_values: Array = SafeVariant.array_copy(
+		state.get("attachment_slot_transforms", []),
+		false
+	)
+	for slot_index: int in range(mini(mount_values.size(), attachment_visuals.size())):
+		var fallback_transform: Transform3D = Transform3D(
+			Basis.IDENTITY,
+			SLOT_LAYOUT.get_attachment_position(slot_index, current_core_size)
+		)
+		attachment_slot_transforms.append(SafeVariant.transform3d_strict_or(
+			mount_values[slot_index],
+			fallback_transform
+		))
 	for slot_index in range(attachment_visuals.size()):
 		var attachment_path := (
 			str(attachment_paths[slot_index])
@@ -228,16 +261,18 @@ func _apply_attachment_state(
 
 
 func _apply_attachment_weapon_aims(state: Dictionary) -> void:
-	var weapon_aim_directions: Array = state.get("weapon_aim_directions", [])
+	var weapon_aim_directions: Array = SafeVariant.array_copy(
+		state.get("weapon_aim_directions", []),
+		false
+	)
 	for slot_index: int in range(attachment_visuals.size()):
-		_apply_weapon_aim(
-			slot_index,
-			(
-				weapon_aim_directions[slot_index]
-				if slot_index < weapon_aim_directions.size()
-				else Vector3.FORWARD
+		var local_direction: Vector3 = Vector3.FORWARD
+		if slot_index < weapon_aim_directions.size():
+			local_direction = SafeVariant.vector3_strict_or(
+				weapon_aim_directions[slot_index],
+				Vector3.FORWARD
 			)
-		)
+		_apply_weapon_aim(slot_index, local_direction)
 
 
 func _process(delta: float) -> void:

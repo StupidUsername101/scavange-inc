@@ -255,7 +255,9 @@ func get_local_player_proxy() -> PlayerProxy:
 func process_item_spawn_queue() -> void:
 	while not item_spawn_queue.is_empty():
 		var state: Dictionary = item_spawn_queue.pop_front()
-		var item_id: int = state["item_id"]
+		var item_id: int = SafeVariant.integral_int_or(state.get("item_id", -1), -1)
+		if item_id < 0:
+			continue
 
 		if item_proxies_by_item_id.has(item_id):
 			continue
@@ -263,11 +265,15 @@ func process_item_spawn_queue() -> void:
 		var proxy: ItemProxy = ITEM_PROXY_SCENE.instantiate()
 		add_child(proxy)
 
-		proxy.global_position = state.get("pos", Vector3.ZERO)
-		proxy.global_rotation = state.get("rot", Vector3.ZERO)
+		proxy.global_position = SafeVariant.vector3_strict_or(state.get("pos", Vector3.ZERO), Vector3.ZERO)
+		proxy.global_rotation = SafeVariant.vector3_strict_or(state.get("rot", Vector3.ZERO), Vector3.ZERO)
 		proxy.from_server_state(state)
 
 		item_proxies_by_item_id[item_id] = proxy
+
+func _public_state_dictionary(states: Dictionary, state_id: Variant) -> Dictionary:
+	return SafeVariant.dictionary_copy(states.get(state_id, {}), false)
+
 
 #####################################################
 ### RECEIVING SERVER STATE
@@ -288,7 +294,9 @@ func set_local_player_id(player_id: int) -> void:
 @rpc("authority", "unreliable_ordered", "call_local")
 func on_item_states_received(states: Dictionary) -> void:
 	for item_id in states:
-		var state: Dictionary = states[item_id]
+		var state: Dictionary = _public_state_dictionary(states, item_id)
+		if state.is_empty():
+			continue
 
 		if not item_proxies_by_item_id.has(item_id):
 			item_spawn_queue.append(state)
@@ -312,7 +320,9 @@ func on_item_states_received(states: Dictionary) -> void:
 @rpc("authority", "unreliable_ordered", "call_local")
 func on_player_states_received(states: Dictionary) -> void:
 	for player_id in states:
-		var state: Dictionary = states[player_id]
+		var state: Dictionary = _public_state_dictionary(states, player_id)
+		if state.is_empty():
+			continue
 
 		if not player_proxys_by_player_id.has(player_id):
 			var proxy: PlayerProxy = PLAYER_PROXY_SCENE.instantiate()
@@ -322,8 +332,8 @@ func on_player_states_received(states: Dictionary) -> void:
 				player_id == local_player_id
 			)
 
-			proxy.position = state.get("pos", Vector3.ZERO)
-			proxy.rotation = state.get("rot", Vector3.ZERO)
+			proxy.position = SafeVariant.vector3_strict_or(state.get("pos", Vector3.ZERO), Vector3.ZERO)
+			proxy.rotation = SafeVariant.vector3_strict_or(state.get("rot", Vector3.ZERO), Vector3.ZERO)
 
 			if proxy.is_local_player:
 				proxy.look_yaw = proxy.rotation.y
@@ -348,7 +358,9 @@ func on_player_states_received(states: Dictionary) -> void:
 @rpc("authority", "unreliable_ordered", "call_local", 2)
 func on_drone_states_received(states: Dictionary) -> void:
 	for drone_id in states:
-		var state: Dictionary = states[drone_id]
+		var state: Dictionary = _public_state_dictionary(states, drone_id)
+		if state.is_empty():
+			continue
 
 		if not drone_proxies_by_drone_id.has(drone_id):
 			var proxy := DRONE_PROXY_SCENE.instantiate() as Node3D
@@ -357,8 +369,8 @@ func on_drone_states_received(states: Dictionary) -> void:
 				continue
 
 			proxy.set("drone_id", drone_id)
-			proxy.position = state.get("pos", Vector3.ZERO)
-			proxy.rotation = state.get("rot", Vector3.ZERO)
+			proxy.position = SafeVariant.vector3_strict_or(state.get("pos", Vector3.ZERO), Vector3.ZERO)
+			proxy.rotation = SafeVariant.vector3_strict_or(state.get("rot", Vector3.ZERO), Vector3.ZERO)
 			add_child(proxy)
 			drone_proxies_by_drone_id[drone_id] = proxy
 
@@ -395,7 +407,9 @@ func despawn_projectile_proxy(projectile_id: int) -> void:
 @rpc("authority", "unreliable_ordered", "call_local", 2)
 func on_projectile_states_received(states: Dictionary) -> void:
 	for projectile_id_value: Variant in states.keys():
-		var state: Dictionary = states[projectile_id_value]
+		var state: Dictionary = _public_state_dictionary(states, projectile_id_value)
+		if state.is_empty():
+			continue
 		_upsert_projectile_proxy(state)
 
 	var existing_ids := projectile_proxies_by_id.keys()
@@ -407,7 +421,7 @@ func on_projectile_states_received(states: Dictionary) -> void:
 
 
 func _upsert_projectile_proxy(state: Dictionary) -> void:
-	var projectile_id := int(state.get("projectile_id", -1))
+	var projectile_id: int = SafeVariant.integral_int_or(state.get("projectile_id", -1), -1)
 	if projectile_id < 0:
 		return
 	var proxy := projectile_proxies_by_id.get(
@@ -421,16 +435,19 @@ func _upsert_projectile_proxy(state: Dictionary) -> void:
 		projectile_proxies_by_id[projectile_id] = proxy
 	proxy.apply_server_state(state)
 	if str(state.get("source_kind", "")) == "drone":
-		var source_drone := drone_proxies_by_drone_id.get(
-			int(state.get("source_id", -1))
+		var source_drone: Node3D = drone_proxies_by_drone_id.get(
+			SafeVariant.integral_int_or(state.get("source_id", -1), -1)
 		) as Node3D
 		if source_drone != null:
 			source_drone.call(
 				"apply_projectile_muzzle_aim",
-				int(state.get("source_slot", -1)),
-				state.get(
-					"launch_direction",
-					state.get("velocity", Vector3.ZERO)
+				SafeVariant.integral_int_or(state.get("source_slot", -1), -1),
+				SafeVariant.vector3_strict_or(
+					state.get(
+						"launch_direction",
+						state.get("velocity", Vector3.ZERO)
+					),
+					Vector3.ZERO
 				)
 			)
 
@@ -438,7 +455,9 @@ func _upsert_projectile_proxy(state: Dictionary) -> void:
 @rpc("authority", "unreliable_ordered", "call_local", 4)
 func on_drone_part_states_received(states: Dictionary) -> void:
 	for part_id in states:
-		var state: Dictionary = states[part_id]
+		var state: Dictionary = _public_state_dictionary(states, part_id)
+		if state.is_empty():
+			continue
 
 		if not drone_part_proxies_by_id.has(part_id):
 			var proxy := DRONE_PART_PROXY_SCENE.instantiate() as Node3D
@@ -447,8 +466,8 @@ func on_drone_part_states_received(states: Dictionary) -> void:
 				continue
 
 			proxy.set("drone_part_id", part_id)
-			proxy.position = state.get("pos", Vector3.ZERO)
-			proxy.rotation = state.get("rot", Vector3.ZERO)
+			proxy.position = SafeVariant.vector3_strict_or(state.get("pos", Vector3.ZERO), Vector3.ZERO)
+			proxy.rotation = SafeVariant.vector3_strict_or(state.get("rot", Vector3.ZERO), Vector3.ZERO)
 			add_child(proxy)
 			drone_part_proxies_by_id[part_id] = proxy
 
@@ -471,7 +490,9 @@ func on_drone_part_states_received(states: Dictionary) -> void:
 func on_rope_states_received(states: Dictionary) -> void:
 	for rope_id_value: Variant in states.keys():
 		var rope_id := int(rope_id_value)
-		var state: Dictionary = states[rope_id_value]
+		var state: Dictionary = _public_state_dictionary(states, rope_id_value)
+		if state.is_empty():
+			continue
 		if not rope_proxies_by_rope_id.has(rope_id):
 			var proxy := ROPE_PROXY_SCENE.instantiate() as RopeProxy
 			if proxy == null:
@@ -495,14 +516,16 @@ func on_rope_states_received(states: Dictionary) -> void:
 func on_enemy_states_received(states: Dictionary) -> void:
 	for enemy_id_value: Variant in states.keys():
 		var enemy_id := int(enemy_id_value)
-		var state: Dictionary = states[enemy_id_value]
+		var state: Dictionary = _public_state_dictionary(states, enemy_id_value)
+		if state.is_empty():
+			continue
 		if not enemy_proxies_by_enemy_id.has(enemy_id):
 			var proxy := ENEMY_PROXY_SCENE.instantiate() as EnemyProxy
 			if proxy == null:
 				push_error("Enemy proxy scene root must inherit EnemyProxy")
 				continue
 			proxy.enemy_id = enemy_id
-			proxy.position = state.get("pos", Vector3.ZERO)
+			proxy.position = SafeVariant.vector3_strict_or(state.get("pos", Vector3.ZERO), Vector3.ZERO)
 			add_child(proxy)
 			enemy_proxies_by_enemy_id[enemy_id] = proxy
 		enemy_proxies_by_enemy_id[enemy_id].apply_server_state(state)
@@ -527,7 +550,10 @@ func on_inspection_station_states_received(states: Dictionary) -> void:
 	for station_node: Node in station_nodes:
 		var station_id := int(station_node.get("station_id"))
 		if states.has(station_id):
-			station_node.call("apply_server_state", states[station_id])
+			station_node.call(
+				"apply_server_state",
+				_public_state_dictionary(states, station_id)
+			)
 
 
 @rpc("authority", "unreliable_ordered", "call_local", 6)
@@ -543,5 +569,5 @@ func on_body_part_shop_states_received(states: Dictionary) -> void:
 		if states.has(station_id):
 			terminal_node.call(
 				"apply_server_state",
-				states[station_id]
+				_public_state_dictionary(states, station_id)
 			)

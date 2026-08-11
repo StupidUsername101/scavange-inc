@@ -338,7 +338,7 @@ func _merge_segments(first: Dictionary, second: Dictionary, action_count: int) -
 		"sum_commands": sums,
 		"minimum_commands": minimums,
 		"maximum_commands": maximums,
-		"last_commands": _packed_array(second.get("last_commands", PackedFloat64Array())),
+		"last_commands": DroneTrainingActionCodec.packed_numeric_sequence(second.get("last_commands", PackedFloat64Array())),
 	}
 
 
@@ -348,11 +348,3 @@ func _filled_array(size: int, value: float) -> PackedFloat64Array:
 	for index in range(result.size()):
 		result[index] = value
 	return result
-
-
-func _packed_array(value: Variant) -> PackedFloat64Array:
-	if value is PackedFloat64Array:
-		return (value as PackedFloat64Array).duplicate()
-	if value is Array:
-		return PackedFloat64Array(value)
-	return PackedFloat64Array()

@@ -6,6 +6,31 @@ const EXPECTED_WEIGHT_COUNT = 7
 # Verifies the quad-only diagnostic policy used by the interactive ML training room.
 #######################################################
 
+class FailingVerificationDroneModelRegistry:
+	extends DroneTrainingModelRegistry
+
+	var fail_manifest_revision: int = 0
+	var fail_next_resolve: bool = false
+
+	func _write_json_file(path: String, value: Dictionary) -> bool:
+		var written: bool = super._write_json_file(path, value)
+		if (
+			written
+			and fail_manifest_revision > 0
+			and path.get_file() == MANIFEST_FILE_NAME
+			and SafeVariant.integral_int_or(value.get("checkpoint_revision", 0), 0)
+			== fail_manifest_revision
+		):
+			fail_next_resolve = true
+		return written
+
+	func _resolve_version(record_or_id: Variant) -> Dictionary:
+		if fail_next_resolve:
+			fail_next_resolve = false
+			return {}
+		return super._resolve_version(record_or_id)
+
+
 var failure_count = 0
 
 
@@ -1102,6 +1127,28 @@ func _test_immutable_model_versions() -> void:
 		).is_empty(),
 		"drone model registry rejects wrong-type checkpoint training metadata before writing a model version"
 	)
+	var verification_root: String = "user://tests/drone_model_verification_%d" % Time.get_ticks_usec()
+	var verification_registry: FailingVerificationDroneModelRegistry = (
+		FailingVerificationDroneModelRegistry.new(verification_root)
+	)
+	verification_registry.fail_manifest_revision = 1
+	var failed_verified_save: Dictionary = verification_registry.save_training_checkpoint(
+		"Verification Save",
+		ppo_checkpoint
+	)
+	_expect(
+		failed_verified_save.is_empty(),
+		"drone model first-save verification failure rejects and removes the unverified version"
+	)
+	verification_registry.fail_manifest_revision = 0
+	var verified_retry: Dictionary = verification_registry.save_training_checkpoint(
+		"Verification Save",
+		ppo_checkpoint
+	)
+	_expect(
+		int(verified_retry.get("version", 0)) == 1,
+		"failed drone model verification does not burn an immutable version identity"
+	)
 	var ppo_version = registry.save_ppo_checkpoint(
 		model_name,
 		ppo_checkpoint,
@@ -1278,6 +1325,41 @@ func _test_immutable_model_versions() -> void:
 	rolling_training["update_count"] = 17
 	rolling_training["environment_steps"] = 1234
 	rolling_checkpoint["training"] = rolling_training
+	var verification_rolling_source: Dictionary = verified_retry.duplicate(true)
+	var verification_run_id: String = verification_registry.record_episode(
+		verification_rolling_source,
+		{"total_reward": 8.0}
+	)
+	var verification_run_path: String = str(verified_retry.get("storage_path", "")).path_join(
+		DroneTrainingModelRegistry.RUN_DIRECTORY_NAME
+	).path_join(verification_run_id + ".json")
+	var verification_replacement: Dictionary = ppo_checkpoint.duplicate(true)
+	verification_replacement["test_overwrite_marker"] = "replacement"
+	verification_registry.fail_manifest_revision = 2
+	_expect(
+		verification_registry.overwrite_training_checkpoint(
+			verified_retry,
+			verification_replacement,
+			"current"
+		).is_empty(),
+		"rolling drone save rejects a stored model whose post-write verification fails"
+	)
+	verification_registry.fail_manifest_revision = 0
+	var verification_restored: Dictionary = verification_registry.load_training_checkpoint(
+		verified_retry
+	)
+	var verification_restored_record: Dictionary = verification_registry.get_version(
+		str(verified_retry.get("version_id", ""))
+	)
+	_expect(
+		not verification_restored.is_empty()
+		and not verification_restored.has("test_overwrite_marker")
+		and int(verification_restored_record.get("checkpoint_revision", 0)) == 1
+		and FileAccess.file_exists(verification_run_path),
+		"failed rolling verification restores the previous drone checkpoint, manifest, and evaluation results"
+	)
+	verification_registry.delete_version(verified_retry)
+
 	var corrupt_rolling_checkpoint = rolling_checkpoint.duplicate(true)
 	corrupt_rolling_checkpoint["network"] = {}
 	_expect(

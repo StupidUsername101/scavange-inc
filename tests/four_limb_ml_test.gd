@@ -37,6 +37,28 @@ class FailingOnceFourLimbModelRegistry:
 		return super._write_json(path, value)
 
 
+class FailingOverwriteVerificationFourLimbModelRegistry:
+	extends FourLimbModelRegistry
+
+	var fail_next_post_manifest_resolve: bool = false
+
+	func _write_json(path: String, value: Dictionary) -> bool:
+		var written: bool = super._write_json(path, value)
+		if (
+			written
+			and path.get_file() == MANIFEST_FILE_NAME
+			and SafeVariant.integral_int_or(value.get("checkpoint_revision", 0), 0) >= 2
+		):
+			fail_next_post_manifest_resolve = true
+		return written
+
+	func _resolve(record_or_id: Variant) -> Dictionary:
+		if fail_next_post_manifest_resolve:
+			fail_next_post_manifest_resolve = false
+			return {}
+		return super._resolve(record_or_id)
+
+
 var failure_count = 0
 var assertion_count = 0
 var test_root: Node3D
@@ -1555,6 +1577,33 @@ func _test_model_files_round_trip() -> void:
 		"failed limb saves do not burn immutable version identities before files exist"
 	)
 	failure_registry.delete_model(retry_after_failed_save)
+	var verification_registry: FailingOverwriteVerificationFourLimbModelRegistry = (
+		FailingOverwriteVerificationFourLimbModelRegistry.new(
+			"user://tests/four_limb_model_failed_verification_%d" % Time.get_ticks_usec()
+		)
+	)
+	var verification_saved: Dictionary = verification_registry.save_checkpoint(
+		"Verification Rollback",
+		checkpoint
+	)
+	_expect(not verification_saved.is_empty(), "verification rollback fixture can save its baseline model")
+	var verification_replacement: Dictionary = checkpoint.duplicate(true)
+	verification_replacement["test_overwrite_marker"] = "replacement"
+	_expect(
+		verification_registry.overwrite_checkpoint(verification_saved, verification_replacement).is_empty(),
+		"rolling save rejects a version whose post-write verification fails"
+	)
+	var verification_restored: Dictionary = verification_registry.load_checkpoint(verification_saved)
+	var verification_record: Dictionary = verification_registry.get_version(
+		str(verification_saved.get("version_id", ""))
+	)
+	_expect(
+		not verification_restored.is_empty()
+		and not verification_restored.has("test_overwrite_marker")
+		and int(verification_record.get("checkpoint_revision", 0)) == 1,
+		"failed post-write verification restores both the previous checkpoint and manifest revision"
+	)
+	verification_registry.delete_model(verification_saved)
 	var saved = registry.save_checkpoint("Four Limb Save Check", checkpoint)
 	_expect(
 		not saved.is_empty(),

@@ -119,24 +119,10 @@ func rest_endpoint_local() -> Vector3:
 		if segment != null:
 			var direction: Vector3 = (safe_mount_basis * segment.rest_direction_local).normalized()
 			point += direction * segment.length
-			distal_basis = _basis_from_y(direction)
+			distal_basis = GeometryBasis.from_y(direction)
 	if end_effector != null and end_effector.is_physically_present():
 		point += distal_basis * end_effector.nominal_contact_offset_parent_local()
 	return point
-
-
-static func _basis_from_y(direction: Vector3) -> Basis:
-	# Keep this identical to GenericLimb3D.basis_from_y() without creating a resource/runtime
-	# dependency cycle. Local end-effector offsets must use the same roll around the segment axis.
-	var y_axis := direction.normalized()
-	if y_axis.length_squared() <= 0.000001:
-		y_axis = Vector3.DOWN
-	var helper := Vector3.FORWARD
-	if absf(y_axis.dot(helper)) > 0.92:
-		helper = Vector3.RIGHT
-	var x_axis := helper.cross(y_axis).normalized()
-	var z_axis := x_axis.cross(y_axis).normalized()
-	return Basis(x_axis, y_axis, z_axis).orthonormalized()
 
 
 func ml_part_tags() -> Array[StringName]:

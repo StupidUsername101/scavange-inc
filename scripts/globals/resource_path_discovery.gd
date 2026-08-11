@@ -13,11 +13,7 @@ static func collect(
 	excluded_roots: Array[String] = []
 ) -> Array[String]:
 	var result: Array[String] = []
-	var normalized_extensions: Dictionary = {}
-	for extension_value: String in extensions:
-		var normalized_extension: String = extension_value.to_lower().trim_prefix(".")
-		if not normalized_extension.is_empty():
-			normalized_extensions[normalized_extension] = true
+	var normalized_extensions: Dictionary = _extension_lookup(extensions)
 	var normalized_root_path: String = _normalized_root(root_path)
 	if normalized_root_path.is_empty() or normalized_extensions.is_empty():
 		return result
@@ -33,6 +29,34 @@ static func collect(
 		result
 	)
 	result.sort()
+	return result
+
+
+static func collect_shallow(
+	root_path: String,
+	extensions: Array[String] = ["tres", "res"]
+) -> Array[String]:
+	var result: Array[String] = []
+	var normalized_extensions: Dictionary = _extension_lookup(extensions)
+	var normalized_root_path: String = _normalized_root(root_path)
+	if normalized_root_path.is_empty() or normalized_extensions.is_empty():
+		return result
+	var directory: DirAccess = DirAccess.open(normalized_root_path)
+	if directory == null:
+		return result
+	for file_name: String in directory.get_files():
+		if normalized_extensions.has(file_name.get_extension().to_lower()):
+			result.append(normalized_root_path.path_join(file_name))
+	result.sort()
+	return result
+
+
+static func _extension_lookup(extensions: Array[String]) -> Dictionary:
+	var result: Dictionary = {}
+	for extension_value: String in extensions:
+		var normalized_extension: String = extension_value.to_lower().trim_prefix(".")
+		if not normalized_extension.is_empty():
+			result[normalized_extension] = true
 	return result
 
 

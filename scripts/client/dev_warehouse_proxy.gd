@@ -12,8 +12,8 @@ var dark_material: StandardMaterial3D
 
 
 func _ready() -> void:
-	steel_material = _create_material(Color(0.18, 0.2, 0.22, 1.0), 0.72, 0.42)
-	dark_material = _create_material(Color(0.045, 0.052, 0.06, 1.0), 0.45, 0.62)
+	steel_material = VisualMaterialFactory.standard(Color(0.18, 0.2, 0.22, 1.0), 0.72, 0.42)
+	dark_material = VisualMaterialFactory.standard(Color(0.045, 0.052, 0.06, 1.0), 0.45, 0.62)
 	_build_warehouse(CATALOG.build_layout())
 
 
@@ -138,23 +138,11 @@ func _add_world_label(
 	add_child(label)
 
 
-func _create_material(
-	color: Color,
-	metallic: float,
-	roughness: float
-) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.metallic = metallic
-	material.roughness = roughness
-	return material
-
-
 func _create_emissive_material(
 	color: Color,
 	emission: Color
 ) -> StandardMaterial3D:
-	var material := _create_material(color, 0.4, 0.44)
+	var material: StandardMaterial3D = VisualMaterialFactory.standard(color, 0.4, 0.44)
 	material.emission_enabled = true
 	material.emission = emission
 	return material

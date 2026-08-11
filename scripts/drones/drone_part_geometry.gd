@@ -134,7 +134,7 @@ static func create_visual(
 	var fallback_mesh := SphereMesh.new()
 	fallback_mesh.radius = FALLBACK_RADIUS
 	fallback_mesh.height = FALLBACK_DIAMETER
-	fallback_mesh.material = _create_material(
+	fallback_mesh.material = VisualMaterialFactory.standard(
 		Color(0.5, 0.5, 0.55, 1.0),
 		0.1,
 		0.65
@@ -289,20 +289,8 @@ static func create_part_material(
 			metallic = minf(metallic + 0.2, 1.0)
 			roughness = maxf(roughness - 0.14, 0.05)
 
-	return _create_material(
+	return VisualMaterialFactory.standard(
 		definition.visual_color,
 		metallic,
 		roughness
 	)
-
-
-static func _create_material(
-	color: Color,
-	metallic: float,
-	roughness: float
-) -> StandardMaterial3D:
-	var material := StandardMaterial3D.new()
-	material.albedo_color = color
-	material.metallic = metallic
-	material.roughness = roughness
-	return material

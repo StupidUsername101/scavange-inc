@@ -303,7 +303,7 @@ func step_reward(
 				"grip_attached_surface_tags",
 				PackedStringArray()
 			)
-			var carryable = _surface_tags_have(tags_value, "carryable")
+			var carryable = GenericGrip3D.surface_tags_have(tags_value, "carryable")
 			var matches_assignment = assigned_id <= 0 or held_id == assigned_id
 			if held_id > 0 and carryable and matches_assignment:
 				var grabbed: Dictionary = worker_state.get("rewarded_grab_ids", {})
@@ -898,16 +898,6 @@ static func _pickup_item_height_for_id(observation: Dictionary, item_id: int) ->
 		return 0.0
 	var position: Vector3 = position_value as Vector3
 	return position.y if is_finite(position.y) else 0.0
-
-
-static func _surface_tags_have(value: Variant, expected: String) -> bool:
-	if value is PackedStringArray:
-		return (value as PackedStringArray).has(expected)
-	if value is Array:
-		for entry: Variant in value:
-			if str(entry) == expected:
-				return true
-	return false
 
 
 func terminal_reward(

@@ -65,7 +65,7 @@ func _render_document() -> void:
 		_create_aim_ring()
 		return
 
-	var categories: Array = document.get("children", [])
+	var categories: Array = SafeVariant.array_copy(document.get("children", []), false)
 	if not categories.is_empty():
 		selected_category_index = clampi(
 			selected_category_index,
@@ -118,8 +118,8 @@ func _draw_categories(categories: Array) -> void:
 		SHOP_MUTED
 	)
 	for index: int in range(categories.size()):
-		var category: Dictionary = categories[index]
-		var selected := index == selected_category_index
+		var category: Dictionary = SafeVariant.dictionary_copy(categories[index], false)
+		var selected: bool = index == selected_category_index
 		var rect := SHOP_LAYOUT.get_category_rect(index, categories.size())
 		var panel := _add_panel(
 			self,

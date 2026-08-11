@@ -133,46 +133,60 @@ func consume_grab_rotation_input() -> Vector2:
 	return result
 
 func apply_server_state(state: Dictionary) -> void:
-	player_id = state.get("player_id", -1)
+	player_id = SafeVariant.integral_int_or(state.get("player_id", -1), -1)
 
-	target_position = state.get("pos", global_position)
-	target_rotation = state.get("rot", global_rotation)
-	target_velocity = state.get("vel", Vector3.ZERO)
+	target_position = SafeVariant.vector3_strict_or(
+		state.get("pos", global_position), global_position
+	)
+	target_rotation = SafeVariant.vector3_strict_or(
+		state.get("rot", global_rotation), global_rotation
+	)
+	target_velocity = SafeVariant.vector3_strict_or(
+		state.get("vel", Vector3.ZERO), Vector3.ZERO
+	)
 	time_since_last_state = 0.0
 	
-	target_on_floor = state.get("on_floor", false)
-	target_edit_aim_active = state.get("edit_aim_active", false)
-	target_edit_aim_origin = state.get(
-		"edit_aim_origin",
+	target_on_floor = SafeVariant.strict_bool_or(state.get("on_floor", false), false)
+	target_edit_aim_active = SafeVariant.strict_bool_or(
+		state.get("edit_aim_active", false),
+		false
+	)
+	target_edit_aim_origin = SafeVariant.vector3_strict_or(
+		state.get("edit_aim_origin", Vector3.ZERO),
 		Vector3.ZERO
 	)
-	target_edit_aim_hit = state.get("edit_aim_hit", Vector3.ZERO)
-	target_edit_aim_color = state.get(
-		"edit_aim_color",
+	target_edit_aim_hit = SafeVariant.vector3_strict_or(
+		state.get("edit_aim_hit", Vector3.ZERO),
+		Vector3.ZERO
+	)
+	target_edit_aim_color = SafeVariant.color_strict_or(
+		state.get("edit_aim_color", target_edit_aim_color),
 		target_edit_aim_color
 	)
-	_apply_limb_state(state.get("limbs", {}))
+	_apply_limb_state(SafeVariant.dictionary_copy(state.get("limbs", {}), false))
 	_apply_player_system_state(state)
 
 
 func _apply_player_system_state(state: Dictionary) -> void:
 	target_player_state = state.duplicate(true)
-	var inventory: Dictionary = state.get("inventory", {})
-	var equipment: Dictionary = inventory.get("equipment", {})
+	var inventory: Dictionary = PlayerInventoryRules.sanitize_public_inventory(
+		state.get("inventory", {})
+	)
+	var equipment: Dictionary = inventory["equipment"]
 	_apply_equipment_state(equipment)
 	_apply_held_item_state(inventory)
 
 	if inventory_hud != null:
 		inventory_hud.apply_player_state(state)
 	if vision_effect != null:
-		var eye_entry: Dictionary = equipment.get(
-			PlayerInventoryRules.EYES_SLOT,
-			{}
+		var eye_entry: Dictionary = SafeVariant.dictionary_copy(
+			equipment.get(PlayerInventoryRules.EYES_SLOT, {}),
+			false
 		)
 		var has_eyes := vision_effect.set_eye_entry(eye_entry)
-		var distortion_state: Dictionary = state.get(
-			"vision_distortion",
-			{}
+		var distortion_state: Dictionary = SafeVariant.dictionary_copy(
+			state.get("vision_distortion", {}),
+			false
 		)
 		vision_effect.apply_distortion_state(distortion_state)
 		if inventory_hud != null:
@@ -183,7 +197,9 @@ func _apply_equipment_state(equipment: Dictionary) -> void:
 	var next_paths: Dictionary = {}
 	for slot_value: Variant in equipment.keys():
 		var slot := str(slot_value)
-		var entry: Dictionary = equipment[slot_value]
+		var entry: Dictionary = SafeVariant.dictionary_copy(equipment[slot_value], false)
+		if entry.is_empty():
+			continue
 		next_paths[slot] = str(entry.get("definition_path", ""))
 
 	for slot_value: Variant in equipment_visuals.keys():
@@ -248,7 +264,10 @@ func _apply_held_item_state(inventory: Dictionary) -> void:
 		else {}
 	)
 	var definition_path := str(entry.get("definition_path", ""))
-	var state: Dictionary = entry.get("instance_state", {})
+	var state: Dictionary = SafeVariant.dictionary_copy(
+		entry.get("instance_state", {}),
+		false
+	)
 	var signature := (
 		definition_path
 		+ "|"

@@ -52,31 +52,40 @@ func _process(_delta: float) -> void:
 
 
 func apply_server_state(state: Dictionary) -> void:
-	var next_document: Dictionary = state.get("catalog_document", {})
-	var next_category_index := int(_get_local_value(
-		state.get("category_indices", {}),
+	var next_document: Dictionary = SafeVariant.dictionary_copy(
+		state.get("catalog_document", {})
+	)
+	var next_category_index: int = SafeVariant.integral_int_or(
+		_get_local_value(state.get("category_indices", {}), 0),
 		0
-	))
+	)
 	var next_limb_path := str(_get_local_value(
 		state.get("selected_limb_paths", {}),
 		""
 	))
-	var next_credits := int(_get_local_value(
-		state.get("credits_by_player_id", {}),
+	var next_credits: int = SafeVariant.integral_int_or(
+		_get_local_value(state.get("credits_by_player_id", {}), 0),
 		0
-	))
+	)
 	var next_orders_value: Variant = _get_local_value(
 		state.get("orders_by_player_id", {}),
 		[]
 	)
-	var next_orders: Array = next_orders_value
+	var next_orders: Array = (
+		(next_orders_value as Array).duplicate(true)
+		if next_orders_value is Array
+		else []
+	)
 	var status_value: Variant = _get_local_value(
 		state.get("status_by_player_id", {}),
 		{}
 	)
-	var status: Dictionary = status_value
+	var status: Dictionary = SafeVariant.dictionary_copy(status_value, false)
 	var next_message := str(status.get("message", ""))
-	var next_message_is_error := bool(status.get("is_error", false))
+	var next_message_is_error: bool = SafeVariant.strict_bool_or(
+		status.get("is_error", false),
+		false
+	)
 
 	if (
 		next_document != catalog_document
@@ -91,7 +100,7 @@ func apply_server_state(state: Dictionary) -> void:
 		selected_category_index = next_category_index
 		selected_limb_path = next_limb_path
 		credits = next_credits
-		orders = next_orders.duplicate(true)
+		orders = next_orders
 		shop_message = next_message
 		shop_message_is_error = next_message_is_error
 		if terminal_view != null:
@@ -106,8 +115,8 @@ func apply_server_state(state: Dictionary) -> void:
 				shop_message_is_error
 			)
 
-	var next_has_fulfilled_orders := (
-		int(state.get("fulfilled_order_count", 0)) > 0
+	var next_has_fulfilled_orders: bool = (
+		SafeVariant.integral_int_or(state.get("fulfilled_order_count", 0), 0) > 0
 	)
 	if next_has_fulfilled_orders != has_fulfilled_orders:
 		has_fulfilled_orders = next_has_fulfilled_orders
@@ -158,25 +167,20 @@ func _update_terminal_aim_indicator() -> void:
 	)
 
 func _get_local_value(
-	values_by_player_id: Dictionary,
+	values_by_player_id_value: Variant,
 	default_value: Variant
 ) -> Variant:
+	var values_by_player_id: Dictionary = SafeVariant.dictionary_copy(
+		values_by_player_id_value,
+		false
+	)
 	if values_by_player_id.has(Client.local_player_id):
 		return values_by_player_id[Client.local_player_id]
-	var player_id_string := str(Client.local_player_id)
+	var player_id_string: String = str(Client.local_player_id)
 	if values_by_player_id.has(player_id_string):
 		return values_by_player_id[player_id_string]
 	return default_value
 
 
 func _update_order_indicator(has_fulfilled_orders: bool) -> void:
-	var material := StandardMaterial3D.new()
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	material.emission_enabled = true
-	if has_fulfilled_orders:
-		material.albedo_color = Color(0.12, 0.9, 0.42, 1.0)
-		material.emission = Color(0.04, 0.7, 0.22, 1.0)
-	else:
-		material.albedo_color = Color(0.9, 0.56, 0.08, 1.0)
-		material.emission = Color(0.55, 0.24, 0.015, 1.0)
-	order_light.material_override = material
+	order_light.material_override = VisualMaterialFactory.binary_status_light(has_fulfilled_orders)

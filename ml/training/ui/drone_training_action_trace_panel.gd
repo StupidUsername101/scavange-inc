@@ -261,7 +261,7 @@ func _update_tree_item(item: TreeItem, worker_row: Dictionary) -> void:
 		action_names
 	))
 	var command_tooltip: String = _named_commands(
-		_packed_array(record.get("latest_commands", PackedFloat64Array())),
+		DroneTrainingActionCodec.packed_numeric_sequence(record.get("latest_commands", PackedFloat64Array())),
 		action_names
 	)
 	var runtime_actuator_status: String = str(worker_row.get("runtime_actuator_status", "")).strip_edges()
@@ -336,10 +336,10 @@ func _refresh_detail() -> void:
 	var action_count = action_names.size()
 	var total_decisions = int(record.get("total_decisions", 0))
 	var invalid_samples = int(record.get("invalid_samples", 0))
-	var latest: PackedFloat64Array = _packed_array(record.get("latest_commands", PackedFloat64Array()))
-	var sums: PackedFloat64Array = _packed_array(record.get("sum_commands", PackedFloat64Array()))
-	var minimums: PackedFloat64Array = _packed_array(record.get("minimum_commands", PackedFloat64Array()))
-	var maximums: PackedFloat64Array = _packed_array(record.get("maximum_commands", PackedFloat64Array()))
+	var latest: PackedFloat64Array = DroneTrainingActionCodec.packed_numeric_sequence(record.get("latest_commands", PackedFloat64Array()))
+	var sums: PackedFloat64Array = DroneTrainingActionCodec.packed_numeric_sequence(record.get("sum_commands", PackedFloat64Array()))
+	var minimums: PackedFloat64Array = DroneTrainingActionCodec.packed_numeric_sequence(record.get("minimum_commands", PackedFloat64Array()))
+	var maximums: PackedFloat64Array = DroneTrainingActionCodec.packed_numeric_sequence(record.get("maximum_commands", PackedFloat64Array()))
 	var saturated_channels = int(record.get("saturated_channel_samples", 0))
 	var all_high_decisions = int(record.get("all_high_decisions", 0))
 	var all_low_decisions = int(record.get("all_low_decisions", 0))
@@ -422,7 +422,7 @@ func _configure_trace_columns(action_names: Array) -> void:
 
 func _add_segment_row(root: TreeItem, segment: Dictionary, action_count: int) -> void:
 	var count = maxi(int(segment.get("sample_count", 0)), 1)
-	var sums: PackedFloat64Array = _packed_array(segment.get("sum_commands", PackedFloat64Array()))
+	var sums: PackedFloat64Array = DroneTrainingActionCodec.packed_numeric_sequence(segment.get("sum_commands", PackedFloat64Array()))
 	var start_time = float(segment.get("start_time_seconds", 0.0))
 	var end_time = float(segment.get("end_time_seconds", start_time))
 	var item = trace_tree.create_item(root)
@@ -464,7 +464,7 @@ func _named_ranges(minimums: PackedFloat64Array, maximums: PackedFloat64Array, a
 
 
 func _format_commands_compact(value: Variant, action_names: Array) -> String:
-	var commands = _packed_array(value)
+	var commands = DroneTrainingActionCodec.packed_numeric_sequence(value)
 	if commands.size() != action_names.size() or action_names.is_empty():
 		return "%d actions · waiting" % action_names.size()
 	var parts = PackedStringArray()
@@ -486,14 +486,6 @@ func _short_action_name(name: String) -> String:
 	result = result.replace("Propeller", "P")
 	result = result.replace(" thrust", "")
 	return result
-
-
-func _packed_array(value: Variant) -> PackedFloat64Array:
-	if value is PackedFloat64Array:
-		return (value as PackedFloat64Array).duplicate()
-	if value is Array:
-		return PackedFloat64Array(value)
-	return PackedFloat64Array()
 
 
 func _value(values: PackedFloat64Array, index: int) -> float:

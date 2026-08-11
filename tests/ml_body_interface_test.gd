@@ -285,6 +285,21 @@ func _test_creator_presets_are_editable_templates() -> void:
 		and restored_draft_manifest.contract_signature == quad_preset_manifest.contract_signature,
 		"creator drafts survive JSON persistence and still Accept to the same model topology"
 	)
+	var malformed_draft_header: Dictionary = persisted_draft_record.duplicate(true)
+	malformed_draft_header["schema_version"] = "1"
+	_expect(
+		MLBodyBuildSnapshot.decode_draft(malformed_draft_header) == null,
+		"creator draft persistence rejects coercive schema headers"
+	)
+	var malformed_slot_identity: Dictionary = persisted_draft_record.duplicate(true)
+	var malformed_slot_records: Array = (malformed_slot_identity.get("slots", []) as Array).duplicate(true)
+	if not malformed_slot_records.is_empty() and malformed_slot_records[0] is Dictionary:
+		(malformed_slot_records[0] as Dictionary)["slot_id"] = 123
+	malformed_slot_identity["slots"] = malformed_slot_records
+	_expect(
+		MLBodyBuildSnapshot.decode_draft(malformed_slot_identity) == null,
+		"creator draft persistence rejects non-string slot identities instead of stringifying corruption"
+	)
 	var cyclic_core = MLBodyCoreDefinition.new()
 	cyclic_core.physical_core = cyclic_core
 	var cyclic_draft = MLBodyBuildDraft.new()
@@ -304,6 +319,93 @@ func _test_creator_presets_are_editable_templates() -> void:
 	_expect(
 		MLBodyResourceSnapshot.decode_resource(malformed_core_snapshot) == null,
 		"creator persistence rejects unknown serialized Variant tags instead of silently nulling body data"
+	)
+	var malformed_vector_source: DroneCoreDefinition = quad_draft.core.physical_core as DroneCoreDefinition
+	var malformed_vector_snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(
+		malformed_vector_source
+	)
+	var malformed_vector_properties: Dictionary = malformed_vector_snapshot.get("properties", {})
+	malformed_vector_properties["body_size"] = {
+		MLBodyResourceSnapshot.TYPE_KEY: "vector3",
+		"value": "broken-vector-payload",
+	}
+	malformed_vector_snapshot["properties"] = malformed_vector_properties
+	_expect(
+		MLBodyResourceSnapshot.decode_resource(malformed_vector_snapshot) == null,
+		"creator persistence rejects malformed payloads for known serialized Variant tags"
+	)
+	var malformed_scalar_snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(
+		malformed_vector_source
+	)
+	var malformed_scalar_properties: Dictionary = malformed_scalar_snapshot.get("properties", {})
+	malformed_scalar_properties["max_health"] = "not-a-number"
+	malformed_scalar_snapshot["properties"] = malformed_scalar_properties
+	_expect(
+		MLBodyResourceSnapshot.decode_resource(malformed_scalar_snapshot) == null,
+		"creator persistence rejects malformed scalar property types instead of coercing them"
+	)
+	var nonfinite_vector_snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(
+		malformed_vector_source
+	)
+	var nonfinite_vector_properties: Dictionary = nonfinite_vector_snapshot.get("properties", {})
+	nonfinite_vector_properties["body_size"] = {
+		MLBodyResourceSnapshot.TYPE_KEY: "vector3",
+		"value": [1.0, NAN, 1.0],
+	}
+	nonfinite_vector_snapshot["properties"] = nonfinite_vector_properties
+	_expect(
+		MLBodyResourceSnapshot.decode_resource(nonfinite_vector_snapshot) == null,
+		"creator persistence rejects non-finite geometry payloads before restoring hardware"
+	)
+	var oversized_vector_snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(
+		malformed_vector_source
+	)
+	var oversized_vector_properties: Dictionary = oversized_vector_snapshot.get("properties", {})
+	oversized_vector_properties["body_size"] = {
+		MLBodyResourceSnapshot.TYPE_KEY: "vector3",
+		"value": [1.0, 1.0, 1.0, 999.0],
+	}
+	oversized_vector_snapshot["properties"] = oversized_vector_properties
+	_expect(
+		MLBodyResourceSnapshot.decode_resource(oversized_vector_snapshot) == null,
+		"creator persistence rejects vector payloads whose shape does not match the encoder format"
+	)
+	var malformed_header_snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(
+		malformed_vector_source
+	)
+	malformed_header_snapshot["schema_version"] = "1"
+	_expect(
+		MLBodyResourceSnapshot.decode_resource(malformed_header_snapshot) == null,
+		"creator persistence does not coerce malformed snapshot header fields"
+	)
+	var typed_array_slot: MLBodySlotDefinition = MLBodySlotDefinition.new()
+	typed_array_slot.slot_id = &"typed_array_snapshot_test"
+	typed_array_slot.accepted_part_tags = [&"attachment"]
+	var typed_array_snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(typed_array_slot)
+	var typed_array_properties: Dictionary = typed_array_snapshot.get("properties", {})
+	typed_array_properties["accepted_part_tags"] = {
+		MLBodyResourceSnapshot.TYPE_KEY: "array",
+		"items": ["not-a-string-name-tag"],
+	}
+	typed_array_snapshot["properties"] = typed_array_properties
+	_expect(
+		MLBodyResourceSnapshot.decode_resource(typed_array_snapshot) == null,
+		"creator persistence rejects element-type corruption before mutating typed Resource arrays"
+	)
+	var nullable_resource_core: DroneCoreDefinition = DroneCoreDefinition.new()
+	nullable_resource_core.editable_mesh = DroneCoreEditableMeshDefinition.new()
+	var nullable_resource_snapshot: Dictionary = MLBodyResourceSnapshot.encode_resource(
+		nullable_resource_core
+	)
+	var nullable_resource_properties: Dictionary = nullable_resource_snapshot.get("properties", {})
+	nullable_resource_properties["editable_mesh"] = {
+		MLBodyResourceSnapshot.TYPE_KEY: "vector3",
+		"value": [1.0, 2.0, 3.0],
+	}
+	nullable_resource_snapshot["properties"] = nullable_resource_properties
+	_expect(
+		MLBodyResourceSnapshot.decode_resource(nullable_resource_snapshot) == null,
+		"creator persistence respects declared Resource types even when their fresh-instance value is null"
 	)
 	var quad_snapshot: Dictionary = quad_draft.ui_snapshot() if quad_draft != null else {}
 	var quad_slot_types: Dictionary = {}

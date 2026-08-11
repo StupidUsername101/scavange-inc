@@ -554,15 +554,7 @@ static func _native_spring_damping(joint: Generic6DOFJoint3D, axis: int) -> floa
 
 
 static func basis_from_y(direction: Vector3) -> Basis:
-	var y_axis := direction.normalized()
-	if y_axis.length_squared() <= 0.000001:
-		y_axis = Vector3.DOWN
-	var helper := Vector3.FORWARD
-	if absf(y_axis.dot(helper)) > 0.92:
-		helper = Vector3.RIGHT
-	var x_axis := helper.cross(y_axis).normalized()
-	var z_axis := x_axis.cross(y_axis).normalized()
-	return Basis(x_axis, y_axis, z_axis).orthonormalized()
+	return GeometryBasis.from_y(direction)
 
 
 static func joint_basis_from_twist_and_swing(

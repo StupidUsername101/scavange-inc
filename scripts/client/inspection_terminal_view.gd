@@ -79,7 +79,7 @@ func _render_document() -> void:
 		current = document
 
 	_draw_header(current)
-	var children: Array = current.get("children", [])
+	var children: Array = SafeVariant.array_copy(current.get("children", []), false)
 	if children.is_empty():
 		_draw_leaf(current)
 	else:
@@ -154,7 +154,7 @@ func _draw_summary(current: Dictionary) -> void:
 		COLOR_MUTED
 	)
 
-	var values: Array = current.get("values", [])
+	var values: Array = SafeVariant.array_copy(current.get("values", []), false)
 	_draw_value_grid(
 		panel,
 		values,
@@ -173,7 +173,7 @@ func _draw_summary(current: Dictionary) -> void:
 
 func _draw_children(children: Array) -> void:
 	for index: int in range(children.size()):
-		var child_data: Dictionary = children[index]
+		var child_data: Dictionary = SafeVariant.dictionary_copy(children[index], false)
 		var rect: Rect2 = FRACTAL_LAYOUT.get_child_rect(
 			index,
 			children.size()
@@ -203,8 +203,8 @@ func _draw_children(children: Array) -> void:
 			COLOR_MUTED
 		)
 
-		var values: Array = child_data.get("values", [])
-		var grandchildren: Array = child_data.get("children", [])
+		var values: Array = SafeVariant.array_copy(child_data.get("values", []), false)
+		var grandchildren: Array = SafeVariant.array_copy(child_data.get("children", []), false)
 		var preview_bottom: float = rect.size.y - 14.0
 		if not grandchildren.is_empty():
 			preview_bottom -= 34.0
@@ -234,7 +234,7 @@ func _draw_nested_preview(
 		available_width - gap * float(shown_count - 1)
 	) / float(shown_count)
 	for index: int in range(shown_count):
-		var nested: Dictionary = grandchildren[index]
+		var nested: Dictionary = SafeVariant.dictionary_copy(grandchildren[index], false)
 		var mini_rect := Rect2(
 			18.0 + float(index) * (mini_width + gap),
 			parent_size.y - 41.0,
@@ -272,7 +272,7 @@ func _draw_leaf(current: Dictionary) -> void:
 		21,
 		COLOR_MUTED
 	)
-	var values: Array = current.get("values", [])
+	var values: Array = SafeVariant.array_copy(current.get("values", []), false)
 	_draw_value_grid(
 		panel,
 		values,
@@ -291,7 +291,7 @@ func _draw_value_preview(
 	var maximum_lines: int = maxi(1, floori(rect.size.y / line_height))
 	var shown_count: int = mini(values.size(), maximum_lines)
 	for index: int in range(shown_count):
-		var value: Dictionary = values[index]
+		var value: Dictionary = SafeVariant.dictionary_copy(values[index], false)
 		_add_label(
 			parent,
 			"%s  %s" % [
@@ -328,7 +328,7 @@ func _draw_value_grid(
 	var cell_width: float = rect.size.x / float(columns)
 	var cell_height: float = rect.size.y / float(maxi(rows, 1))
 	for index: int in range(values.size()):
-		var value: Dictionary = values[index]
+		var value: Dictionary = SafeVariant.dictionary_copy(values[index], false)
 		var column: int = index % columns
 		var row: int = floori(float(index) / float(columns))
 		var label_text := "%s\n%s" % [
@@ -351,23 +351,28 @@ func _draw_value_grid(
 
 
 func _get_node_at_path(root: Dictionary, path: Array[int]) -> Dictionary:
-	var current := root
+	var current: Dictionary = root
 	for child_index: int in path:
-		var children: Array = current.get("children", [])
+		var children: Array = SafeVariant.array_copy(current.get("children", []), false)
 		if child_index < 0 or child_index >= children.size():
 			return {}
-		current = children[child_index]
+		current = SafeVariant.dictionary_copy(children[child_index], false)
+		if current.is_empty():
+			return {}
 	return current
 
 
 func _build_breadcrumb() -> String:
 	var labels: Array[String] = [str(document.get("title", "Scanner"))]
-	var current := document
+	var current: Dictionary = document
 	for child_index: int in view_path:
-		var children: Array = current.get("children", [])
+		var children: Array = SafeVariant.array_copy(current.get("children", []), false)
 		if child_index < 0 or child_index >= children.size():
 			break
-		current = children[child_index]
+		var child: Dictionary = SafeVariant.dictionary_copy(children[child_index], false)
+		if child.is_empty():
+			break
+		current = child
 		labels.append(str(current.get("title", "Group")))
 	return " / ".join(labels)
 
