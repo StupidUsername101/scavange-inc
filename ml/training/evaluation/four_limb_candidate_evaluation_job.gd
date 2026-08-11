@@ -99,8 +99,8 @@ func configure(
 	group_id = new_group_id
 	candidate_id = RLTrainingMath.finite_int_or(candidate.get("candidate_id", -1), -1)
 	candidate_hash = str(candidate.get("candidate_hash", ""))
-	plan = (candidate.get("evaluation_plan", {}) as Dictionary).duplicate(true)
-	evaluation_contract = (candidate.get("evaluation_contract", {}) as Dictionary).duplicate(true)
+	plan = SafeVariant.dictionary_copy(candidate.get("evaluation_plan", {}))
+	evaluation_contract = SafeVariant.dictionary_copy(candidate.get("evaluation_contract", {}))
 	evaluation_contract_hash = str(candidate.get("evaluation_contract_hash", ""))
 	environment_revision = initial_environment_revision
 	candidate_checkpoint = checkpoint.duplicate(true)
@@ -148,11 +148,11 @@ func configure(
 	)
 	if not reward_cards.is_empty():
 		reward_deck.load_configuration(reward_cards)
-	local_spawn_position = _vector3_from_record(
+	local_spawn_position = SafeVariant.vector3_strict_or(
 		environment.get("spawn_position_m", []),
 		Vector3.ZERO
 	)
-	arena_size = _vector3_from_record(
+	arena_size = SafeVariant.vector3_strict_or(
 		environment.get("arena_size_m", []),
 		Vector3(100.0, 8.0, 100.0)
 	)
@@ -300,20 +300,19 @@ func restart_for_environment(new_environment_revision: int) -> void:
 
 
 func progress() -> Dictionary:
-	var total_cases: int = (plan.get("cases", []) as Array).size()
-	return {
-		"status": status,
-		"group_id": group_id,
-		"candidate_id": candidate_id,
-		"completed_cases": records.size(),
-		"current_case_number": mini(case_index + 1, total_cases),
-		"total_cases": total_cases,
-		"scenario_id": str(current_case.get("scenario_id", "")),
-		"case_elapsed_seconds": case_elapsed_seconds,
-		"case_duration_seconds": case_duration_seconds,
-		"restart_count": restart_count,
-		"last_error": last_error,
-	}
+	return RLTrainingCandidateSupport.evaluation_job_progress(
+		status,
+		group_id,
+		candidate_id,
+		plan,
+		records,
+		case_index,
+		current_case,
+		case_elapsed_seconds,
+		case_duration_seconds,
+		restart_count,
+		last_error
+	)
 
 
 func shutdown() -> void:
@@ -709,33 +708,18 @@ func _build_delivery_destination(position_world: Vector3) -> void:
 
 
 func _build_threat_turret(seed: int) -> bool:
-	var threat_loadout: TurretLoadout = MLBodyPresetLibrary.stationary_turret_loadout()
-	if threat_loadout == null or not threat_loadout.ensure_contract():
-		last_error = "four-limb evaluator could not load the stationary threat-turret preset"
-		return false
-	var threat_runtime_loadout: TurretLoadout = (
-		MLBodyPartContract.deep_duplicate_resource(threat_loadout) as TurretLoadout
-	)
-	if threat_runtime_loadout == null or not threat_runtime_loadout.ensure_contract():
-		last_error = "four-limb evaluator could not duplicate the stationary threat-turret preset"
-		return false
-	evaluation_turret = TurretPhysicalBody3D.new()
-	evaluation_turret.name = "FourLimbEvaluationThreatTurret"
-	# _ready() validates the loadout, so the authored preset must be assigned before add_child().
-	# The previous order created a body with a Nil loadout and then reset it, which explains the
-	# loadout + maximum_health errors even when no live-room turret had been placed.
-	evaluation_turret.loadout = threat_runtime_loadout
-	evaluation_turret.auto_start_active = true
-	evaluation_turret.training_invulnerable = true
-	evaluation_turret.visible = false
-	add_child(evaluation_turret)
-	if not evaluation_turret.reset_body(
-		Transform3D(Basis.IDENTITY, _world_spawn_position() + Vector3(7.0, 0.0, 3.0)),
+	var build_result: Dictionary = TrainingEvaluationTurretSupport.create_hidden_threat_turret(
+		self,
+		"FourLimbEvaluationThreatTurret",
+		_world_spawn_position() + Vector3(7.0, 0.0, 3.0),
 		seed + 90001
-	):
-		last_error = "four-limb evaluator threat turret could not initialize its accepted body"
-		evaluation_turret.queue_free()
-		evaluation_turret = null
+	)
+	evaluation_turret = build_result.get("turret") as TurretPhysicalBody3D
+	if evaluation_turret == null:
+		last_error = "four-limb evaluator %s" % str(build_result.get(
+			"error",
+			"could not create its threat turret"
+		))
 		return false
 	evaluation_turret_adapter = TurretTrainingCombatantAdapter.new(
 		evaluation_turret,
@@ -744,16 +728,18 @@ func _build_threat_turret(seed: int) -> bool:
 		0,
 		2
 	)
-	entity_spatial_hash.register_entity(
-		evaluation_turret_adapter.spatial_key(),
-		evaluation_turret,
-		evaluation_turret_adapter.entity_kind,
-		evaluation_turret_adapter.entity_id,
-		evaluation_turret_adapter.metadata()
-	)
 	var shot_callable: Callable = _on_evaluation_turret_shot_requested
-	if not evaluation_turret.shot_requested.is_connected(shot_callable):
-		evaluation_turret.shot_requested.connect(shot_callable)
+	if not TrainingEvaluationTurretSupport.register_hidden_threat_turret(
+		evaluation_turret,
+		evaluation_turret_adapter,
+		entity_spatial_hash,
+		shot_callable
+	):
+		evaluation_turret.queue_free()
+		evaluation_turret = null
+		evaluation_turret_adapter = null
+		last_error = "could not register the evaluation threat turret"
+		return false
 	return true
 
 
@@ -781,78 +767,40 @@ func _register_limb_combatant() -> void:
 func _update_evaluation_turret_aim() -> void:
 	if not is_instance_valid(evaluation_turret) or not is_instance_valid(body):
 		return
-	var direction_world: Vector3 = body.core_transform().origin - evaluation_turret.global_position
-	if direction_world.length_squared() <= 0.000001:
-		return
-	var local_direction: Vector3 = evaluation_turret.global_basis.inverse() * direction_world.normalized()
-	var horizontal: float = sqrt(local_direction.x * local_direction.x + local_direction.z * local_direction.z)
-	evaluation_turret.yaw_angle_radians = atan2(-local_direction.x, -local_direction.z)
-	evaluation_turret.pitch_angle_radians = clampf(
-		atan2(local_direction.y, maxf(horizontal, 0.000001)),
-		deg_to_rad(evaluation_turret.loadout.gun.minimum_pitch_degrees),
-		deg_to_rad(evaluation_turret.loadout.gun.maximum_pitch_degrees)
+	TrainingEvaluationTurretSupport.aim_and_fire(
+		evaluation_turret,
+		body.core_transform().origin
 	)
-	evaluation_turret.yaw_velocity_radians_per_second = 0.0
-	evaluation_turret.pitch_velocity_radians_per_second = 0.0
-	evaluation_turret._apply_joint_transforms()
-	evaluation_turret.submit_manual_controls(0.0, 0.0, 1.0)
 
 
 func _on_evaluation_turret_shot_requested(request: Dictionary) -> void:
 	if evaluation_turret_adapter == null:
 		return
-	var projectile: TurretTrainingProjectile3D = TurretTrainingProjectile3D.new()
-	add_child(projectile)
-	if not projectile.configure(request, evaluation_turret_adapter, entity_spatial_hash, wall_spatial_hash):
-		projectile.queue_free()
+	var projectile: TurretTrainingProjectile3D = TrainingEvaluationTurretSupport.create_hidden_projectile(
+		self,
+		request,
+		evaluation_turret_adapter,
+		entity_spatial_hash,
+		wall_spatial_hash
+	)
+	if projectile == null:
 		return
-	projectile.visible = false
 	evaluation_projectiles.append(projectile)
 
 
 func _reward_context(observation: Dictionary, combat_events: Dictionary) -> Dictionary:
 	var objective: Dictionary = observation.get("objective", {})
 	var pickup_item_valid: bool = is_instance_valid(evaluation_pickup_item)
-	return {
+	var result: Dictionary = {
 		"action_change_norm": action_change_pending,
 		"combat_events": combat_events,
-		"turret_threat_probe": objective.get("turret_threat_probe", {}),
-		"assigned_pickup_item_id": (
-			evaluation_pickup_item.get_instance_id() if pickup_item_valid else 0
-		),
-		"pickup_item_reward_value": (
-			evaluation_pickup_item.reward_value if pickup_item_valid else 0.0
-		),
-		"delivery_destination_present": bool(objective.get("delivery_destination_present", false)),
-		"delivery_destination_group_id": maxi(
-			RLTrainingMath.finite_int_or(objective.get("delivery_destination_group_id", 0), 0),
-			0
-		),
-		"delivery_destination_stable_id": str(objective.get("delivery_destination_stable_id", "")),
-		"delivery_destination_distance_m": maxf(
-			RLTrainingMath.finite_float_or(objective.get("delivery_destination_distance_m", 0.0), 0.0),
-			0.0
-		),
-		"delivery_item_held": bool(objective.get("delivery_item_held", false)),
-		"delivery_item_accepted": bool(objective.get("delivery_item_accepted", false)),
-		"delivery_item_inside": bool(objective.get("delivery_item_inside", false)),
-		"delivery_item_instance_id": maxi(
-			RLTrainingMath.finite_int_or(objective.get("delivery_item_instance_id", 0), 0),
-			0
-		),
-		"delivery_item_reward_value": maxf(
-			RLTrainingMath.finite_float_or(objective.get("delivery_item_reward_value", 0.0), 0.0),
-			0.0
-		),
-		"delivery_approach_reward_scale": maxf(
-			RLTrainingMath.finite_float_or(objective.get("delivery_approach_reward_scale", 1.0), 1.0),
-			0.0
-		),
-		"delivery_completion_reward_scale": maxf(
-			RLTrainingMath.finite_float_or(objective.get("delivery_completion_reward_scale", 1.0), 1.0),
-			0.0
-		),
 	}
+	result.merge(FourLimbRewardContext.task_fields(
+		objective,
+		evaluation_pickup_item.get_instance_id() if pickup_item_valid else 0,
+		evaluation_pickup_item.reward_value if pickup_item_valid else 0.0
+	), true)
+	return result
 
 
 func _clear_case_environment() -> void:
@@ -931,14 +879,7 @@ static func _command_change_norm(previous: PackedFloat64Array, current: PackedFl
 	return sqrt(sum_value / float(maxi(joint_sample_count, 1)))
 
 
-static func _vector3_from_record(value: Variant, fallback: Vector3) -> Vector3:
-	if value is Array and (value as Array).size() >= 3:
-		var values: Array = value as Array
-		return Vector3(float(values[0]), float(values[1]), float(values[2]))
-	return fallback
-
-
-func _fail_start(reason: String) -> bool:
+static func _fail_start(reason: String) -> bool:
 	_fail(reason)
 	return false
 

@@ -189,47 +189,7 @@ func state_snapshot() -> Dictionary:
 	for limb: GenericLimb3D in limbs:
 		if not is_instance_valid(limb):
 			continue
-		var segment_states: Array[Dictionary] = []
-		for segment: LimbSegment3D in limb.segments:
-			if not is_instance_valid(segment):
-				continue
-			segment_states.append({
-				"segment_index": segment.segment_index,
-				"transform_world": segment.global_transform,
-				"linear_velocity_world": segment.linear_velocity,
-				"angular_velocity_world": segment.angular_velocity,
-				"mass": segment.mass,
-				"health_ratio": segment.health_ratio(),
-				"actuator_effectiveness": segment.actuator_effectiveness,
-			})
-		var joint_states: Array[Dictionary] = []
-		for record: Dictionary in limb.joint_records:
-			var joint_definition := record.get("definition") as LimbJointDefinition
-			joint_states.append({
-				"joint_index": int(record.get("joint_index", joint_states.size())),
-				"action_indices": (
-					joint_definition.action_indices
-					if joint_definition != null
-					else Vector3i(-1, -1, -1)
-				),
-				"current_angles": record.get("current_angles", Vector3.ZERO),
-				"target_angles": record.get("target_angles", Vector3.ZERO),
-				"target_error_angles": record.get("target_error_angles", Vector3.ZERO),
-				"rest_error_angles": record.get("rest_error_angles", Vector3.ZERO),
-				"applied_torque_joint": record.get("applied_torque_joint", Vector3.ZERO),
-				"passive_torque_joint": record.get("passive_torque_joint", Vector3.ZERO),
-				"active_torque_joint": record.get("active_torque_joint", Vector3.ZERO),
-				"limit_torque_joint": record.get("limit_torque_joint", Vector3.ZERO),
-			})
-		limb_states.append({
-			"slot_index": limb.slot_index,
-			"limb_name": limb.definition.limb_name if limb.definition != null else "",
-			"installed": limb.definition.installed if limb.definition != null else false,
-			"end_effector": limb.end_effector_snapshot(),
-			"segment_count": limb.segments.size(),
-			"segments": segment_states,
-			"joints": joint_states,
-		})
+		limb_states.append(GenericLimbStateSnapshot.limb_state(limb))
 	return {
 		"host_instance_id": host_body.get_instance_id() if is_instance_valid(host_body) else 0,
 		"host_transform_world": (

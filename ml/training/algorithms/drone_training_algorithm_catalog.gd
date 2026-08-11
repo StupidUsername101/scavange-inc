@@ -91,9 +91,9 @@ static func inspect_checkpoint(checkpoint: Dictionary) -> Dictionary:
 	}
 	match str(descriptor_for_checkpoint(checkpoint).get("id", "")):
 		"ppo_clip":
-			var network: Dictionary = _dictionary_copy(checkpoint.get("network", {}))
-			var actor: Dictionary = _dictionary_copy(network.get("actor", {}))
-			var critic: Dictionary = _dictionary_copy(network.get("critic", {}))
+			var network: Dictionary = SafeVariant.dictionary_copy(checkpoint.get("network", {}))
+			var actor: Dictionary = SafeVariant.dictionary_copy(network.get("actor", {}))
+			var critic: Dictionary = SafeVariant.dictionary_copy(network.get("critic", {}))
 			var observation_schema: int = RLTrainingMath.finite_int_or(
 				network.get("observation_schema_version", 0), -1
 			)
@@ -113,7 +113,7 @@ static func inspect_checkpoint(checkpoint: Dictionary) -> Dictionary:
 			var control_descriptors: Array[Dictionary] = _dictionary_array(
 				network.get("control_descriptors", [])
 			)
-			var body_contract: Dictionary = _dictionary_copy(checkpoint.get("body_interface", {}))
+			var body_contract: Dictionary = SafeVariant.dictionary_copy(checkpoint.get("body_interface", {}))
 			var compatible: bool = (
 				RLTrainingMath.finite_int_or(checkpoint.get("schema_version", 0), -1)
 				== DronePPOTrainer.CHECKPOINT_SCHEMA_VERSION
@@ -165,12 +165,12 @@ static func inspect_checkpoint(checkpoint: Dictionary) -> Dictionary:
 				else "The PPO checkpoint architecture/schema does not match this build."
 			)
 		"sac_her_maze":
-			var network: Dictionary = _dictionary_copy(checkpoint.get("network", {}))
-			var actor: Dictionary = _dictionary_copy(network.get("actor", {}))
-			var q_one: Dictionary = _dictionary_copy(network.get("q_one", {}))
-			var q_two: Dictionary = _dictionary_copy(network.get("q_two", {}))
-			var target_q_one: Dictionary = _dictionary_copy(network.get("target_q_one", {}))
-			var target_q_two: Dictionary = _dictionary_copy(network.get("target_q_two", {}))
+			var network: Dictionary = SafeVariant.dictionary_copy(checkpoint.get("network", {}))
+			var actor: Dictionary = SafeVariant.dictionary_copy(network.get("actor", {}))
+			var q_one: Dictionary = SafeVariant.dictionary_copy(network.get("q_one", {}))
+			var q_two: Dictionary = SafeVariant.dictionary_copy(network.get("q_two", {}))
+			var target_q_one: Dictionary = SafeVariant.dictionary_copy(network.get("target_q_one", {}))
+			var target_q_two: Dictionary = SafeVariant.dictionary_copy(network.get("target_q_two", {}))
 			var hidden_width: int = RLTrainingMath.finite_int_or(
 				network.get("hidden_size", 0), -1
 			)
@@ -258,10 +258,10 @@ static func runtime_contract(checkpoint: Dictionary) -> Dictionary:
 	var descriptor_value = descriptor_for_checkpoint(checkpoint)
 	match str(descriptor_value.get("id", "")):
 		"ppo_clip":
-			var network: Dictionary = _dictionary_copy(checkpoint.get("network", {}))
-			var actor: Dictionary = _dictionary_copy(network.get("actor", {}))
-			var critic: Dictionary = _dictionary_copy(network.get("critic", {}))
-			var config: Dictionary = _dictionary_copy(checkpoint.get("config", {}))
+			var network: Dictionary = SafeVariant.dictionary_copy(checkpoint.get("network", {}))
+			var actor: Dictionary = SafeVariant.dictionary_copy(network.get("actor", {}))
+			var critic: Dictionary = SafeVariant.dictionary_copy(network.get("critic", {}))
+			var config: Dictionary = SafeVariant.dictionary_copy(checkpoint.get("config", {}))
 			return {
 				"runtime_model_class": str(descriptor_value.get(
 					"runtime_model_class",
@@ -279,7 +279,7 @@ static func runtime_contract(checkpoint: Dictionary) -> Dictionary:
 				"body_feature_count": RLTrainingMath.finite_int_or(network.get("body_feature_count", 0), -1),
 				"body_interface_signature": str(network.get("body_interface_signature", "")),
 				"control_descriptors": _dictionary_array(network.get("control_descriptors", [])),
-				"body_interface": _dictionary_copy(checkpoint.get("body_interface", {})),
+				"body_interface": SafeVariant.dictionary_copy(checkpoint.get("body_interface", {})),
 				"hidden_size": RLTrainingMath.finite_int_or(network.get("hidden_size", 0), -1),
 				"hidden_layer_count": RLTrainingMath.finite_int_or(network.get("hidden_layer_count", 0), -1),
 				"control_interval_seconds": clampf(
@@ -292,9 +292,9 @@ static func runtime_contract(checkpoint: Dictionary) -> Dictionary:
 				),
 			}
 		"sac_her_maze":
-			var network: Dictionary = _dictionary_copy(checkpoint.get("network", {}))
-			var actor: Dictionary = _dictionary_copy(network.get("actor", {}))
-			var config: Dictionary = _dictionary_copy(checkpoint.get("config", {}))
+			var network: Dictionary = SafeVariant.dictionary_copy(checkpoint.get("network", {}))
+			var actor: Dictionary = SafeVariant.dictionary_copy(network.get("actor", {}))
+			var config: Dictionary = SafeVariant.dictionary_copy(checkpoint.get("config", {}))
 			var stored_actor_output_count = RLTrainingMath.finite_int_or(actor.get("output_size", 0), -1)
 			var stored_distribution = str(network.get(
 				"policy_distribution_semantics",
@@ -353,10 +353,6 @@ static func _dictionary_array(value: Variant) -> Array[Dictionary]:
 		if item is Dictionary:
 			result.append((item as Dictionary).duplicate(true))
 	return result
-
-
-static func _dictionary_copy(value: Variant) -> Dictionary:
-	return (value as Dictionary).duplicate(true) if value is Dictionary else {}
 
 
 static func can_branch(source_id: String, target_id: String) -> bool:

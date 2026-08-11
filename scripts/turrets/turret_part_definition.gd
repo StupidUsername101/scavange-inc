@@ -21,32 +21,19 @@ func hardware_signature_fragment() -> String:
 
 
 static func vector3_to_json(value: Vector3) -> Array[float]:
-	return [value.x, value.y, value.z]
+	return SafeVariant.vector3_to_array(value)
 
 
 static func vector3_from_json(value: Variant, fallback: Vector3) -> Vector3:
-	var result = fallback
-	if value is Vector3:
-		result = value
-	elif value is Array and value.size() >= 3:
-		if _finite_number(value[0]) and _finite_number(value[1]) and _finite_number(value[2]):
-			result = Vector3(float(value[0]), float(value[1]), float(value[2]))
-	elif value is Dictionary:
-		if _finite_number(value.get("x")) and _finite_number(value.get("y")) and _finite_number(value.get("z")):
-			result = Vector3(float(value["x"]), float(value["y"]), float(value["z"]))
-	return result if result.is_finite() else fallback
+	return SafeVariant.vector3_strict_or(value, fallback)
 
 
 static func finite_float_or(value: Variant, fallback: float) -> float:
-	return float(value) if _finite_number(value) else fallback
+	return SafeVariant.finite_float_or(value, fallback)
 
 
 static func finite_int_or(value: Variant, fallback: int) -> int:
-	return int(value) if _finite_number(value) else fallback
-
-
-static func _finite_number(value: Variant) -> bool:
-	return (value is float or value is int) and is_finite(float(value))
+	return SafeVariant.finite_int_or(value, fallback)
 
 
 func ml_part_tags() -> Array[StringName]:

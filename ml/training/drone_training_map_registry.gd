@@ -70,7 +70,11 @@ func save_map(
 		"delivery_destination_groups": delivery_destination_group_records.duplicate(true),
 	}
 	if not _write_json_file(manifest_path, record):
-		last_error = "Could not write the map file (%s)." % error_string(FileAccess.get_open_error())
+		var manifest_write_error: String = error_string(FileAccess.get_open_error())
+		TrainingFileIO.remove_directory_recursive_absolute(
+			ProjectSettings.globalize_path(version_path)
+		)
+		last_error = "Could not write the map file (%s)." % manifest_write_error
 		return {}
 	record["storage_path"] = version_path
 	return record
@@ -127,11 +131,11 @@ func list_maps() -> Array[Dictionary]:
 		family_name = root.get_next()
 	root.list_dir_end()
 	result.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
-		var left_updated = RLTrainingMath.finite_int_or(
+		var left_updated = SafeVariant.integral_int_or(
 			left.get("updated_unix_ms", left.get("created_unix_ms", 0)),
 			0
 		)
-		var right_updated = RLTrainingMath.finite_int_or(
+		var right_updated = SafeVariant.integral_int_or(
 			right.get("updated_unix_ms", right.get("created_unix_ms", 0)),
 			0
 		)
@@ -143,17 +147,10 @@ func list_maps() -> Array[Dictionary]:
 
 
 func get_map(map_id: String) -> Dictionary:
-	var clean_id := map_id.strip_edges().trim_prefix("/").trim_suffix("/")
-	if clean_id.is_empty() or clean_id.contains(".."):
+	var record: Dictionary = _resolve_map(map_id)
+	if record.is_empty():
 		return {}
-	var record: Dictionary = TrainingFileIO.read_json_dictionary(
-		root_path.path_join(clean_id).path_join(MANIFEST_FILE_NAME)
-	)
-	if str(record.get("map_id", "")) != clean_id:
-		return {}
-	var version_path := root_path.path_join(clean_id)
-	_apply_usage(record, version_path)
-	record["storage_path"] = version_path
+	_apply_usage(record, str(record["storage_path"]))
 	return record
 
 
@@ -172,25 +169,12 @@ func delete_map(map_record_or_id: Variant) -> bool:
 	var family_path := version_path.get_base_dir()
 	if not _record_next_version_floor(
 		family_path,
-		maxi(RLTrainingMath.finite_int_or(record.get("version", 0), 0), 0) + 1
+		maxi(SafeVariant.integral_int_or(record.get("version", 0), 0), 0) + 1
 	):
 		return false
 	if not _remove_directory_recursive_absolute(ProjectSettings.globalize_path(version_path)):
 		return false
-	var family_directory := DirAccess.open(family_path)
-	if family_directory != null:
-		var has_content := false
-		family_directory.list_dir_begin()
-		var entry := family_directory.get_next()
-		while not entry.is_empty():
-			if entry != "." and entry != ".." and entry != NEXT_VERSION_FILE_NAME:
-				has_content = true
-				break
-			entry = family_directory.get_next()
-		family_directory.list_dir_end()
-		if not has_content:
-			# Keep next-version.txt so deleted version numbers are never silently reused.
-			pass
+	# Keep the family directory and next-version.txt so deleted version numbers are never reused.
 	return true
 
 
@@ -205,12 +189,8 @@ func mark_used(map_record_or_id: Variant) -> bool:
 	if record.is_empty():
 		last_error = "The selected map no longer exists."
 		return false
-	var usage_path := str(record.get("storage_path", "")).path_join(USAGE_FILE_NAME)
-	var usage: Dictionary = TrainingFileIO.read_json_dictionary(usage_path)
-	usage["last_used_unix_ms"] = int(Time.get_unix_time_from_system() * 1000.0)
-	usage["last_used_utc"] = Time.get_datetime_string_from_system(true, false) + "Z"
-	usage["use_count"] = maxi(RLTrainingMath.finite_int_or(usage.get("use_count", 0), 0), 0) + 1
-	if not _write_json_file(usage_path, usage):
+	var usage_path: String = str(record.get("storage_path", "")).path_join(USAGE_FILE_NAME)
+	if not TrainingFileIO.record_usage(usage_path):
 		last_error = "Could not update the map's last-used time."
 		return false
 	return true
@@ -228,103 +208,83 @@ func globalized_root_path() -> String:
 
 
 func _collect_family(family_path: String, result: Array[Dictionary]) -> void:
-	var directory := DirAccess.open(family_path)
+	var directory: DirAccess = DirAccess.open(family_path)
 	if directory == null:
 		return
+	var map_key: String = family_path.get_file()
 	directory.list_dir_begin()
-	var version_name := directory.get_next()
+	var version_name: String = directory.get_next()
 	while not version_name.is_empty():
 		if directory.current_is_dir():
-			var version_path := family_path.path_join(version_name)
-			var record: Dictionary = TrainingFileIO.read_json_dictionary(version_path.path_join(MANIFEST_FILE_NAME))
-			if not record.is_empty() and not str(record.get("map_id", "")).is_empty():
-				_apply_usage(record, version_path)
-				record["storage_path"] = version_path
+			var record: Dictionary = _resolve_map("%s/%s" % [map_key, version_name])
+			if not record.is_empty():
+				_apply_usage(record, str(record["storage_path"]))
 				result.append(record)
 		version_name = directory.get_next()
 	directory.list_dir_end()
 
 
-func _apply_usage(record: Dictionary, version_path: String) -> void:
-	var usage = TrainingFileIO.read_json_dictionary(version_path.path_join(USAGE_FILE_NAME))
-	record["last_used_unix_ms"] = maxi(
-		RLTrainingMath.finite_int_or(usage.get("last_used_unix_ms", 0), 0),
-		0
+func _resolve_map(map_record_or_id: Variant) -> Dictionary:
+	var map_id: String = (
+		str((map_record_or_id as Dictionary).get("map_id", ""))
+		if map_record_or_id is Dictionary
+		else str(map_record_or_id)
 	)
+	# Preserve the registry's historical tolerance for surrounding whitespace/slashes while the
+	# shared resolver still validates the normalized two-segment identity strictly.
+	map_id = map_id.strip_edges().trim_prefix("/").trim_suffix("/")
+	return TrainingFileIO.resolve_version_manifest(
+		root_path,
+		map_id,
+		"training-map",
+		MANIFEST_FILE_NAME,
+		"map_id",
+		"map_key"
+	)
+
+
+func _apply_usage(record: Dictionary, version_path: String) -> void:
+	var usage: Dictionary = TrainingFileIO.read_usage_metadata(
+		version_path.path_join(USAGE_FILE_NAME)
+	)
+	record["last_used_unix_ms"] = int(usage.get("last_used_unix_ms", 0))
 	record["last_used_utc"] = str(usage.get("last_used_utc", ""))
-	record["use_count"] = maxi(RLTrainingMath.finite_int_or(usage.get("use_count", 0), 0), 0)
+	record["use_count"] = int(usage.get("use_count", 0))
 
 
 func _write_json_file(path: String, value: Dictionary) -> bool:
-	var stored = value.duplicate(true)
+	var stored: Dictionary = value.duplicate(true)
 	stored.erase("storage_path")
 	if stored.has("map_id"):
 		stored.erase("last_used_unix_ms")
 		stored.erase("last_used_utc")
 		stored.erase("use_count")
-	return TrainingFileIO.write_text_atomic(path, JSON.stringify(stored, "\t", true, true))
+	return TrainingFileIO.write_json_dictionary_atomic(path, stored)
 
 
 func _remove_directory_recursive_absolute(absolute_path: String) -> bool:
-	var directory := DirAccess.open(absolute_path)
-	if directory == null:
-		last_error = "Could not open the map directory for deletion."
-		return false
-	directory.list_dir_begin()
-	var entry := directory.get_next()
-	while not entry.is_empty():
-		if entry != "." and entry != "..":
-			var child_path := absolute_path.path_join(entry)
-			if directory.current_is_dir():
-				if not _remove_directory_recursive_absolute(child_path):
-					directory.list_dir_end()
-					return false
-			else:
-				var remove_file_error := directory.remove(entry)
-				if remove_file_error != OK:
-					last_error = "Could not delete map file %s (%s)." % [entry, error_string(remove_file_error)]
-					directory.list_dir_end()
-					return false
-		entry = directory.get_next()
-	directory.list_dir_end()
-	var remove_directory_error := DirAccess.remove_absolute(absolute_path)
-	if remove_directory_error != OK:
-		last_error = "Could not delete the map directory (%s)." % error_string(remove_directory_error)
-		return false
-	return true
+	if TrainingFileIO.remove_directory_recursive_absolute(absolute_path):
+		return true
+	last_error = "Could not delete the selected map directory."
+	return false
 
 
 func _next_version_number(family_path: String) -> int:
-	var highest := 0
-	var directory := DirAccess.open(family_path)
-	if directory != null:
-		directory.list_dir_begin()
-		var entry := directory.get_next()
-		while not entry.is_empty():
-			if directory.current_is_dir() and entry.begins_with("v"):
-				highest = maxi(highest, entry.trim_prefix("v").to_int())
-			entry = directory.get_next()
-		directory.list_dir_end()
-	var stored_floor := 1
-	var sequence_path := family_path.path_join(NEXT_VERSION_FILE_NAME)
-	if FileAccess.file_exists(sequence_path):
-		var sequence_text := FileAccess.get_file_as_string(sequence_path).strip_edges()
-		if sequence_text.is_valid_int():
-			stored_floor = maxi(sequence_text.to_int(), 1)
-	return maxi(highest + 1, stored_floor)
+	return TrainingFileIO.next_version_directory_number(
+		family_path,
+		NEXT_VERSION_FILE_NAME
+	)
 
 
 func _record_next_version_floor(family_path: String, requested_floor: int) -> bool:
-	var directory_error := DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(family_path))
-	if directory_error != OK:
-		last_error = "Could not preserve the map version sequence."
-		return false
-	var sequence_path := family_path.path_join(NEXT_VERSION_FILE_NAME)
-	var sequence_value = str(maxi(requested_floor, _next_version_number(family_path)))
-	if not TrainingFileIO.write_text_atomic(sequence_path, sequence_value):
-		last_error = "Could not preserve the map version sequence."
-		return false
-	return true
+	if TrainingFileIO.preserve_next_version_floor(
+		family_path,
+		NEXT_VERSION_FILE_NAME,
+		requested_floor
+	):
+		return true
+	last_error = "Could not preserve the map version sequence."
+	return false
 
 
 func _map_key(map_name: String) -> String:

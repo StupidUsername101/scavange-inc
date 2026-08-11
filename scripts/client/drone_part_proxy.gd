@@ -25,20 +25,7 @@ var time_since_last_state := 0.0
 
 
 func _ready() -> void:
-	warehouse_label = Label3D.new()
-	warehouse_label.name = "WarehouseItemName"
-	warehouse_label.top_level = true
-	warehouse_label.visible = false
-	warehouse_label.font_size = 38
-	warehouse_label.outline_size = 10
-	warehouse_label.modulate = Color(0.96, 0.98, 1.0, 1.0)
-	warehouse_label.outline_modulate = Color(0.005, 0.008, 0.012, 1.0)
-	warehouse_label.pixel_size = 0.002
-	warehouse_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	# Warehouse names should be readable, but they must still respect walls,
-	# shelves, parts, and every other piece of scene geometry.
-	warehouse_label.no_depth_test = false
-	add_child(warehouse_label)
+	warehouse_label = WarehouseNameLabel.create(self)
 
 
 func apply_server_state(state: Dictionary) -> void:
@@ -46,7 +33,12 @@ func apply_server_state(state: Dictionary) -> void:
 	_apply_definition(state.get("definition_path", ""))
 	broken = state.get("broken", false)
 	_apply_broken_visual()
-	_apply_warehouse_label(str(state.get("warehouse_display_name", "")))
+	WarehouseNameLabel.set_display_name(
+		warehouse_label,
+		str(state.get("warehouse_display_name", "")),
+		global_position,
+		warehouse_label_height
+	)
 	target_position = state.get("pos", global_position)
 	target_rotation = Quaternion.from_euler(
 		state.get("rot", global_rotation)
@@ -107,55 +99,25 @@ func _process(delta: float) -> void:
 		var server_part := Server.get_server_drone_part(drone_part_id)
 		if is_instance_valid(server_part):
 			global_transform = server_part.global_transform
-			_update_warehouse_label_position()
+			WarehouseNameLabel.update_position(
+				warehouse_label, global_position, warehouse_label_height
+			)
 			return
 
 	time_since_last_state += delta
-	var extrapolation_time := minf(
+	ClientProxyMotion.apply_smoothed_motion(
+		self,
+		delta,
 		time_since_last_state,
-		MAX_EXTRAPOLATION_TIME
+		target_position,
+		target_rotation,
+		target_linear_velocity,
+		target_angular_velocity,
+		MAX_EXTRAPOLATION_TIME,
+		INTERP_SPEED
 	)
-	var predicted_position := (
-		target_position
-		+ target_linear_velocity * extrapolation_time
-	)
-	var predicted_rotation := target_rotation
-	var angular_speed := target_angular_velocity.length()
-	if angular_speed > 0.0001:
-		predicted_rotation = (
-			Quaternion(
-				target_angular_velocity / angular_speed,
-				angular_speed * extrapolation_time
-			)
-			* target_rotation
-		)
-
-	var weight := clampf(INTERP_SPEED * delta, 0.0, 1.0)
-	global_position += target_linear_velocity * delta
-	global_position = global_position.lerp(
-		predicted_position,
-		weight
-	)
-	var current_rotation := global_basis.get_rotation_quaternion()
-	global_basis = Basis(
-		current_rotation.slerp(predicted_rotation, weight)
-	)
-	_update_warehouse_label_position()
-
-
-func _apply_warehouse_label(display_name: String) -> void:
-	if warehouse_label == null:
-		return
-	warehouse_label.text = display_name
-	warehouse_label.visible = not display_name.is_empty()
-	_update_warehouse_label_position()
-
-
-func _update_warehouse_label_position() -> void:
-	if warehouse_label == null or not warehouse_label.visible:
-		return
-	warehouse_label.global_position = (
-		global_position + Vector3.UP * warehouse_label_height
+	WarehouseNameLabel.update_position(
+		warehouse_label, global_position, warehouse_label_height
 	)
 
 

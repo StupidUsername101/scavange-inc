@@ -91,19 +91,7 @@ func instantiate_visual() -> Node3D:
 
 
 func instantiate_visual_from_state(state: Dictionary) -> Node3D:
-	var visual_root := Node3D.new()
-	visual_root.name = "ItemVisual"
-	visual_root.position = mesh_position * overall_size
-	visual_root.rotation_degrees = Vector3(
-		mesh_rotation_x,
-		mesh_rotation_y,
-		mesh_rotation_z
-	)
-	visual_root.scale = Vector3(
-		mesh_size_x,
-		mesh_size_y,
-		mesh_size_z
-	) * overall_size
+	var visual_root: Node3D = _create_visual_root()
 	visual_root.add_child(
 		GunGeometry.create_gun_visual(get_build(state))
 	)

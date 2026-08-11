@@ -38,27 +38,15 @@ func save_version(
 	parent_version_id = ""
 ) -> Dictionary:
 	last_error = ""
-	var clean_name = model_name.strip_edges()
-	if clean_name.is_empty():
-		clean_name = "Model X"
-	var model_key = _model_key(clean_name)
-	var model_path = root_path.path_join(model_key)
-	var version_number = _next_version_number(model_path)
-	var version_name = "v%04d" % version_number
-	var version_path = model_path.path_join(version_name)
-	var manifest_path = version_path.path_join(MANIFEST_FILE_NAME)
-	while FileAccess.file_exists(manifest_path):
-		version_number += 1
-		version_name = "v%04d" % version_number
-		version_path = model_path.path_join(version_name)
-		manifest_path = version_path.path_join(MANIFEST_FILE_NAME)
-
-	var directory_error = DirAccess.make_dir_recursive_absolute(
-		ProjectSettings.globalize_path(version_path)
-	)
-	if directory_error != OK:
-		last_error = "Could not create model version directory (%s)." % error_string(directory_error)
+	var location: Dictionary = _create_version_location(model_name, "model version")
+	if location.is_empty():
 		return {}
+	var clean_name: String = str(location["model_name"])
+	var model_key: String = str(location["model_key"])
+	var version_number: int = int(location["version"])
+	var version_name: String = str(location["version_name"])
+	var version_path: String = str(location["storage_path"])
+	var manifest_path: String = version_path.path_join(MANIFEST_FILE_NAME)
 
 	var created_unix_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	var created_utc = Time.get_datetime_string_from_system(true, false) + "Z"
@@ -79,9 +67,11 @@ func save_version(
 		"weights": weights.duplicate(true),
 	}
 	if not _write_json_file(manifest_path, record):
-		last_error = "Could not write model version atomically (%s)." % error_string(
-			FileAccess.get_open_error()
+		var manifest_write_error: String = error_string(FileAccess.get_open_error())
+		TrainingFileIO.remove_directory_recursive_absolute(
+			ProjectSettings.globalize_path(version_path)
 		)
+		last_error = "Could not write model version atomically (%s)." % manifest_write_error
 		return {}
 	record["storage_path"] = version_path
 	return record
@@ -110,27 +100,15 @@ func save_training_checkpoint(
 	):
 		last_error = "The training checkpoint is incomplete, unknown or incompatible with its drone body."
 		return {}
-	var clean_name = model_name.strip_edges()
-	if clean_name.is_empty():
-		clean_name = "Model X"
-	var model_key = _model_key(clean_name)
-	var model_path = root_path.path_join(model_key)
-	var version_number = _next_version_number(model_path)
-	var version_name = "v%04d" % version_number
-	var version_path = model_path.path_join(version_name)
-	var manifest_path = version_path.path_join(MANIFEST_FILE_NAME)
-	while FileAccess.file_exists(manifest_path):
-		version_number += 1
-		version_name = "v%04d" % version_number
-		version_path = model_path.path_join(version_name)
-		manifest_path = version_path.path_join(MANIFEST_FILE_NAME)
-
-	var directory_error = DirAccess.make_dir_recursive_absolute(
-		ProjectSettings.globalize_path(version_path)
-	)
-	if directory_error != OK:
-		last_error = "Could not create training version directory (%s)." % error_string(directory_error)
+	var location: Dictionary = _create_version_location(model_name, "training version")
+	if location.is_empty():
 		return {}
+	var clean_name: String = str(location["model_name"])
+	var model_key: String = str(location["model_key"])
+	var version_number: int = int(location["version"])
+	var version_name: String = str(location["version_name"])
+	var version_path: String = str(location["storage_path"])
+	var manifest_path: String = version_path.path_join(MANIFEST_FILE_NAME)
 	var checkpoint_path = version_path.path_join(PPO_CHECKPOINT_FILE_NAME)
 	if not _write_json_file(checkpoint_path, checkpoint):
 		var checkpoint_write_error = error_string(FileAccess.get_open_error())
@@ -140,18 +118,6 @@ func save_training_checkpoint(
 
 	var created_unix_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	var created_utc = Time.get_datetime_string_from_system(true, false) + "Z"
-	var training: Dictionary = training_value
-	var best_candidate_value: Variant = training.get("best_candidate", {})
-	var best_candidate: Dictionary = (
-		(best_candidate_value as Dictionary).duplicate(true)
-		if best_candidate_value is Dictionary else {}
-	)
-	var exact_candidate = RLTrainingMath.bool_or(
-		best_candidate.get("exact_policy_match", false),
-		false
-	)
-	var training_environment: Dictionary = training_environment_value
-	var runtime_contract = _runtime_contract_for_checkpoint(checkpoint)
 	var record = {
 		"schema_version": SCHEMA_VERSION,
 		"model_name": clean_name,
@@ -159,62 +125,20 @@ func save_training_checkpoint(
 		"version": version_number,
 		"version_name": version_name,
 		"version_id": "%s/%s" % [model_key, version_name],
-		"artifact_type": str(algorithm_descriptor.get(
-			"artifact_type",
-			"trained_quadrotor_policy"
-		)),
-		"algorithm": str(checkpoint.get("algorithm", "")),
-		"training_algorithm_id": str(algorithm_descriptor.get("id", "")),
-		"training_algorithm_name": str(algorithm_descriptor.get(
-			"display_name",
-			"Learning algorithm"
-		)),
-		"propeller_count": RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), 0),
 		"created_unix_ms": created_unix_ms,
 		"created_utc": created_utc,
-		"training_updated_unix_ms": created_unix_ms,
-		"training_updated_utc": created_utc,
 		"parent_version_id": parent_version_id,
 		"weights": {},
 		"checkpoint_file": PPO_CHECKPOINT_FILE_NAME,
-		"training_update": maxi(RLTrainingMath.finite_int_or(training.get("update_count", 0), 0), 0),
-		"environment_steps": maxi(RLTrainingMath.finite_int_or(training.get("environment_steps", 0), 0), 0),
-		"completed_episodes": maxi(RLTrainingMath.finite_int_or(training.get("completed_episodes", 0), 0), 0),
-		"has_best_episode": RLTrainingMath.bool_or(training.get("has_best_episode", false), false),
-		"has_exact_best_policy": exact_candidate,
-		"best_episode_mean_reward": RLTrainingMath.finite_float_or(training.get(
-			"best_episode_mean_reward",
-			0.0
-		), 0.0),
-		"best_candidate_score": RLTrainingMath.finite_float_or(best_candidate.get(
-			"selection_score",
-			0.0
-		), 0.0),
-		"best_candidate_group_mean_reward": RLTrainingMath.finite_float_or(best_candidate.get(
-			"group_mean_reward_per_second",
-			0.0
-		), 0.0),
-		"best_candidate_support_reward": RLTrainingMath.finite_float_or(best_candidate.get(
-			"support_reward_per_second",
-			0.0
-		), 0.0),
-		"best_candidate_worker_reward": RLTrainingMath.finite_float_or(best_candidate.get(
-			"best_worker_reward_per_second",
-			0.0
-		), 0.0),
-		"best_candidate_selection_method": str(best_candidate.get(
-			"selection_method",
-			""
-		)),
-		"checkpoint_kind": str(checkpoint_kind),
-		"checkpoint_revision": 1,
-		"training_environment": training_environment.duplicate(true),
-		"runtime_contract": runtime_contract,
-		"score_matches_checkpoint": (
-			str(checkpoint_kind) in ["best", "auto_best"]
-			and exact_candidate
-		),
 	}
+	record.merge(_training_manifest_fields(
+		checkpoint,
+		algorithm_descriptor,
+		checkpoint_kind,
+		created_unix_ms,
+		created_utc,
+		1
+	), true)
 	if not _write_json_file(manifest_path, record):
 		var manifest_write_error = error_string(FileAccess.get_open_error())
 		_remove_directory_recursive_absolute(ProjectSettings.globalize_path(version_path))
@@ -293,63 +217,18 @@ func overwrite_training_checkpoint(
 		return {}
 	var now_unix_ms = int(Time.get_unix_time_from_system() * 1000.0)
 	var now_utc = Time.get_datetime_string_from_system(true, false) + "Z"
-	var training: Dictionary = training_value
-	var best_candidate_value: Variant = training.get("best_candidate", {})
-	var best_candidate: Dictionary = (
-		(best_candidate_value as Dictionary).duplicate(true)
-		if best_candidate_value is Dictionary else {}
-	)
-	var exact_candidate = RLTrainingMath.bool_or(
-		best_candidate.get("exact_policy_match", false),
-		false
-	)
-	record["artifact_type"] = str(algorithm_descriptor.get(
-		"artifact_type",
-		"trained_quadrotor_policy"
-	))
-	record["algorithm"] = str(checkpoint.get("algorithm", ""))
-	record["training_algorithm_id"] = str(algorithm_descriptor.get("id", ""))
-	record["propeller_count"] = RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), 0)
-	record["training_algorithm_name"] = str(algorithm_descriptor.get(
-		"display_name",
-		"Learning algorithm"
-	))
-	record["training_updated_unix_ms"] = now_unix_ms
-	record["training_updated_utc"] = now_utc
-	record["training_update"] = maxi(RLTrainingMath.finite_int_or(training.get("update_count", 0), 0), 0)
-	record["environment_steps"] = maxi(RLTrainingMath.finite_int_or(training.get("environment_steps", 0), 0), 0)
-	record["completed_episodes"] = maxi(RLTrainingMath.finite_int_or(training.get("completed_episodes", 0), 0), 0)
-	record["has_best_episode"] = RLTrainingMath.bool_or(training.get("has_best_episode", false), false)
-	record["has_exact_best_policy"] = exact_candidate
-	record["best_episode_mean_reward"] = RLTrainingMath.finite_float_or(
-		training.get("best_episode_mean_reward", 0.0),
-		0.0
-	)
-	record["best_candidate_score"] = RLTrainingMath.finite_float_or(best_candidate.get("selection_score", 0.0), 0.0)
-	record["best_candidate_group_mean_reward"] = RLTrainingMath.finite_float_or(
-		best_candidate.get("group_mean_reward_per_second", 0.0),
-		0.0
-	)
-	record["best_candidate_support_reward"] = RLTrainingMath.finite_float_or(
-		best_candidate.get("support_reward_per_second", 0.0),
-		0.0
-	)
-	record["best_candidate_worker_reward"] = RLTrainingMath.finite_float_or(
-		best_candidate.get("best_worker_reward_per_second", 0.0),
-		0.0
-	)
-	record["best_candidate_selection_method"] = str(best_candidate.get(
-		"selection_method",
-		""
-	))
-	record["checkpoint_kind"] = str(checkpoint_kind)
-	record["checkpoint_revision"] = maxi(RLTrainingMath.finite_int_or(record.get("checkpoint_revision", 1), 1), 1) + 1
-	record["training_environment"] = (training_environment_value as Dictionary).duplicate(true)
-	record["runtime_contract"] = _runtime_contract_for_checkpoint(checkpoint)
-	record["score_matches_checkpoint"] = (
-		str(checkpoint_kind) in ["best", "auto_best"]
-		and exact_candidate
-	)
+	var next_revision: int = maxi(
+		RLTrainingMath.finite_int_or(record.get("checkpoint_revision", 1), 1),
+		1
+	) + 1
+	record.merge(_training_manifest_fields(
+		checkpoint,
+		algorithm_descriptor,
+		checkpoint_kind,
+		now_unix_ms,
+		now_utc,
+		next_revision
+	), true)
 	var manifest_path = version_path.path_join(MANIFEST_FILE_NAME)
 	var stored_record = record.duplicate(true)
 	stored_record.erase("storage_path")
@@ -392,9 +271,10 @@ func save_ppo_checkpoint(
 
 func load_training_checkpoint(version_record: Dictionary) -> Dictionary:
 	last_error = ""
-	var record = version_record
-	if str(record.get("storage_path", "")).is_empty():
-		record = get_version(str(record.get("version_id", "")))
+	var record: Dictionary = _resolve_version(version_record)
+	if record.is_empty():
+		last_error = "The selected model version is not registered."
+		return {}
 	if DroneTrainingAlgorithmCatalog.descriptor_for_checkpoint(record).is_empty():
 		last_error = "The selected model version is not a registered training checkpoint."
 		return {}
@@ -421,18 +301,23 @@ func load_ppo_checkpoint(version_record: Dictionary) -> Dictionary:
 
 
 func inspect_version(version_record: Dictionary) -> Dictionary:
+	var record: Dictionary = _resolve_version(version_record)
 	var result = {
 		"compatible": false,
 		"trainable": false,
-		"compatibility_text": "This is not a registered training checkpoint.",
-		"runtime_contract": _dictionary_copy(version_record.get("runtime_contract", {})),
-		"training_environment": _dictionary_copy(
-			version_record.get("training_environment", {})
+		"compatibility_text": (
+			"This model version is not registered."
+			if record.is_empty()
+			else "This is not a registered training checkpoint."
+		),
+		"runtime_contract": SafeVariant.dictionary_copy(record.get("runtime_contract", {})),
+		"training_environment": SafeVariant.dictionary_copy(
+			record.get("training_environment", {})
 		),
 	}
-	if not DroneTrainingAlgorithmCatalog.is_training_checkpoint(version_record):
+	if record.is_empty() or not DroneTrainingAlgorithmCatalog.is_training_checkpoint(record):
 		return result
-	var checkpoint = load_training_checkpoint(version_record)
+	var checkpoint = load_training_checkpoint(record)
 	if checkpoint.is_empty():
 		result["compatibility_text"] = last_error
 		return result
@@ -447,7 +332,7 @@ func inspect_version(version_record: Dictionary) -> Dictionary:
 		"Compatibility is unknown."
 	))
 	result["runtime_contract"] = runtime_contract
-	result["training_environment"] = _dictionary_copy(
+	result["training_environment"] = SafeVariant.dictionary_copy(
 		checkpoint.get("training_environment", {})
 	)
 	return result
@@ -474,10 +359,7 @@ func list_versions() -> Array[Dictionary]:
 
 
 func get_version(version_id: String) -> Dictionary:
-	for record in list_versions():
-		if str(record.get("version_id", "")) == version_id:
-			return record
-	return {}
+	return _with_usage_metadata(_resolve_version(version_id))
 
 
 func delete_version(version_record_or_id: Variant) -> bool:
@@ -487,22 +369,14 @@ func delete_version(version_record_or_id: Variant) -> bool:
 		if version_record_or_id is Dictionary
 		else str(version_record_or_id)
 	)
-	var segments = version_id.split("/", false)
-	var model_key = str(segments[0]) if segments.size() == 2 else ""
-	var version_name = str(segments[1]) if segments.size() == 2 else ""
-	var version_number_text = version_name.trim_prefix("v")
-	if (
-		segments.size() != 2
-		or model_key.is_empty()
-		or _model_key(model_key) != model_key
-		or not version_name.begins_with("v")
-		or version_number_text.is_empty()
-		or not version_number_text.is_valid_int()
-		or version_number_text.to_int() <= 0
-	):
+	var identity: Dictionary = TrainingFileIO.parse_version_id(version_id, "model")
+	if identity.is_empty():
 		last_error = "The selected model version has an invalid storage identity."
 		return false
-	var record = get_version(version_id)
+	var model_key: String = str(identity["model_key"])
+	var version_name: String = str(identity["version_name"])
+	var version_number: int = int(identity["version"])
+	var record: Dictionary = _resolve_version(version_id)
 	if record.is_empty():
 		last_error = "The selected model version no longer exists."
 		return false
@@ -513,7 +387,7 @@ func delete_version(version_record_or_id: Variant) -> bool:
 	var model_virtual_path = root_path.path_join(model_key)
 	if not _record_next_version_floor(
 		model_virtual_path,
-		RLTrainingMath.finite_int_or(record.get("version", version_number_text.to_int()), version_number_text.to_int()) + 1
+		version_number + 1
 	):
 		return false
 	var absolute_version_path = ProjectSettings.globalize_path(expected_virtual_path)
@@ -533,32 +407,16 @@ func delete_version(version_record_or_id: Variant) -> bool:
 
 func mark_version_used(version_record_or_id: Variant) -> bool:
 	last_error = ""
-	var record = (
-		version_record_or_id
-		if version_record_or_id is Dictionary
-		else get_version(str(version_record_or_id))
-	)
-	if not (record is Dictionary):
-		last_error = "The selected model version is not registered."
-		return false
-	var version: Dictionary = record
+	var version: Dictionary = _resolve_version(version_record_or_id)
 	if version.is_empty():
 		last_error = "The selected model version is not registered."
 		return false
 	var version_path = str(version.get("storage_path", ""))
 	if version_path.is_empty():
-		version = get_version(str(version.get("version_id", "")))
-		version_path = str(version.get("storage_path", ""))
-	if version_path.is_empty():
 		last_error = "The selected model version has no storage path."
 		return false
-	var usage_path = version_path.path_join(USAGE_FILE_NAME)
-	var usage = TrainingFileIO.read_json_dictionary(usage_path)
-	var now_unix_ms = int(Time.get_unix_time_from_system() * 1000.0)
-	usage["last_used_unix_ms"] = now_unix_ms
-	usage["last_used_utc"] = Time.get_datetime_string_from_system(true, false) + "Z"
-	usage["use_count"] = maxi(RLTrainingMath.finite_int_or(usage.get("use_count", 0), 0), 0) + 1
-	if not _write_json_file(usage_path, usage):
+	var usage_path: String = version_path.path_join(USAGE_FILE_NAME)
+	if not TrainingFileIO.record_usage(usage_path):
 		last_error = "Could not update the model's last-used metadata."
 		return false
 	return true
@@ -600,21 +458,17 @@ func record_episode(version_record: Dictionary, result: Dictionary) -> String:
 	var stored_result = result.duplicate(true)
 	stored_result["schema_version"] = SCHEMA_VERSION
 	stored_result["run_id"] = run_id
-	stored_result["model_version_id"] = version_record.get("version_id", "")
+	stored_result["model_version_id"] = current_record.get("version_id", "")
 	stored_result["recorded_unix_ms"] = unix_ms
 	stored_result["recorded_utc"] = Time.get_datetime_string_from_system(true, false) + "Z"
-	var file = FileAccess.open(result_path, FileAccess.WRITE)
-	if file == null:
+	if not TrainingFileIO.write_json_dictionary_atomic(result_path, stored_result):
 		last_error = "Could not write episode result (%s)." % error_string(FileAccess.get_open_error())
 		return ""
-	file.store_string(JSON.stringify(stored_result, "\t", true, true))
-	file.flush()
-	file.close()
 	return run_id
 
 
 func color_for_version(version_record: Dictionary) -> Color:
-	var weights: Dictionary = _dictionary_copy(version_record.get("weights", {}))
+	var weights: Dictionary = SafeVariant.dictionary_copy(version_record.get("weights", {}))
 	var stable_identity = "%s|%s|%s" % [
 		str(version_record.get("version_id", "")),
 		str(version_record.get("artifact_type", "")),
@@ -633,7 +487,7 @@ func display_name(version_record: Dictionary) -> String:
 
 func tooltip_for_version(version_record: Dictionary) -> String:
 	if DroneTrainingAlgorithmCatalog.is_training_checkpoint(version_record):
-		var training_environment: Dictionary = _dictionary_copy(
+		var training_environment: Dictionary = SafeVariant.dictionary_copy(
 			version_record.get("training_environment", {})
 		)
 		var saved_reward_schema = RLTrainingMath.finite_int_or(
@@ -662,6 +516,139 @@ func tooltip_for_version(version_record: Dictionary) -> String:
 	]
 
 
+func _create_version_location(model_name: String, directory_label: String) -> Dictionary:
+	var clean_name: String = model_name.strip_edges()
+	if clean_name.is_empty():
+		clean_name = "Model X"
+	var model_key: String = _model_key(clean_name)
+	var model_path: String = root_path.path_join(model_key)
+	var version_number: int = _next_version_number(model_path)
+	var version_name: String = "v%04d" % version_number
+	var version_path: String = model_path.path_join(version_name)
+	var manifest_path: String = version_path.path_join(MANIFEST_FILE_NAME)
+	while FileAccess.file_exists(manifest_path):
+		version_number += 1
+		version_name = "v%04d" % version_number
+		version_path = model_path.path_join(version_name)
+		manifest_path = version_path.path_join(MANIFEST_FILE_NAME)
+	var directory_error: Error = DirAccess.make_dir_recursive_absolute(
+		ProjectSettings.globalize_path(version_path)
+	)
+	if directory_error != OK:
+		last_error = "Could not create %s directory (%s)." % [
+			directory_label,
+			error_string(directory_error),
+		]
+		return {}
+	return {
+		"model_name": clean_name,
+		"model_key": model_key,
+		"version": version_number,
+		"version_name": version_name,
+		"version_id": "%s/%s" % [model_key, version_name],
+		"storage_path": version_path,
+	}
+
+
+func _training_manifest_fields(
+	checkpoint: Dictionary,
+	algorithm_descriptor: Dictionary,
+	checkpoint_kind: Variant,
+	updated_unix_ms: int,
+	updated_utc: String,
+	checkpoint_revision: int
+) -> Dictionary:
+	var training_value: Variant = checkpoint.get("training", {})
+	var training: Dictionary = (
+		training_value as Dictionary
+		if training_value is Dictionary
+		else {}
+	)
+	var best_candidate_value: Variant = training.get("best_candidate", {})
+	var best_candidate: Dictionary = (
+		(best_candidate_value as Dictionary).duplicate(true)
+		if best_candidate_value is Dictionary
+		else {}
+	)
+	var exact_candidate: bool = RLTrainingMath.bool_or(
+		best_candidate.get("exact_policy_match", false),
+		false
+	)
+	var training_environment_value: Variant = checkpoint.get("training_environment", {})
+	var training_environment: Dictionary = (
+		(training_environment_value as Dictionary).duplicate(true)
+		if training_environment_value is Dictionary
+		else {}
+	)
+	return {
+		"artifact_type": str(algorithm_descriptor.get(
+			"artifact_type",
+			"trained_quadrotor_policy"
+		)),
+		"algorithm": str(checkpoint.get("algorithm", "")),
+		"training_algorithm_id": str(algorithm_descriptor.get("id", "")),
+		"training_algorithm_name": str(algorithm_descriptor.get(
+			"display_name",
+			"Learning algorithm"
+		)),
+		"propeller_count": RLTrainingMath.finite_int_or(
+			checkpoint.get("propeller_count", 0),
+			0
+		),
+		"training_updated_unix_ms": updated_unix_ms,
+		"training_updated_utc": updated_utc,
+		"training_update": maxi(
+			RLTrainingMath.finite_int_or(training.get("update_count", 0), 0),
+			0
+		),
+		"environment_steps": maxi(
+			RLTrainingMath.finite_int_or(training.get("environment_steps", 0), 0),
+			0
+		),
+		"completed_episodes": maxi(
+			RLTrainingMath.finite_int_or(training.get("completed_episodes", 0), 0),
+			0
+		),
+		"has_best_episode": RLTrainingMath.bool_or(
+			training.get("has_best_episode", false),
+			false
+		),
+		"has_exact_best_policy": exact_candidate,
+		"best_episode_mean_reward": RLTrainingMath.finite_float_or(
+			training.get("best_episode_mean_reward", 0.0),
+			0.0
+		),
+		"best_candidate_score": RLTrainingMath.finite_float_or(
+			best_candidate.get("selection_score", 0.0),
+			0.0
+		),
+		"best_candidate_group_mean_reward": RLTrainingMath.finite_float_or(
+			best_candidate.get("group_mean_reward_per_second", 0.0),
+			0.0
+		),
+		"best_candidate_support_reward": RLTrainingMath.finite_float_or(
+			best_candidate.get("support_reward_per_second", 0.0),
+			0.0
+		),
+		"best_candidate_worker_reward": RLTrainingMath.finite_float_or(
+			best_candidate.get("best_worker_reward_per_second", 0.0),
+			0.0
+		),
+		"best_candidate_selection_method": str(best_candidate.get(
+			"selection_method",
+			""
+		)),
+		"checkpoint_kind": str(checkpoint_kind),
+		"checkpoint_revision": maxi(checkpoint_revision, 1),
+		"training_environment": training_environment,
+		"runtime_contract": _runtime_contract_for_checkpoint(checkpoint),
+		"score_matches_checkpoint": (
+			str(checkpoint_kind) in ["best", "auto_best"]
+			and exact_candidate
+		),
+	}
+
+
 func _runtime_contract_for_checkpoint(checkpoint: Dictionary) -> Dictionary:
 	return DroneTrainingAlgorithmCatalog.runtime_contract(checkpoint)
 
@@ -673,42 +660,61 @@ func _collect_model_versions(
 	var directory = DirAccess.open(model_path)
 	if directory == null:
 		return
+	var model_key: String = model_path.get_file()
 	directory.list_dir_begin()
 	var version_directory = directory.get_next()
 	while not version_directory.is_empty():
 		if directory.current_is_dir():
-			var version_path = model_path.path_join(version_directory)
-			var record = _read_record(
-				version_path.path_join(MANIFEST_FILE_NAME)
+			var record: Dictionary = _resolve_version(
+				"%s/%s" % [model_key, version_directory]
 			)
 			if not record.is_empty():
-				var usage = TrainingFileIO.read_json_dictionary(version_path.path_join(USAGE_FILE_NAME))
-				if not usage.is_empty():
-					record["last_used_unix_ms"] = maxi(RLTrainingMath.finite_int_or(usage.get("last_used_unix_ms", 0), 0), 0)
-					record["last_used_utc"] = str(usage.get("last_used_utc", ""))
-					record["use_count"] = maxi(RLTrainingMath.finite_int_or(usage.get("use_count", 0), 0), 0)
-				record["storage_path"] = version_path
-				result.append(record)
+				result.append(_with_usage_metadata(record))
 		version_directory = directory.get_next()
 	directory.list_dir_end()
 
 
-func _read_record(path: String) -> Dictionary:
-	var record = TrainingFileIO.read_json_dictionary(path)
+func _resolve_version(record_or_id: Variant) -> Dictionary:
+	var version_id: String = (
+		str((record_or_id as Dictionary).get("version_id", ""))
+		if record_or_id is Dictionary
+		else str(record_or_id)
+	)
+	var record: Dictionary = TrainingFileIO.resolve_version_manifest(
+		root_path,
+		version_id,
+		"model",
+		MANIFEST_FILE_NAME
+	)
+	if record.is_empty() or not (record.get("weights", {}) is Dictionary):
+		return {}
 	if (
-		str(record.get("version_id", "")).is_empty()
-		or not (record.get("weights", {}) is Dictionary)
+		DroneTrainingAlgorithmCatalog.is_training_checkpoint(record)
+		and str(record.get("checkpoint_file", PPO_CHECKPOINT_FILE_NAME))
+		!= PPO_CHECKPOINT_FILE_NAME
 	):
 		return {}
 	return record
 
 
-func _dictionary_copy(value: Variant) -> Dictionary:
-	return (value as Dictionary).duplicate(true) if value is Dictionary else {}
+func _with_usage_metadata(record: Dictionary) -> Dictionary:
+	if record.is_empty():
+		return {}
+	var result: Dictionary = record.duplicate(true)
+	var version_path: String = str(result.get("storage_path", ""))
+	if version_path.is_empty():
+		return result
+	var usage: Dictionary = TrainingFileIO.read_usage_metadata(
+		version_path.path_join(USAGE_FILE_NAME)
+	)
+	if usage.is_empty():
+		return result
+	result.merge(usage, true)
+	return result
 
 
 func _write_json_file(path: String, value: Dictionary) -> bool:
-	return TrainingFileIO.write_text_atomic(path, JSON.stringify(value, "\t", true, true))
+	return TrainingFileIO.write_json_dictionary_atomic(path, value)
 
 
 func _restore_directory_backup(original_path: String, backup_path: String) -> bool:
@@ -720,63 +726,25 @@ func _restore_directory_backup(original_path: String, backup_path: String) -> bo
 
 
 func _remove_directory_recursive_absolute(absolute_path: String) -> bool:
-	var directory = DirAccess.open(absolute_path)
-	if directory == null:
-		last_error = "Could not open the model version directory for deletion."
-		return false
-	directory.list_dir_begin()
-	var entry = directory.get_next()
-	while not entry.is_empty():
-		if entry != "." and entry != "..":
-			var child_path = absolute_path.path_join(entry)
-			if directory.current_is_dir():
-				if not _remove_directory_recursive_absolute(child_path):
-					directory.list_dir_end()
-					return false
-			else:
-				var remove_file_error = directory.remove(entry)
-				if remove_file_error != OK:
-					last_error = "Could not delete model file %s (%s)." % [
-						entry,
-						error_string(remove_file_error),
-					]
-					directory.list_dir_end()
-					return false
-		entry = directory.get_next()
-	directory.list_dir_end()
-	var remove_directory_error = DirAccess.remove_absolute(absolute_path)
-	if remove_directory_error != OK:
-		last_error = "Could not delete model directory (%s)." % error_string(
-			remove_directory_error
-		)
-		return false
-	return true
+	if TrainingFileIO.remove_directory_recursive_absolute(absolute_path):
+		return true
+	last_error = "Could not delete model directory %s." % absolute_path
+	return false
 
 
 func _next_version_number(model_path: String) -> int:
-	var highest = 0
-	var directory = DirAccess.open(model_path)
-	if directory != null:
-		directory.list_dir_begin()
-		var entry = directory.get_next()
-		while not entry.is_empty():
-			if directory.current_is_dir() and entry.begins_with("v"):
-				highest = maxi(highest, entry.trim_prefix("v").to_int())
-			entry = directory.get_next()
-		directory.list_dir_end()
-	var stored_floor = 1
-	var sequence_path = model_path.path_join(NEXT_VERSION_FILE_NAME)
-	if FileAccess.file_exists(sequence_path):
-		var sequence_text = FileAccess.get_file_as_string(sequence_path).strip_edges()
-		if sequence_text.is_valid_int():
-			stored_floor = maxi(sequence_text.to_int(), 1)
-	return maxi(highest + 1, stored_floor)
+	return TrainingFileIO.next_version_directory_number(
+		model_path,
+		NEXT_VERSION_FILE_NAME
+	)
 
 
 func _record_next_version_floor(model_path: String, requested_floor: int) -> bool:
-	var next_floor = maxi(requested_floor, _next_version_number(model_path))
-	var sequence_path = model_path.path_join(NEXT_VERSION_FILE_NAME)
-	if not TrainingFileIO.write_text_atomic(sequence_path, str(next_floor)):
+	if not TrainingFileIO.preserve_next_version_floor(
+		model_path,
+		NEXT_VERSION_FILE_NAME,
+		requested_floor
+	):
 		last_error = "Could not preserve the model family's version sequence atomically (%s)." % error_string(
 			FileAccess.get_open_error()
 		)

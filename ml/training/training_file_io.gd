@@ -14,6 +14,10 @@ static func read_json_dictionary(path: String) -> Dictionary:
 	return parsed as Dictionary if parsed is Dictionary else {}
 
 
+static func write_json_dictionary_atomic(path: String, value: Dictionary) -> bool:
+	return write_text_atomic(path, JSON.stringify(value, "\t", true, true))
+
+
 static func write_text_atomic(path: String, content: String) -> bool:
 	var absolute_path: String = ProjectSettings.globalize_path(path)
 	var unique_suffix: int = Time.get_ticks_usec()
@@ -40,6 +44,28 @@ static func write_text_atomic(path: String, content: String) -> bool:
 	if had_existing:
 		DirAccess.remove_absolute(backup_path)
 	return true
+
+
+static func read_usage_metadata(path: String) -> Dictionary:
+	var usage: Dictionary = read_json_dictionary(path)
+	if usage.is_empty():
+		return {}
+	return {
+		"last_used_unix_ms": maxi(
+			SafeVariant.integral_int_or(usage.get("last_used_unix_ms", 0), 0),
+			0
+		),
+		"last_used_utc": str(usage.get("last_used_utc", "")),
+		"use_count": maxi(SafeVariant.integral_int_or(usage.get("use_count", 0), 0), 0),
+	}
+
+
+static func record_usage(path: String) -> bool:
+	var usage: Dictionary = read_usage_metadata(path)
+	usage["last_used_unix_ms"] = int(Time.get_unix_time_from_system() * 1000.0)
+	usage["last_used_utc"] = Time.get_datetime_string_from_system(true, false) + "Z"
+	usage["use_count"] = maxi(SafeVariant.integral_int_or(usage.get("use_count", 0), 0), 0) + 1
+	return write_json_dictionary_atomic(path, usage)
 
 
 static func remove_directory_recursive_absolute(absolute_path: String) -> bool:
@@ -77,6 +103,57 @@ static func storage_key(value: String, fallback: String) -> String:
 			separator = true
 	result = result.trim_suffix("-")
 	return result if not result.is_empty() else fallback
+
+
+static func parse_version_id(version_id: String, storage_key_fallback: String) -> Dictionary:
+	var parts: PackedStringArray = version_id.split("/", false)
+	if parts.size() != 2:
+		return {}
+	var model_key: String = str(parts[0])
+	var version_name: String = str(parts[1])
+	var version_number_text: String = version_name.trim_prefix("v")
+	if (
+		model_key.is_empty()
+		or storage_key(model_key, storage_key_fallback) != model_key
+		or not version_name.begins_with("v")
+		or version_number_text.is_empty()
+		or not version_number_text.is_valid_int()
+		or version_number_text.to_int() <= 0
+	):
+		return {}
+	return {
+		"model_key": model_key,
+		"version_name": version_name,
+		"version": version_number_text.to_int(),
+		"version_id": version_id,
+	}
+
+
+static func resolve_version_manifest(
+	root_path: String,
+	version_id: String,
+	storage_key_fallback: String,
+	manifest_file_name: String,
+	manifest_id_field: String = "version_id",
+	manifest_key_field: String = "model_key"
+) -> Dictionary:
+	var identity: Dictionary = parse_version_id(version_id, storage_key_fallback)
+	if identity.is_empty():
+		return {}
+	var model_key: String = str(identity["model_key"])
+	var version_name: String = str(identity["version_name"])
+	var version_number: int = int(identity["version"])
+	var version_path: String = root_path.path_join(model_key).path_join(version_name)
+	var record: Dictionary = read_json_dictionary(version_path.path_join(manifest_file_name))
+	if (
+		str(record.get(manifest_id_field, "")) != version_id
+		or str(record.get(manifest_key_field, "")) != model_key
+		or str(record.get("version_name", "")) != version_name
+		or SafeVariant.integral_int_or(record.get("version", 0), -1) != version_number
+	):
+		return {}
+	record["storage_path"] = version_path
+	return record
 
 
 static func next_version_directory_number(

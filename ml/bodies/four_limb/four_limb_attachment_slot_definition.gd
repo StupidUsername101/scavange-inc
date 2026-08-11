@@ -41,7 +41,7 @@ func apply_dictionary(data: Dictionary) -> void:
 		]
 		var safe_values: Array[float] = []
 		for index in range(12):
-			safe_values.append(_finite_float_or(values[index], fallback_values[index]))
+			safe_values.append(SafeVariant.finite_float_or(values[index], fallback_values[index]))
 		core_offset = Transform3D(
 			Basis(
 				Vector3(safe_values[0], safe_values[1], safe_values[2]),
@@ -59,11 +59,3 @@ static func from_dictionary(data: Dictionary) -> FourLimbAttachmentSlotDefinitio
 	var result = FourLimbAttachmentSlotDefinition.new()
 	result.apply_dictionary(data)
 	return result
-
-
-static func _finite_float_or(value: Variant, fallback: float) -> float:
-	if value is float or value is int:
-		var numeric_value: float = float(value)
-		if is_finite(numeric_value):
-			return numeric_value
-	return fallback

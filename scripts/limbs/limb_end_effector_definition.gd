@@ -289,64 +289,64 @@ func to_dictionary() -> Dictionary:
 
 func apply_dictionary(data: Dictionary) -> void:
 	effector_name = str(data.get("effector_name", effector_name))
-	enabled = _bool_or(data.get("enabled"), enabled)
+	enabled = SafeVariant.strict_bool_or(data.get("enabled"), enabled)
 	effector_type_id = StringName(str(data.get("effector_type_id", effector_type_id)))
-	geometry_type = _finite_int_or(data.get("geometry_type"), geometry_type)
-	local_offset = _vector3_from_value(data.get("local_offset", []), local_offset)
-	local_rotation_degrees = _vector3_from_value(
+	geometry_type = SafeVariant.finite_int_or(data.get("geometry_type"), geometry_type)
+	local_offset = SafeVariant.vector3_or(data.get("local_offset", []), local_offset)
+	local_rotation_degrees = SafeVariant.vector3_or(
 		data.get("local_rotation_degrees", []),
 		local_rotation_degrees
 	)
-	sphere_radius = _finite_float_or(data.get("sphere_radius"), sphere_radius)
-	box_size = _vector3_from_value(data.get("box_size", []), box_size)
-	capsule_radius = _finite_float_or(data.get("capsule_radius"), capsule_radius)
-	capsule_height = _finite_float_or(data.get("capsule_height"), capsule_height)
-	added_mass = _finite_float_or(data.get("added_mass"), added_mass)
-	maximum_health = _finite_float_or(data.get("maximum_health"), maximum_health)
-	friction = _finite_float_or(data.get("friction"), friction)
-	bounce = _finite_float_or(data.get("bounce"), bounce)
-	rough = _bool_or(data.get("rough"), rough)
-	absorbent = _bool_or(data.get("absorbent"), absorbent)
-	normal_stiffness = _finite_float_or(data.get("normal_stiffness"), normal_stiffness)
-	normal_damping = _finite_float_or(data.get("normal_damping"), normal_damping)
-	maximum_compression = _finite_float_or(data.get("maximum_compression"), maximum_compression)
-	grip_mode = _finite_int_or(data.get("grip_mode"), grip_mode)
-	grip_action_index = _finite_int_or(data.get("grip_action_index"), grip_action_index)
-	grip_activation_threshold = _finite_float_or(
+	sphere_radius = SafeVariant.finite_float_or(data.get("sphere_radius"), sphere_radius)
+	box_size = SafeVariant.vector3_or(data.get("box_size", []), box_size)
+	capsule_radius = SafeVariant.finite_float_or(data.get("capsule_radius"), capsule_radius)
+	capsule_height = SafeVariant.finite_float_or(data.get("capsule_height"), capsule_height)
+	added_mass = SafeVariant.finite_float_or(data.get("added_mass"), added_mass)
+	maximum_health = SafeVariant.finite_float_or(data.get("maximum_health"), maximum_health)
+	friction = SafeVariant.finite_float_or(data.get("friction"), friction)
+	bounce = SafeVariant.finite_float_or(data.get("bounce"), bounce)
+	rough = SafeVariant.strict_bool_or(data.get("rough"), rough)
+	absorbent = SafeVariant.strict_bool_or(data.get("absorbent"), absorbent)
+	normal_stiffness = SafeVariant.finite_float_or(data.get("normal_stiffness"), normal_stiffness)
+	normal_damping = SafeVariant.finite_float_or(data.get("normal_damping"), normal_damping)
+	maximum_compression = SafeVariant.finite_float_or(data.get("maximum_compression"), maximum_compression)
+	grip_mode = SafeVariant.finite_int_or(data.get("grip_mode"), grip_mode)
+	grip_action_index = SafeVariant.finite_int_or(data.get("grip_action_index"), grip_action_index)
+	grip_activation_threshold = SafeVariant.finite_float_or(
 		data.get("grip_activation_threshold"),
 		grip_activation_threshold
 	)
-	activation_response_per_second = _finite_float_or(
+	activation_response_per_second = SafeVariant.finite_float_or(
 		data.get("activation_response_per_second"),
 		activation_response_per_second
 	)
-	grip_acquisition_radius = _finite_float_or(data.get("grip_acquisition_radius"), grip_acquisition_radius)
-	grip_detection_radius = _finite_float_or(data.get("grip_detection_radius"), grip_detection_radius)
-	candidate_refresh_seconds = _finite_float_or(
+	grip_acquisition_radius = SafeVariant.finite_float_or(data.get("grip_acquisition_radius"), grip_acquisition_radius)
+	grip_detection_radius = SafeVariant.finite_float_or(data.get("grip_detection_radius"), grip_detection_radius)
+	candidate_refresh_seconds = SafeVariant.finite_float_or(
 		data.get("candidate_refresh_seconds"),
 		candidate_refresh_seconds
 	)
-	grip_collision_mask = _finite_int_or(data.get("grip_collision_mask"), grip_collision_mask)
-	allow_static_grip = _bool_or(data.get("allow_static_grip"), allow_static_grip)
-	allow_dynamic_grip = _bool_or(data.get("allow_dynamic_grip"), allow_dynamic_grip)
-	maximum_held_mass = _finite_float_or(data.get("maximum_held_mass"), maximum_held_mass)
-	grip_stiffness = _finite_float_or(data.get("grip_stiffness"), grip_stiffness)
-	grip_damping = _finite_float_or(data.get("grip_damping"), grip_damping)
-	grip_release_threshold = _finite_float_or(data.get("grip_release_threshold"), grip_release_threshold)
-	maximum_normal_holding_force = _finite_float_or(
+	grip_collision_mask = SafeVariant.finite_int_or(data.get("grip_collision_mask"), grip_collision_mask)
+	allow_static_grip = SafeVariant.strict_bool_or(data.get("allow_static_grip"), allow_static_grip)
+	allow_dynamic_grip = SafeVariant.strict_bool_or(data.get("allow_dynamic_grip"), allow_dynamic_grip)
+	maximum_held_mass = SafeVariant.finite_float_or(data.get("maximum_held_mass"), maximum_held_mass)
+	grip_stiffness = SafeVariant.finite_float_or(data.get("grip_stiffness"), grip_stiffness)
+	grip_damping = SafeVariant.finite_float_or(data.get("grip_damping"), grip_damping)
+	grip_release_threshold = SafeVariant.finite_float_or(data.get("grip_release_threshold"), grip_release_threshold)
+	maximum_normal_holding_force = SafeVariant.finite_float_or(
 		data.get("maximum_normal_holding_force"),
 		maximum_normal_holding_force
 	)
-	maximum_shear_holding_force = _finite_float_or(
+	maximum_shear_holding_force = SafeVariant.finite_float_or(
 		data.get("maximum_shear_holding_force"),
 		maximum_shear_holding_force
 	)
-	breakaway_load_ratio = _finite_float_or(data.get("breakaway_load_ratio"), breakaway_load_ratio)
-	breakaway_confirmation_seconds = _finite_float_or(
+	breakaway_load_ratio = SafeVariant.finite_float_or(data.get("breakaway_load_ratio"), breakaway_load_ratio)
+	breakaway_confirmation_seconds = SafeVariant.finite_float_or(
 		data.get("breakaway_confirmation_seconds"),
 		breakaway_confirmation_seconds
 	)
-	energy_cost_per_second = _finite_float_or(data.get("energy_cost_per_second"), energy_cost_per_second)
+	energy_cost_per_second = SafeVariant.finite_float_or(data.get("energy_cost_per_second"), energy_cost_per_second)
 	var tags_value: Variant = data.get("compatible_surface_tags", [])
 	compatible_surface_tags = PackedStringArray()
 	if tags_value is PackedStringArray:
@@ -365,39 +365,6 @@ func _surface_tags_as_array() -> Array[String]:
 
 
 static func from_dictionary(data: Dictionary) -> LimbEndEffectorDefinition:
-	var result := LimbEndEffectorDefinition.new()
+	var result: LimbEndEffectorDefinition = LimbEndEffectorDefinition.new()
 	result.apply_dictionary(data)
 	return result
-
-
-static func _vector3_from_value(value: Variant, fallback: Vector3) -> Vector3:
-	if value is Vector3:
-		return value if (value as Vector3).is_finite() else fallback
-	if value is Array and value.size() >= 3:
-		var result = Vector3(
-			_finite_float_or(value[0], fallback.x),
-			_finite_float_or(value[1], fallback.y),
-			_finite_float_or(value[2], fallback.z)
-		)
-		return result if result.is_finite() else fallback
-	return fallback
-
-
-static func _bool_or(value: Variant, fallback: bool) -> bool:
-	return value if value is bool else fallback
-
-
-static func _finite_float_or(value: Variant, fallback: float) -> float:
-	if value is float or value is int:
-		var numeric_value: float = float(value)
-		if is_finite(numeric_value):
-			return numeric_value
-	return fallback
-
-
-static func _finite_int_or(value: Variant, fallback: int) -> int:
-	if value is float or value is int:
-		var numeric_value: float = float(value)
-		if is_finite(numeric_value):
-			return int(numeric_value)
-	return fallback

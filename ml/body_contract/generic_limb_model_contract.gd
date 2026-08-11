@@ -350,36 +350,7 @@ static func runtime_state_for_limb(
 ) -> Dictionary:
 	if not is_instance_valid(limb) or limb.definition == null:
 		return {}
-	var segment_states: Array[Dictionary] = []
-	for segment: LimbSegment3D in limb.segments:
-		if not is_instance_valid(segment):
-			continue
-		segment_states.append({
-			"segment_index": segment.segment_index,
-			"transform_world": segment.global_transform,
-			"linear_velocity_world": segment.linear_velocity,
-			"angular_velocity_world": segment.angular_velocity,
-			"mass": segment.mass,
-			"health_ratio": segment.health_ratio(),
-			"actuator_effectiveness": segment.actuator_effectiveness,
-		})
-	var joint_states: Array[Dictionary] = []
-	for record: Dictionary in limb.joint_records:
-		var definition: LimbJointDefinition = record.get("definition") as LimbJointDefinition
-		joint_states.append({
-			"joint_index": int(record.get("joint_index", joint_states.size())),
-			"action_indices": (
-				definition.action_indices if definition != null else Vector3i(-1, -1, -1)
-			),
-			"current_angles": record.get("current_angles", Vector3.ZERO),
-			"target_angles": record.get("target_angles", Vector3.ZERO),
-			"target_error_angles": record.get("target_error_angles", Vector3.ZERO),
-			"rest_error_angles": record.get("rest_error_angles", Vector3.ZERO),
-			"applied_torque_joint": record.get("applied_torque_joint", Vector3.ZERO),
-			"passive_torque_joint": record.get("passive_torque_joint", Vector3.ZERO),
-			"active_torque_joint": record.get("active_torque_joint", Vector3.ZERO),
-			"limit_torque_joint": record.get("limit_torque_joint", Vector3.ZERO),
-		})
+	var limb_state: Dictionary = GenericLimbStateSnapshot.limb_state(limb)
 	var host_transform: Transform3D = (
 		host_body.global_transform if is_instance_valid(host_body) else Transform3D.IDENTITY
 	)
@@ -397,15 +368,7 @@ static func runtime_state_for_limb(
 		"action_count": limb.definition.required_action_count(),
 		"mapping_valid": limb.definition.has_unique_action_mapping(),
 		"commands": PackedFloat64Array(),
-		"limbs": [{
-			"slot_index": limb.slot_index,
-			"limb_name": limb.definition.limb_name,
-			"installed": limb.definition.installed,
-			"end_effector": limb.end_effector_snapshot(),
-			"segment_count": limb.segments.size(),
-			"segments": segment_states,
-			"joints": joint_states,
-		}],
+		"limbs": [limb_state],
 	}
 
 

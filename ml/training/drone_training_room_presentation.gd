@@ -44,6 +44,48 @@ static func configure_spinbox_arrow_speed(input: SpinBox) -> void:
 		input.step
 	)
 
+static func build_group_status_labels(
+	header: HBoxContainer,
+	group_color: Color,
+	candidate_tooltip: String,
+	best_tooltip: String,
+	activity_tooltip: String
+) -> Dictionary:
+	var candidate_evaluation_label: Label = Label.new()
+	candidate_evaluation_label.custom_minimum_size.x = 86.0
+	candidate_evaluation_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	candidate_evaluation_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	candidate_evaluation_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	candidate_evaluation_label.clip_text = true
+	candidate_evaluation_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	candidate_evaluation_label.add_theme_color_override("font_color", Color("76ddff"))
+	candidate_evaluation_label.tooltip_text = candidate_tooltip
+	candidate_evaluation_label.visible = false
+	header.add_child(candidate_evaluation_label)
+	var best_score_label: Label = Label.new()
+	best_score_label.custom_minimum_size.x = 112.0
+	best_score_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	best_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	best_score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	best_score_label.clip_text = true
+	best_score_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	best_score_label.add_theme_color_override("font_color", Color("54e6b1"))
+	best_score_label.tooltip_text = best_tooltip
+	header.add_child(best_score_label)
+	var activity_label: Label = Label.new()
+	activity_label.custom_minimum_size.x = 30.0
+	activity_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	activity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	activity_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	activity_label.add_theme_color_override("font_color", group_color)
+	activity_label.tooltip_text = activity_tooltip
+	header.add_child(activity_label)
+	return {
+		"candidate_evaluation_label": candidate_evaluation_label,
+		"best_score_label": best_score_label,
+		"activity_label": activity_label,
+	}
+
 
 static func build_environment(
 	parent: Node3D,

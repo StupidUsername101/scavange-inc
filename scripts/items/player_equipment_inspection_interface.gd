@@ -21,27 +21,27 @@ func build_document(
 
 
 func _build_backpack_document(backpack: BackpackDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		backpack.display_name,
 		"Wearable storage diagnostic",
 		[
-			_stat("Type", "Backpack"),
-			_stat("Capacity", "%d total slots" % backpack.inventory_capacity),
-			_stat("Equipment bus", str(backpack.equipment_slot)),
-			_stat("Mass", "%.2f kg" % backpack.mass),
+			InspectionDocumentBuilder.stat("Type", "Backpack"),
+			InspectionDocumentBuilder.stat("Capacity", "%d total slots" % backpack.inventory_capacity),
+			InspectionDocumentBuilder.stat("Equipment bus", str(backpack.equipment_slot)),
+			InspectionDocumentBuilder.stat("Mass", "%.2f kg" % backpack.mass),
 		],
 		[
-			_node(
+			InspectionDocumentBuilder.node(
 				"Carry architecture",
 				"Inventory expansion while equipped",
 				[
-					_stat(
+					InspectionDocumentBuilder.stat(
 						"Added utility",
 						"%d slots above baseline"
 						% (backpack.inventory_capacity - 1)
 					),
-					_stat("Hard limit", "9 player slots"),
-					_stat("Overflow policy", "Reject unsafe downsizing"),
+					InspectionDocumentBuilder.stat("Hard limit", "9 player slots"),
+					InspectionDocumentBuilder.stat("Overflow policy", "Reject unsafe downsizing"),
 				]
 			),
 		]
@@ -56,84 +56,59 @@ func _build_eye_document(eyes: EyeDefinition) -> Dictionary:
 			effect_names.append(str(effect_id))
 		effects = ", ".join(effect_names)
 
-	return _node(
+	return InspectionDocumentBuilder.node(
 		eyes.display_name,
 		"Exchangeable ocular diagnostic",
 		[
-			_stat("Type", "Ocular pair"),
-			_stat("Equipment bus", str(eyes.equipment_slot)),
-			_stat("Optical grade", _quality_name(eyes.optical_quality)),
-			_stat("Mass", "%.2f kg" % eyes.mass),
+			InspectionDocumentBuilder.stat("Type", "Ocular pair"),
+			InspectionDocumentBuilder.stat("Equipment bus", str(eyes.equipment_slot)),
+			InspectionDocumentBuilder.stat("Optical grade", _quality_name(eyes.optical_quality)),
+			InspectionDocumentBuilder.stat("Mass", "%.2f kg" % eyes.mass),
 		],
 		[
-			_node(
+			InspectionDocumentBuilder.node(
 				"Human-equivalent sight",
 				"Baseline perception characteristics",
 				[
-					_percent_stat("Visual acuity", eyes.visual_acuity),
-					_percent_stat(
+					InspectionDocumentBuilder.percent_stat("Visual acuity", eyes.visual_acuity),
+					InspectionDocumentBuilder.percent_stat(
 						"Contrast sensitivity",
 						eyes.contrast_sensitivity
 					),
-					_percent_stat(
+					InspectionDocumentBuilder.percent_stat(
 						"Light sensitivity",
 						eyes.light_sensitivity
 					),
 				]
 			),
-			_node(
+			InspectionDocumentBuilder.node(
 				"Signal integrity",
 				"Display artifacts derived from optical quality",
 				[
-					_percent_stat("Optical quality", eyes.optical_quality),
-					_percent_stat(
+					InspectionDocumentBuilder.percent_stat("Optical quality", eyes.optical_quality),
+					InspectionDocumentBuilder.percent_stat(
 						"Estimated noise",
 						1.0 - eyes.optical_quality
 					),
-					_percent_stat("Motion smear", eyes.motion_smear),
-					_stat(
+					InspectionDocumentBuilder.percent_stat("Motion smear", eyes.motion_smear),
+					InspectionDocumentBuilder.stat(
 						"Lens distortion",
 						"%+.3f" % eyes.lens_distortion
 					),
 				]
 			),
-			_node(
+			InspectionDocumentBuilder.node(
 				"Special sight bus",
 				"Reserved shader capabilities",
 				[
-					_stat("Installed effects", effects),
-					_stat(
+					InspectionDocumentBuilder.stat("Installed effects", effects),
+					InspectionDocumentBuilder.stat(
 						"Capability count",
 						str(eyes.special_sight_effects.size())
 					),
 				]
 			),
 		]
-	)
-
-
-func _node(
-	title: String,
-	subtitle: String,
-	values: Array,
-	children: Array = []
-) -> Dictionary:
-	return {
-		"title": title,
-		"subtitle": subtitle,
-		"values": values,
-		"children": children,
-	}
-
-
-func _stat(label: String, value: String) -> Dictionary:
-	return {"label": label, "value": value}
-
-
-func _percent_stat(label: String, value: float) -> Dictionary:
-	return _stat(
-		label,
-		"%.0f%%" % (clampf(value, 0.0, 1.0) * 100.0)
 	)
 
 

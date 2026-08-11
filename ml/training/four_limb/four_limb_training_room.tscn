@@ -1,6 +1,0 @@
-[gd_scene load_steps=2 format=3]
-
-[ext_resource type="Script" path="res://ml/training/four_limb/four_limb_training_room.gd" id="1_room"]
-
-[node name="FourLimbTrainingRoom" type="Node3D"]
-script = ExtResource("1_room")

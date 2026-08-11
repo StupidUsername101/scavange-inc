@@ -92,32 +92,32 @@ func to_dictionary() -> Dictionary:
 
 func apply_dictionary(data: Dictionary) -> void:
 	slot_name = str(data.get("slot_name", slot_name))
-	installed = RLTrainingMath.bool_or(data.get("installed", installed), installed)
-	hip_offset = _vector3_from_value(data.get("hip_offset", []), hip_offset)
-	rest_foot_offset = _vector3_from_value(
+	installed = SafeVariant.bool_or(data.get("installed", installed), installed)
+	hip_offset = SafeVariant.vector3_or(data.get("hip_offset", []), hip_offset)
+	rest_foot_offset = SafeVariant.vector3_or(
 		data.get("rest_foot_offset", []),
 		rest_foot_offset
 	)
-	bend_hint = _vector3_from_value(data.get("bend_hint", []), bend_hint)
+	bend_hint = SafeVariant.vector3_or(data.get("bend_hint", []), bend_hint)
 	if bend_hint.length_squared() > 0.000001:
 		bend_hint = bend_hint.normalized()
-	upper_length = maxf(_finite_float_or(data.get("upper_length"), upper_length), 0.1)
-	lower_length = maxf(_finite_float_or(data.get("lower_length"), lower_length), 0.1)
-	segment_radius = maxf(_finite_float_or(data.get("segment_radius"), segment_radius), 0.02)
-	segment_mass = maxf(_finite_float_or(data.get("segment_mass"), segment_mass), 0.01)
-	maximum_health = maxf(_finite_float_or(data.get("maximum_health"), maximum_health), 0.1)
+	upper_length = maxf(SafeVariant.finite_float_or(data.get("upper_length"), upper_length), 0.1)
+	lower_length = maxf(SafeVariant.finite_float_or(data.get("lower_length"), lower_length), 0.1)
+	segment_radius = maxf(SafeVariant.finite_float_or(data.get("segment_radius"), segment_radius), 0.02)
+	segment_mass = maxf(SafeVariant.finite_float_or(data.get("segment_mass"), segment_mass), 0.01)
+	maximum_health = maxf(SafeVariant.finite_float_or(data.get("maximum_health"), maximum_health), 0.1)
 	var effector_value: Variant = data.get("end_effector", {})
 	if effector_value is Dictionary and not (effector_value as Dictionary).is_empty():
 		end_effector = LimbEndEffectorDefinition.from_dictionary(effector_value as Dictionary)
 	elif effector_value is Dictionary:
 		end_effector = null
 	hip_swing_span_degrees = clampf(
-		_finite_float_or(data.get("hip_swing_span_degrees"), hip_swing_span_degrees),
+		SafeVariant.finite_float_or(data.get("hip_swing_span_degrees"), hip_swing_span_degrees),
 		1.0,
 		90.0
 	)
 	hip_elevation_upper_extension_degrees = clampf(
-		_finite_float_or(
+		SafeVariant.finite_float_or(
 			data.get("hip_elevation_upper_extension_degrees"),
 			hip_elevation_upper_extension_degrees
 		),
@@ -125,17 +125,17 @@ func apply_dictionary(data: Dictionary) -> void:
 		60.0
 	)
 	hip_twist_span_degrees = clampf(
-		_finite_float_or(data.get("hip_twist_span_degrees"), hip_twist_span_degrees),
+		SafeVariant.finite_float_or(data.get("hip_twist_span_degrees"), hip_twist_span_degrees),
 		1.0,
 		90.0
 	)
 	knee_limit_lower_degrees = clampf(
-		_finite_float_or(data.get("knee_limit_lower_degrees"), knee_limit_lower_degrees),
+		SafeVariant.finite_float_or(data.get("knee_limit_lower_degrees"), knee_limit_lower_degrees),
 		-20.0,
 		-1.0
 	)
 	knee_limit_upper_degrees = clampf(
-		_finite_float_or(data.get("knee_limit_upper_degrees"), knee_limit_upper_degrees),
+		SafeVariant.finite_float_or(data.get("knee_limit_upper_degrees"), knee_limit_upper_degrees),
 		15.0,
 		120.0
 	)
@@ -146,24 +146,3 @@ static func from_dictionary(data: Dictionary) -> FourLimbSlotDefinition:
 	var result = FourLimbSlotDefinition.new()
 	result.apply_dictionary(data)
 	return result
-
-
-static func _vector3_from_value(value: Variant, fallback: Vector3) -> Vector3:
-	if value is Vector3:
-		return value if (value as Vector3).is_finite() else fallback
-	if value is Array and value.size() >= 3:
-		var result = Vector3(
-			_finite_float_or(value[0], fallback.x),
-			_finite_float_or(value[1], fallback.y),
-			_finite_float_or(value[2], fallback.z)
-		)
-		return result if result.is_finite() else fallback
-	return fallback
-
-
-static func _finite_float_or(value: Variant, fallback: float) -> float:
-	if value is float or value is int:
-		var numeric_value: float = float(value)
-		if is_finite(numeric_value):
-			return numeric_value
-	return fallback

@@ -594,15 +594,16 @@ func _test_controlled_episode() -> void:
 		"ground contact and inverted orientation are non-terminal by default"
 	)
 	_expect(
-		not bool(permissive_result.get("episode_termination_options", {}).get("ground_contact", true))
-		and not bool(permissive_result.get("episode_termination_options", {}).get("flipped", true)),
-		"episode results expose the permissive default termination policy"
+		not bool(permissive_result.get("episode_termination_options", {}).get("ground_contact", true)),
+		"episode results expose the permissive default ground-contact policy"
 	)
 
-	var flipped_episode = DroneTrainingEpisode.new()
+	# Historical saved options may still contain a `flipped` key. It must be ignored: inverted
+	# orientation is part of the behavior space, not an artificial terminal condition.
+	var inverted_episode = DroneTrainingEpisode.new()
 	drone.position = Vector3(0.0, 1.0, 0.0)
 	drone.rotation = Vector3(PI, 0.0, 0.0)
-	flipped_episode.start(
+	inverted_episode.start(
 		drone.position,
 		Vector3(5.0, 1.0, 0.0),
 		0.5,
@@ -612,7 +613,7 @@ func _test_controlled_episode() -> void:
 		{},
 		{"flipped": true}
 	)
-	var flipped_result = flipped_episode.step(
+	var inverted_result = inverted_episode.step(
 		drone,
 		Vector3(5.0, 1.0, 0.0),
 		0.5,
@@ -620,8 +621,12 @@ func _test_controlled_episode() -> void:
 		1.0
 	)
 	_expect(
-		str(flipped_result.get("termination_reason", "")) == "flipped",
-		"the legacy flipped cutoff remains available when explicitly enabled"
+		str(inverted_result.get("termination_reason", "")) == "running",
+		"inverted orientation stays non-terminal even when an old flipped option is supplied"
+	)
+	_expect(
+		not inverted_result.get("episode_termination_options", {}).has("flipped"),
+		"episode results no longer expose the removed flipped terminal option"
 	)
 	drone.rotation = Vector3.ZERO
 
@@ -741,7 +746,7 @@ func _test_controlled_episode() -> void:
 	)
 	_expect(
 		str(destroyed_result.get("termination_reason", "")) == "destroyed",
-		"zero health remains terminal even when ground and flipped cutoffs are disabled"
+		"zero health remains terminal even when the optional ground cutoff is disabled"
 	)
 	drone.current_health = 10.0
 	drone.activated = true
@@ -1029,6 +1034,44 @@ func _test_immutable_model_versions() -> void:
 		and int(used_version.get("use_count", 0)) == 1,
 		"last-used metadata is merged back into Model Library records"
 	)
+	var forged_storage_record: Dictionary = ppo_version.duplicate(true)
+	forged_storage_record["storage_path"] = "user://tests/forged-drone-model-path"
+	var forged_storage_checkpoint: Dictionary = registry.load_ppo_checkpoint(
+		forged_storage_record
+	)
+	_expect(
+		not forged_storage_checkpoint.is_empty(),
+		"drone model loads re-resolve immutable version identity instead of trusting caller-provided storage paths"
+	)
+	_expect(
+		registry.mark_version_used(forged_storage_record)
+		and int(registry.get_version(str(ppo_version.get("version_id", ""))).get(
+			"use_count",
+			0
+		)) == 2,
+		"drone model usage metadata is written only to the registered version directory"
+	)
+	var manifest_path: String = str(ppo_version.get("storage_path", "")).path_join(
+		DroneTrainingModelRegistry.MANIFEST_FILE_NAME
+	)
+	var original_manifest: Dictionary = TrainingFileIO.read_json_dictionary(manifest_path)
+	var redirected_manifest: Dictionary = original_manifest.duplicate(true)
+	redirected_manifest["checkpoint_file"] = "../redirected-checkpoint.json"
+	var redirected_manifest_written: bool = TrainingFileIO.write_json_dictionary_atomic(
+		manifest_path,
+		redirected_manifest
+	)
+	_expect(
+		redirected_manifest_written
+		and registry.get_version(str(ppo_version.get("version_id", ""))).is_empty()
+		and registry.load_ppo_checkpoint(ppo_version).is_empty(),
+		"drone model registry rejects a manifest that redirects its immutable checkpoint path"
+	)
+	_expect(
+		TrainingFileIO.write_json_dictionary_atomic(manifest_path, original_manifest)
+		and not registry.get_version(str(ppo_version.get("version_id", ""))).is_empty(),
+		"restoring a valid drone manifest restores the registered model version"
+	)
 	var restored_checkpoint = registry.load_ppo_checkpoint(ppo_version)
 	_expect(
 		str(restored_checkpoint.get("algorithm", ""))
@@ -1115,12 +1158,15 @@ func _test_immutable_model_versions() -> void:
 		"current observation-schema checkpoints can be continued by the trainer"
 	)
 	var rolling_source := ppo_version.duplicate(true)
-	var rolling_result_path := registry.record_episode(
+	var rolling_run_id: String = registry.record_episode(
 		rolling_source,
 		{"total_reward": 3.0}
 	)
+	var rolling_result_path: String = str(ppo_version.get("storage_path", "")).path_join(
+		DroneTrainingModelRegistry.RUN_DIRECTORY_NAME
+	).path_join(rolling_run_id + ".json")
 	_expect(
-		not rolling_result_path.is_empty()
+		not rolling_run_id.is_empty()
 		and FileAccess.file_exists(rolling_result_path),
 		"a rolling candidate can initially own exact-policy evaluation results"
 	)

@@ -126,7 +126,7 @@ func overwrite_checkpoint(record_or_id: Variant, checkpoint: Dictionary) -> Dict
 	record["algorithm"] = str(checkpoint.get("algorithm", ""))
 	record["hardware_signature"] = str(checkpoint.get("hardware_signature", ""))
 	record["checkpoint_revision"] = maxi(
-		RLTrainingMath.finite_int_or(record.get("checkpoint_revision", 1), 1),
+		SafeVariant.integral_int_or(record.get("checkpoint_revision", 1), 1),
 		1
 	) + 1
 	if not _write_json(version_path.path_join(MANIFEST_FILE_NAME), record):
@@ -165,8 +165,8 @@ func list_models() -> Array[Dictionary]:
 	root.list_dir_end()
 	result.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
 		return (
-			RLTrainingMath.finite_int_or(left.get("updated_unix_ms", 0), 0)
-			> RLTrainingMath.finite_int_or(right.get("updated_unix_ms", 0), 0)
+			SafeVariant.integral_int_or(left.get("updated_unix_ms", 0), 0)
+			> SafeVariant.integral_int_or(right.get("updated_unix_ms", 0), 0)
 		)
 	)
 	return result
@@ -224,37 +224,20 @@ func _resolve(record_or_id: Variant) -> Dictionary:
 		if record_or_id is Dictionary
 		else str(record_or_id)
 	)
-	var parts: PackedStringArray = version_id.split("/", false)
-	if parts.size() != 2:
-		return {}
-	var model_key: String = str(parts[0])
-	var version_name: String = str(parts[1])
-	var version_number_text: String = version_name.trim_prefix("v")
-	if (
-		model_key.is_empty()
-		or _key(model_key) != model_key
-		or not version_name.begins_with("v")
-		or not version_number_text.is_valid_int()
-		or version_number_text.to_int() <= 0
-	):
-		return {}
-	var version_path: String = root_path.path_join(model_key).path_join(version_name)
-	var record: Dictionary = TrainingFileIO.read_json_dictionary(
-		version_path.path_join(MANIFEST_FILE_NAME)
+	var record: Dictionary = TrainingFileIO.resolve_version_manifest(
+		root_path,
+		version_id,
+		_storage_key_fallback(),
+		MANIFEST_FILE_NAME
 	)
 	if (
-		str(record.get("version_id", "")) != version_id
-		or str(record.get("model_key", "")) != model_key
-		or str(record.get("version_name", "")) != version_name
-		or RLTrainingMath.finite_int_or(record.get("version", 0), -1)
-		!= version_number_text.to_int()
+		record.is_empty()
 		or str(record.get("artifact_type", "")) != _artifact_type()
 		or str(record.get("body_profile_id", "")) != _body_profile_id()
 		or str(record.get("checkpoint_file", CHECKPOINT_FILE_NAME))
 		!= CHECKPOINT_FILE_NAME
 	):
 		return {}
-	record["storage_path"] = version_path
 	return record
 
 
@@ -262,15 +245,13 @@ func _collect_family(path: String, result: Array[Dictionary]) -> void:
 	var directory: DirAccess = DirAccess.open(path)
 	if directory == null:
 		return
+	var model_key: String = path.get_file()
 	directory.list_dir_begin()
 	var entry: String = directory.get_next()
 	while not entry.is_empty():
 		if directory.current_is_dir():
 			var version_path: String = path.path_join(entry)
-			var record: Dictionary = TrainingFileIO.read_json_dictionary(
-				version_path.path_join(MANIFEST_FILE_NAME)
-			)
-			var resolved: Dictionary = _resolve(record) if not record.is_empty() else {}
+			var resolved: Dictionary = _resolve("%s/%s" % [model_key, entry])
 			if str(resolved.get("storage_path", "")) == version_path:
 				result.append(resolved)
 		entry = directory.get_next()
@@ -288,10 +269,7 @@ func _key(value: String) -> String:
 func _write_json(path: String, value: Dictionary) -> bool:
 	var stored: Dictionary = value.duplicate(true)
 	stored.erase("storage_path")
-	return TrainingFileIO.write_text_atomic(
-		path,
-		JSON.stringify(stored, "\t", true, true)
-	)
+	return TrainingFileIO.write_json_dictionary_atomic(path, stored)
 
 
 func _artifact_type() -> String:

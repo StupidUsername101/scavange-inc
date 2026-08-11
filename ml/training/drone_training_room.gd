@@ -377,7 +377,6 @@ var limb_body_edit_controls: Array[Control] = []
 var worker_count_slider: HSlider
 var control_rate_slider: HSlider
 var ground_contact_terminal_checkbox: CheckBox
-var flipped_terminal_checkbox: CheckBox
 var algorithm_config_sliders: Dictionary = {}
 var algorithm_controls_body: VBoxContainer
 var algorithm_controls_id = ""
@@ -6537,41 +6536,19 @@ func _ensure_turret_placement_preview(group: Dictionary) -> void:
 
 
 func _turret_placement_surface_hit(screen_position: Vector2) -> Dictionary:
-	var camera: Camera3D = _interaction_camera()
-	if camera == null or get_world_3d() == null:
-		return {}
-	var ray_origin: Vector3 = camera.project_ray_origin(screen_position)
-	var ray_direction: Vector3 = camera.project_ray_normal(screen_position)
-	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(
-		ray_origin,
-		ray_origin + ray_direction * EDITOR_PICK_RAY_LENGTH_M,
-		ARENA_COLLISION_LAYER
+	var hit: Dictionary = DroneTrainingEditorRaycast.authored_surface_hit(
+		_interaction_camera(),
+		get_world_3d(),
+		screen_position,
+		EDITOR_PICK_RAY_LENGTH_M,
+		ARENA_COLLISION_LAYER,
+		1,
+		TURRET_PLACEMENT_MINIMUM_UP_NORMAL,
+		false
 	)
-	query.collide_with_areas = false
-	query.collide_with_bodies = true
-	var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
-	if hit.is_empty():
+	if hit.is_empty() or not (hit.get("collider") is StaticBody3D):
 		return {}
-	var collider: StaticBody3D = hit.get("collider") as StaticBody3D
-	if collider == null:
-		return {}
-	var is_training_surface: bool = (
-		bool(collider.get_meta("training_ground", false))
-		or bool(collider.get_meta("training_custom_wall", false))
-		or bool(collider.get_meta("training_wall", false))
-	)
-	if not is_training_surface:
-		return {}
-	var normal_value: Variant = hit.get("normal", Vector3.UP)
-	if not (normal_value is Vector3):
-		return {}
-	var normal: Vector3 = normal_value as Vector3
-	if not normal.is_finite() or normal.y < TURRET_PLACEMENT_MINIMUM_UP_NORMAL:
-		return {}
-	var point_value: Variant = hit.get("position", Vector3.ZERO)
-	if not (point_value is Vector3) or not (point_value as Vector3).is_finite():
-		return {}
-	return {"point": point_value, "normal": normal, "collider": collider}
+	return hit
 
 
 func _update_turret_placement_from_screen(screen_position: Vector2) -> bool:
@@ -7247,16 +7224,7 @@ func _replace_custom_walls_from_records(records: Array) -> void:
 
 
 func _vector3_from_number_array(value: Variant, fallback: Vector3) -> Vector3:
-	if not (value is Array):
-		return fallback
-	var values = value as Array
-	if values.size() < 3:
-		return fallback
-	return Vector3(
-		RLTrainingMath.finite_float_or(values[0], fallback.x),
-		RLTrainingMath.finite_float_or(values[1], fallback.y),
-		RLTrainingMath.finite_float_or(values[2], fallback.z)
-	)
+	return SafeVariant.vector3_or(value, fallback) if value is Array else fallback
 
 
 func _custom_wall_environment_records() -> Array[Dictionary]:
@@ -7311,7 +7279,7 @@ func _build_episode_controls(content: VBoxContainer) -> void:
 		600.0,
 		1.0,
 		episode_duration,
-		"Maximum simulated duration. A worker can still finish earlier after destruction, power loss, arena exit, wall deadlock, or any optional per-group terminal rules you enabled. Ground contact and flipped orientation are non-terminal by default. This does not decide when optimizer updates happen; each algorithm updates after collecting enough experience.",
+		"Maximum simulated duration. A worker can still finish earlier after destruction, power loss, arena exit, wall deadlock, or any optional per-group terminal rules you enabled. Ground contact is non-terminal by default; inverted orientation never ends an episode. This does not decide when optimizer updates happen; each algorithm updates after collecting enough experience.",
 		func(value: float) -> void:
 			episode_duration = value
 			_restart_for_configuration_change("Episode duration changed.", true, true, true)
@@ -7893,21 +7861,6 @@ func _build_worker_controls(content: VBoxContainer) -> void:
 			_set_selected_episode_termination_option("ground_contact", enabled)
 	)
 	content.add_child(ground_contact_terminal_checkbox)
-	flipped_terminal_checkbox = CheckBox.new()
-	flipped_terminal_checkbox.text = "End episode when flipped"
-	flipped_terminal_checkbox.tooltip_text = (
-		"Optional orientation cutoff\n\n"
-		+ "Off by default. A worker may run inverted, roll, spin like a top, or discover its "
-		+ "own recovery strategy.\n\n"
-		+ "On: remaining below the legacy uprightness threshold for "
-		+ String.num(DroneTrainingEpisode.FLIPPED_DURATION_SECONDS, 2)
-		+ " seconds ends the episode."
-	)
-	flipped_terminal_checkbox.toggled.connect(
-		func(enabled: bool) -> void:
-			_set_selected_episode_termination_option("flipped", enabled)
-	)
-	content.add_child(flipped_terminal_checkbox)
 
 
 func _episode_termination_options_for_group(group: Dictionary) -> Dictionary:
@@ -7915,7 +7868,6 @@ func _episode_termination_options_for_group(group: Dictionary) -> Dictionary:
 		return DroneTrainingEpisode.DEFAULT_TERMINATION_OPTIONS.duplicate(true)
 	return {
 		"ground_contact": bool(group.get("episode_end_on_ground_contact", false)),
-		"flipped": bool(group.get("episode_end_on_flipped", false)),
 	}
 
 
@@ -7923,10 +7875,9 @@ func _episode_termination_options_for_trial(trial: Dictionary) -> Dictionary:
 	if str(trial.get("mode", "")) == "algorithm_training":
 		var group: Dictionary = _group_by_id(int(trial.get("group_id", -1)))
 		return _episode_termination_options_for_group(group)
-	var saved_value: Variant = trial.get("episode_termination", {})
-	if saved_value is Dictionary:
-		return (saved_value as Dictionary).duplicate(true)
-	return DroneTrainingEpisode.DEFAULT_TERMINATION_OPTIONS.duplicate(true)
+	return DroneTrainingEpisode.sanitize_termination_options(
+		trial.get("episode_termination", {})
+	)
 
 
 func _set_selected_episode_termination_option(option_id: String, enabled: bool) -> void:
@@ -7942,8 +7893,6 @@ func _set_selected_episode_termination_option(option_id: String, enabled: bool) 
 	match option_id:
 		"ground_contact":
 			group["episode_end_on_ground_contact"] = enabled
-		"flipped":
-			group["episode_end_on_flipped"] = enabled
 		_:
 			return
 	_clear_drone_group_runtime_for_configuration_change(group)
@@ -7965,14 +7914,10 @@ func _load_episode_termination_options_into_group(
 ) -> void:
 	if group.is_empty():
 		return
-	var saved_value: Variant = environment.get("episode_termination", {})
-	if not (saved_value is Dictionary):
-		group["episode_end_on_ground_contact"] = false
-		group["episode_end_on_flipped"] = false
-		return
-	var saved: Dictionary = saved_value as Dictionary
-	group["episode_end_on_ground_contact"] = bool(saved.get("ground_contact", false))
-	group["episode_end_on_flipped"] = bool(saved.get("flipped", false))
+	var saved: Dictionary = DroneTrainingEpisode.sanitize_termination_options(
+		environment.get("episode_termination", {})
+	)
+	group["episode_end_on_ground_contact"] = bool(saved["ground_contact"])
 
 
 func _build_algorithm_controls(content: VBoxContainer) -> void:
@@ -11228,10 +11173,6 @@ func _create_worker_group(
 			"episode_end_on_ground_contact",
 			source.get("episode_end_on_ground_contact", false) if cloned_from_group else false
 		)),
-		"episode_end_on_flipped": bool(initial_setup.get(
-			"episode_end_on_flipped",
-			source.get("episode_end_on_flipped", false) if cloned_from_group else false
-		)),
 		"hardware_revision": int(source.get("hardware_revision", 0)) if cloned_from_group else 0,
 		"parent_group_id": int(source.get("group_id", -1)) if cloned_from_group else -1,
 		"branch_weight_variation": (
@@ -11382,35 +11323,16 @@ func _add_group_card_tree(
 	name_edit.focus_exited.connect(_on_drone_group_name_focus_exited.bind(group_id))
 	name_edit.gui_input.connect(_on_drone_group_name_gui_input.bind(group_id))
 	header.add_child(name_edit)
-	var candidate_evaluation_label = Label.new()
-	candidate_evaluation_label.custom_minimum_size.x = 86.0
-	candidate_evaluation_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	candidate_evaluation_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	candidate_evaluation_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	candidate_evaluation_label.clip_text = true
-	candidate_evaluation_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	candidate_evaluation_label.add_theme_color_override("font_color", Color("76ddff"))
-	candidate_evaluation_label.tooltip_text = "Fixed-seed evaluation\n\nShows frozen-candidate verification progress. This is separate from training-data collection and from the preserved Best score."
-	candidate_evaluation_label.visible = false
-	header.add_child(candidate_evaluation_label)
-	var best_score_label = Label.new()
-	best_score_label.custom_minimum_size.x = 112.0
-	best_score_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	best_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	best_score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	best_score_label.clip_text = true
-	best_score_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	best_score_label.add_theme_color_override("font_color", Color("54e6b1"))
-	best_score_label.tooltip_text = "Best recorded score\n\nShows the best completed policy result saved for this group under the current score rules."
-	header.add_child(best_score_label)
-	var activity_label = Label.new()
-	activity_label.custom_minimum_size.x = 30.0
-	activity_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	activity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	activity_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	activity_label.add_theme_color_override("font_color", group["color"])
-	activity_label.tooltip_text = "Group activity\n\nAnimated while workers are flying or the model is learning from collected experience."
-	header.add_child(activity_label)
+	var status_labels: Dictionary = DroneTrainingRoomPresentation.build_group_status_labels(
+		header,
+		group["color"],
+		"Fixed-seed evaluation\n\nShows frozen-candidate verification progress. This is separate from training-data collection and from the preserved Best score.",
+		"Best recorded score\n\nShows the best completed policy result saved for this group under the current score rules.",
+		"Group activity\n\nAnimated while workers are flying or the model is learning from collected experience."
+	)
+	var candidate_evaluation_label: Label = status_labels["candidate_evaluation_label"] as Label
+	var best_score_label: Label = status_labels["best_score_label"] as Label
+	var activity_label: Label = status_labels["activity_label"] as Label
 	var pause_button = _button("Ⅱ" if bool(group["active"]) else "▶")
 	pause_button.custom_minimum_size = Vector2(34.0, 30.0)
 	pause_button.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
@@ -11619,35 +11541,16 @@ func _add_limb_group_card(group: Dictionary) -> void:
 	name_edit.focus_exited.connect(_on_limb_group_name_focus_exited.bind(group_id))
 	name_edit.gui_input.connect(_on_limb_group_name_gui_input.bind(group_id))
 	header.add_child(name_edit)
-	var candidate_evaluation_label = Label.new()
-	candidate_evaluation_label.custom_minimum_size.x = 86.0
-	candidate_evaluation_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	candidate_evaluation_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	candidate_evaluation_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	candidate_evaluation_label.clip_text = true
-	candidate_evaluation_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	candidate_evaluation_label.add_theme_color_override("font_color", Color("76ddff"))
-	candidate_evaluation_label.tooltip_text = "Fixed-seed evaluation\n\nShows frozen-candidate verification progress without replacing the preserved Best score."
-	candidate_evaluation_label.visible = false
-	header.add_child(candidate_evaluation_label)
-	var best_score_label = Label.new()
-	best_score_label.custom_minimum_size.x = 112.0
-	best_score_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	best_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	best_score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	best_score_label.clip_text = true
-	best_score_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	best_score_label.add_theme_color_override("font_color", Color("54e6b1"))
-	best_score_label.tooltip_text = "Best fixed-seed evaluation\n\nShows the best policy that passed deterministic verification. Candidate evaluation is separate until promotion."
-	header.add_child(best_score_label)
-	var activity_label = Label.new()
-	activity_label.custom_minimum_size.x = 30.0
-	activity_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	activity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	activity_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	activity_label.add_theme_color_override("font_color", group["color"])
-	activity_label.tooltip_text = "Group activity\n\nAnimated while the four-limb workers are running or their PPO model is learning."
-	header.add_child(activity_label)
+	var status_labels: Dictionary = DroneTrainingRoomPresentation.build_group_status_labels(
+		header,
+		group["color"],
+		"Fixed-seed evaluation\n\nShows frozen-candidate verification progress without replacing the preserved Best score.",
+		"Best fixed-seed evaluation\n\nShows the best policy that passed deterministic verification. Candidate evaluation is separate until promotion.",
+		"Group activity\n\nAnimated while the four-limb workers are running or their PPO model is learning."
+	)
+	var candidate_evaluation_label: Label = status_labels["candidate_evaluation_label"] as Label
+	var best_score_label: Label = status_labels["best_score_label"] as Label
+	var activity_label: Label = status_labels["activity_label"] as Label
 	var pause_button = _button("Ⅱ" if bool(group.get("active", false)) else "▶")
 	pause_button.custom_minimum_size = Vector2(34.0, 30.0)
 	pause_button.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
@@ -12167,35 +12070,16 @@ func _begin_limb_group_rename(group_id: int) -> bool:
 	if group_id != selected_limb_group_id:
 		return false
 	var group: Dictionary = limb_training.group_by_id(group_id)
-	if group.is_empty():
+	var name_edit: LineEdit = TrainingGroupNameEditor.begin(group)
+	if name_edit == null:
 		return false
-	var name_edit = group.get("name_edit") as LineEdit
-	var select_button = group.get("card_button") as Button
-	if name_edit == null or select_button == null:
-		return false
-	name_edit.text = str(group["name"])
-	select_button.visible = false
-	name_edit.visible = true
-	name_edit.modulate.a = 1.0
-	name_edit.grab_focus()
-	name_edit.select_all()
 	_blink_group_name_edit(name_edit)
 	return true
 
 
 func _cancel_limb_group_rename(group_id: int) -> void:
 	var group: Dictionary = limb_training.group_by_id(group_id)
-	if group.is_empty():
-		return
-	var name_edit = group.get("name_edit") as LineEdit
-	var select_button = group.get("card_button") as Button
-	if name_edit != null:
-		name_edit.text = str(group["name"])
-		name_edit.visible = false
-		name_edit.modulate.a = 1.0
-		name_edit.release_focus()
-	if select_button != null:
-		select_button.visible = true
+	TrainingGroupNameEditor.cancel(group)
 
 
 func _commit_limb_group_name(group_id: int) -> void:
@@ -12203,7 +12087,6 @@ func _commit_limb_group_name(group_id: int) -> void:
 	if group.is_empty():
 		return
 	var name_edit = group.get("name_edit") as LineEdit
-	var select_button = group.get("card_button") as Button
 	if name_edit == null or not name_edit.visible:
 		return
 	var requested_name: String = name_edit.text.strip_edges()
@@ -12221,12 +12104,7 @@ func _commit_limb_group_name(group_id: int) -> void:
 		# runtime worker. Renaming must fork the next save so its manifest can carry the new
 		# name instead of silently overwriting the old family under its old display name.
 		group["rolling_version_id"] = ""
-	name_edit.text = new_name
-	name_edit.visible = false
-	name_edit.modulate.a = 1.0
-	name_edit.release_focus()
-	if select_button != null:
-		select_button.visible = true
+	TrainingGroupNameEditor.finish(group, new_name)
 	plots_dirty = true
 	if selected_limb_group_id == group_id:
 		selected_group_title.text = new_name
@@ -12249,35 +12127,16 @@ func _begin_group_rename(group_id: int) -> bool:
 	if group_id != selected_group_id:
 		return false
 	var group = _group_by_id(group_id)
-	if group.is_empty():
+	var name_edit: LineEdit = TrainingGroupNameEditor.begin(group)
+	if name_edit == null:
 		return false
-	var name_edit = group.get("name_edit") as LineEdit
-	var select_button = group.get("card_button") as Button
-	if name_edit == null or select_button == null:
-		return false
-	name_edit.text = str(group["name"])
-	select_button.visible = false
-	name_edit.visible = true
-	name_edit.modulate.a = 1.0
-	name_edit.grab_focus()
-	name_edit.select_all()
 	_blink_group_name_edit(name_edit)
 	return true
 
 
 func _cancel_group_rename(group_id: int) -> void:
 	var group = _group_by_id(group_id)
-	if group.is_empty():
-		return
-	var name_edit = group.get("name_edit") as LineEdit
-	var select_button = group.get("card_button") as Button
-	if name_edit != null:
-		name_edit.text = str(group["name"])
-		name_edit.visible = false
-		name_edit.modulate.a = 1.0
-		name_edit.release_focus()
-	if select_button != null:
-		select_button.visible = true
+	TrainingGroupNameEditor.cancel(group)
 
 
 func _commit_group_name(group_id: int) -> void:
@@ -12285,7 +12144,6 @@ func _commit_group_name(group_id: int) -> void:
 	if group.is_empty():
 		return
 	var name_edit = group.get("name_edit") as LineEdit
-	var select_button = group.get("card_button") as Button
 	if name_edit == null or not name_edit.visible:
 		return
 	var requested_name = name_edit.text.strip_edges()
@@ -12304,12 +12162,7 @@ func _commit_group_name(group_id: int) -> void:
 		# The existing version remains the lineage/source; the next save creates a new named
 		# version and becomes this group's new rolling target.
 		group["rolling_version_id"] = ""
-	name_edit.text = new_name
-	name_edit.visible = false
-	name_edit.modulate.a = 1.0
-	name_edit.release_focus()
-	if select_button != null:
-		select_button.visible = true
+	TrainingGroupNameEditor.finish(group, new_name)
 	plots_dirty = true
 	if selected_group_id == group_id:
 		selected_group_title.text = new_name
@@ -13080,7 +12933,7 @@ func _reward_component_tooltip(reward_key: String) -> String:
 		"ground_safety": "Keep ground clearance\n\nPunishes descending while closer than 2 m to solid ground or objects below the drone.\nVery low clearance also receives a small warning cost.",
 		"smoothness": "Use sensible propeller commands\n\nTiny corrections are free. Large command jumps and sustained extreme or heavily uneven output are punished.",
 		"obstacle": "Avoid walls and objects\n\nPunishes moving into nearby geometry and adds a small contact cost.\nStanding safely nearby or moving away is not punished.",
-		"failure": "Avoid terminal failure\n\nDestruction, power loss, arena exit, wall deadlock, and any optional per-group ground/flipped cutoff give a strong negative score.\nGround contact and inverted orientation are non-terminal by default. Very early terminal failure is punished extra so immediate suicide is not a shortcut.",
+		"failure": "Avoid terminal failure\n\nDestruction, power loss, arena exit, wall deadlock, and the optional per-group low-ground cutoff give a strong negative score.\nGround contact is non-terminal by default; inverted orientation never ends an episode. Very early terminal failure is punished extra so immediate suicide is not a shortcut.",
 	}.get(reward_key, "")
 
 
@@ -14028,9 +13881,7 @@ func _spawn_model_instance(version: Dictionary, policy: DroneMLModel) -> void:
 		evaluator_reward_deck.load_configuration(saved_reward_cards)
 	var saved_termination_value: Variant = training_environment.get("episode_termination", {})
 	var saved_episode_termination: Dictionary = (
-		(saved_termination_value as Dictionary).duplicate(true)
-		if saved_termination_value is Dictionary
-		else DroneTrainingEpisode.DEFAULT_TERMINATION_OPTIONS.duplicate(true)
+		DroneTrainingEpisode.sanitize_termination_options(saved_termination_value)
 	)
 	var saved_loadout_value: Variant = training_environment.get("drone_loadout", {})
 	var saved_loadout_record: Dictionary = (
@@ -15848,7 +15699,6 @@ func _episode_termination_summary() -> String:
 		"power_loss": "battery depleted",
 		"ground_crash": "ground crash",
 		"left_arena": "left arena",
-		"flipped": "flipped",
 		"wall_deadlock": "wall deadlock",
 		"destroyed": "destroyed",
 		"reset_failed": "reset failed",
@@ -15857,7 +15707,7 @@ func _episode_termination_summary() -> String:
 	}
 	var ordered_reasons = [
 		"time_limit", "power_loss", "ground_crash", "left_arena",
-		"flipped", "wall_deadlock", "destroyed", "reset_failed", "running", "unknown",
+		"wall_deadlock", "destroyed", "reset_failed", "running", "unknown",
 	]
 	var parts = PackedStringArray()
 	for reason in ordered_reasons:
@@ -16746,7 +16596,10 @@ func _load_checkpoint_version_into_group(
 		training_environment.get("reward_schema_version", 1), 1
 	)
 	var saved_termination_value: Variant = training_environment.get("episode_termination", null)
-	var legacy_terminal_semantics: bool = not (saved_termination_value is Dictionary)
+	var legacy_terminal_semantics: bool = (
+		not (saved_termination_value is Dictionary)
+		or (saved_termination_value as Dictionary).has("flipped")
+	)
 	var reward_statistics_reset: bool = (
 		saved_reward_schema != DroneTrainingReward.SCHEMA_VERSION
 		or legacy_terminal_semantics
@@ -16954,8 +16807,6 @@ func _refresh_selected_group_controls() -> void:
 	if not has_any_group:
 		if ground_contact_terminal_checkbox != null:
 			ground_contact_terminal_checkbox.visible = false
-		if flipped_terminal_checkbox != null:
-			flipped_terminal_checkbox.visible = false
 		selected_group_title.text = "ALL MODELS // COMPARISON"
 		training_identity_label.text = "No group selected."
 		selected_group_auto_save_label.visible = false
@@ -16970,8 +16821,6 @@ func _refresh_selected_group_controls() -> void:
 	if has_turret_group:
 		if ground_contact_terminal_checkbox != null:
 			ground_contact_terminal_checkbox.visible = false
-		if flipped_terminal_checkbox != null:
-			flipped_terminal_checkbox.visible = false
 		var turret_trainer = turret_group["trainer"] as TurretPPOTrainer
 		if algorithm_controls_id != "turret:%s" % TurretPPOTrainer.ALGORITHM_ID:
 			_rebuild_turret_algorithm_controls(turret_trainer)
@@ -17004,8 +16853,6 @@ func _refresh_selected_group_controls() -> void:
 	if has_limb_group:
 		if ground_contact_terminal_checkbox != null:
 			ground_contact_terminal_checkbox.visible = false
-		if flipped_terminal_checkbox != null:
-			flipped_terminal_checkbox.visible = false
 		var limb_trainer = limb_group["trainer"] as FourLimbPPOTrainer
 		if algorithm_controls_id != "limb:%s" % FourLimbPPOTrainer.ALGORITHM_ID:
 			_rebuild_limb_algorithm_controls(limb_trainer)
@@ -17037,8 +16884,6 @@ func _refresh_selected_group_controls() -> void:
 		return
 	if ground_contact_terminal_checkbox != null:
 		ground_contact_terminal_checkbox.visible = true
-	if flipped_terminal_checkbox != null:
-		flipped_terminal_checkbox.visible = true
 	var trainer: DroneTrainingAlgorithm = group["trainer"]
 	if algorithm_controls_id != trainer.algorithm_id():
 		_rebuild_algorithm_controls(trainer)
@@ -17058,10 +16903,6 @@ func _refresh_selected_group_controls() -> void:
 		ground_contact_terminal_checkbox.button_pressed = bool(
 			group.get("episode_end_on_ground_contact", false)
 		)
-	if flipped_terminal_checkbox != null:
-		flipped_terminal_checkbox.button_pressed = bool(
-			group.get("episode_end_on_flipped", false)
-		)
 	for key in algorithm_config_sliders:
 		var slider = algorithm_config_sliders[key] as HSlider
 		if slider != null and config.has(key):
@@ -17072,8 +16913,6 @@ func _refresh_selected_group_controls() -> void:
 		control.editable = editable
 	if ground_contact_terminal_checkbox != null:
 		ground_contact_terminal_checkbox.disabled = not editable
-	if flipped_terminal_checkbox != null:
-		flipped_terminal_checkbox.disabled = not editable
 	_refresh_selected_loadout_controls()
 	_refresh_limb_body_tuning_controls()
 	_refresh_group_auto_save_label(group, selected_group_auto_save_label)

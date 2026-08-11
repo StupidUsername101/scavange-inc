@@ -163,7 +163,7 @@ The following areas should not be marked “proven” from static inspection alo
 
 ## Standalone prototype note
 
-The packaged source contains a tracked standalone `ml/training/four_limb/four_limb_training_room.gd` and `.tscn`, but no other project code references that room; the active integrated path is `DroneTrainingRoom` -> `FourLimbTrainingCoordinator`. This pass leaves that standalone loop unchanged because it uses a separate synchronous update path. If that room is intentionally reactivated later, it should be consolidated onto the coordinator rather than allowed to maintain a second training implementation.
+The unreferenced standalone `FourLimbTrainingRoom` prototype was removed during the later cleanup pass. The authoritative four-limb path is `DroneTrainingRoom` -> `FourLimbTrainingCoordinator`; keeping a second synchronous training loop would only duplicate episode/reward/update behavior and invite drift.
 
 ## Current audit conclusion
 
@@ -328,9 +328,8 @@ four-limb/turret creation paths.
 - The active integrated four-limb and turret coordinators already passed their `network_config` into the
   trainer constructor before policy creation; the fresh-creation ordering defect was specific to drone
   groups. Their detached PPO optimizers also load the transferred network state dynamically.
-- The tracked standalone legacy `FourLimbTrainingRoom` still uses its old default-only creation path,
-  but no active project code references that room; the integrated `DroneTrainingRoom` ->
-  `FourLimbTrainingCoordinator` path remains authoritative.
+- The later cleanup pass removed the unreferenced standalone `FourLimbTrainingRoom`; the integrated
+  `DroneTrainingRoom` -> `FourLimbTrainingCoordinator` path is the sole authoritative four-limb room.
 
 ### Visibility / comparison guardrails
 
@@ -384,9 +383,8 @@ training-room UI after the hidden-dimensions and startup-window changes.
   worker cards.
 - The four-limb expanded identity row now wraps like the turret/drone detail rows instead of allowing
   long architecture/output text to overflow the card.
-- The tracked standalone `FourLimbTrainingRoom` model/map library windows now start hidden as well.
-  The integrated room was already fixed in pass 13, but the legacy scene still carried the same
-  default-visible Window lifecycle bug.
+- The historical standalone `FourLimbTrainingRoom` window lifecycle fix is superseded by removal of
+  that unreferenced prototype in the later cleanup pass.
 - The dormant turret worker-slider label path now uses `Turrets:` rather than the stale `Workers:`
   wording, keeping future/re-enabled worker-count controls consistent with the live turret card.
 

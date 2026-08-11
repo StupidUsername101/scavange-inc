@@ -147,52 +147,15 @@ func _build_terminal_surface() -> void:
 
 
 func _update_terminal_aim_indicator() -> void:
-	if terminal_view == null:
-		return
-	var local_player := Client.get_local_player_proxy()
-	if (
-		Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
-		or local_player == null
-		or not is_instance_valid(local_player.camera)
-	):
-		terminal_view.call("set_aim_indicator", Vector2.ZERO, false)
-		return
-
-	var ray_origin: Vector3 = local_player.camera.global_position
-	var ray_direction := -local_player.camera.global_basis.z.normalized()
-	var local_origin := to_local(ray_origin)
-	var local_direction := global_basis.inverse() * ray_direction
-	if absf(local_direction.z) <= 0.0001:
-		terminal_view.call("set_aim_indicator", Vector2.ZERO, false)
-		return
-
-	var distance := (SCREEN_PLANE_Z - local_origin.z) / local_direction.z
-	if distance < 0.0 or distance > MAX_AIM_DISTANCE:
-		terminal_view.call("set_aim_indicator", Vector2.ZERO, false)
-		return
-
-	var hit := local_origin + local_direction * distance
-	var left := SCREEN_CENTER.x - SCREEN_WORLD_SIZE.x * 0.5
-	var top := SCREEN_CENTER.y + SCREEN_WORLD_SIZE.y * 0.5
-	var normalized := Vector2(
-		(hit.x - left) / SCREEN_WORLD_SIZE.x,
-		(top - hit.y) / SCREEN_WORLD_SIZE.y
+	TerminalAimIndicator.update(
+		self,
+		terminal_view,
+		SCREEN_PLANE_Z,
+		SCREEN_CENTER,
+		SCREEN_WORLD_SIZE,
+		MAX_AIM_DISTANCE,
+		SHOP_LAYOUT.SCREEN_SIZE
 	)
-	var visible := (
-		normalized.x >= 0.0
-		and normalized.x <= 1.0
-		and normalized.y >= 0.0
-		and normalized.y <= 1.0
-	)
-	terminal_view.call(
-		"set_aim_indicator",
-		Vector2(
-			normalized.x * SHOP_LAYOUT.SCREEN_SIZE.x,
-			normalized.y * SHOP_LAYOUT.SCREEN_SIZE.y
-		),
-		visible
-	)
-
 
 func _get_local_value(
 	values_by_player_id: Dictionary,

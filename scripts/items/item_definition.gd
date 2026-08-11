@@ -193,7 +193,22 @@ static func _sanitized_grip_surface_tags(value: PackedStringArray) -> PackedStri
 
 
 func instantiate_visual() -> Node3D:
-	var visual_root := Node3D.new()
+	var visual_root: Node3D = _create_visual_root()
+
+	if visual_scene == null:
+		return visual_root
+
+	var visual: Node = visual_scene.instantiate()
+	visual_root.add_child(visual)
+
+	if material_override != null:
+		_apply_material_override(visual)
+
+	return visual_root
+
+
+func _create_visual_root() -> Node3D:
+	var visual_root: Node3D = Node3D.new()
 	visual_root.name = "ItemVisual"
 	visual_root.position = mesh_position * overall_size
 	visual_root.rotation_degrees = Vector3(
@@ -206,16 +221,6 @@ func instantiate_visual() -> Node3D:
 		mesh_size_y,
 		mesh_size_z
 	) * overall_size
-
-	if visual_scene == null:
-		return visual_root
-
-	var visual := visual_scene.instantiate()
-	visual_root.add_child(visual)
-
-	if material_override != null:
-		_apply_material_override(visual)
-
 	return visual_root
 
 

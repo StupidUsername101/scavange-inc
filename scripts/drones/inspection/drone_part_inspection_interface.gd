@@ -100,14 +100,14 @@ func build_document(
 				definition as DroneAttachmentDefinition
 			)
 
-	return _node(
+	return InspectionDocumentBuilder.node(
 		drone_part.display_name,
 		"%s diagnostic overview" % type_label,
 		[
-			_stat("Type", type_label),
-			_stat("Quality", _quality_name(drone_part.quality)),
-			_stat("Condition", _condition_name(runtime_state)),
-			_stat("Mass", "%.3f kg" % drone_part.get_mass()),
+			InspectionDocumentBuilder.stat("Type", type_label),
+			InspectionDocumentBuilder.stat("Quality", _quality_name(drone_part.quality)),
+			InspectionDocumentBuilder.stat("Condition", _condition_name(runtime_state)),
+			InspectionDocumentBuilder.stat("Mass", "%.3f kg" % drone_part.get_mass()),
 		],
 		children
 	)
@@ -134,33 +134,33 @@ func _build_core_groups(
 
 
 func _build_core_power_group(core: DroneCoreDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Power systems",
 		"Distribution, stability and motor response",
-		[_stat("Throughput", "%.1f W" % core.max_power_throughput)],
+		[InspectionDocumentBuilder.stat("Throughput", "%.1f W" % core.max_power_throughput)],
 		[
-			_node(
+			InspectionDocumentBuilder.node(
 				"Output stability",
 				"Power regulation characteristics",
 				[
-					_stat(
+					InspectionDocumentBuilder.stat(
 						"Consistency",
 						"%.1f%%" % (
 							core.power_output_consistency * PERCENT_SCALE
 						)
 					),
-					_stat(
+					InspectionDocumentBuilder.stat(
 						"Fluctuation rate",
 						"%.2f Hz" % core.fluctuation_rate
 					),
 				]
 			),
-			_node(
+			InspectionDocumentBuilder.node(
 				"Motor response",
 				"Core-side propeller spool control",
 				[
-					_stat("Spool up", "%.2f" % core.spool_up_response),
-					_stat("Spool down", "%.2f" % core.spool_down_response),
+					InspectionDocumentBuilder.stat("Spool up", "%.2f" % core.spool_up_response),
+					InspectionDocumentBuilder.stat("Spool down", "%.2f" % core.spool_down_response),
 				]
 			),
 		]
@@ -168,13 +168,13 @@ func _build_core_power_group(core: DroneCoreDefinition) -> Dictionary:
 
 
 func _build_core_expansion_group(core: DroneCoreDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Expansion bus",
 		"Physical sockets exposed by this core",
 		[
-			_stat("Propellers", "%d sockets" % core.propeller_slot_count),
-			_stat("AI chips", "%d sockets" % core.ai_chip_slot_count),
-			_stat("Belly rail", "%d sockets" % core.attachment_slot_count),
+			InspectionDocumentBuilder.stat("Propellers", "%d sockets" % core.propeller_slot_count),
+			InspectionDocumentBuilder.stat("AI chips", "%d sockets" % core.ai_chip_slot_count),
+			InspectionDocumentBuilder.stat("Belly rail", "%d sockets" % core.attachment_slot_count),
 		]
 	)
 
@@ -183,39 +183,39 @@ func _build_core_health_group(
 	core: DroneCoreDefinition,
 	current_health: float
 ) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Structural health",
 		"Runtime condition of the core chassis",
 		[
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Health",
 				"%.1f / %.1f" % [current_health, core.max_health]
 			),
-			_stat("Maximum health", "%.1f" % core.max_health),
+			InspectionDocumentBuilder.stat("Maximum health", "%.1f" % core.max_health),
 		]
 	)
 
 
 func _build_core_body_group(core: DroneCoreDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Flight body",
 		"Aerodynamic contribution of the core housing",
 		[
-			_stat("Drag area", "%.3f m²" % core.drag_area),
-			_stat("Drag coefficient", "%.3f" % core.drag_coefficient),
-			_stat("Angular drag", "%.3f" % core.angular_drag_coefficient),
-			_stat("Chassis size", _format_size(core.body_size)),
+			InspectionDocumentBuilder.stat("Drag area", "%.3f m²" % core.drag_area),
+			InspectionDocumentBuilder.stat("Drag coefficient", "%.3f" % core.drag_coefficient),
+			InspectionDocumentBuilder.stat("Angular drag", "%.3f" % core.angular_drag_coefficient),
+			InspectionDocumentBuilder.stat("Chassis size", _format_size(core.body_size)),
 		]
 	)
 
 
 func _build_core_flight_group(core: DroneCoreDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"AI flight authority",
 		"Cascaded position, velocity and attitude controller",
 		[
-			_stat("Maximum speed", "%.2f m/s" % core.ai_max_horizontal_speed),
-			_stat("Maximum tilt", "%.1f°" % core.ai_max_tilt_degrees),
+			InspectionDocumentBuilder.stat("Maximum speed", "%.2f m/s" % core.ai_max_horizontal_speed),
+			InspectionDocumentBuilder.stat("Maximum tilt", "%.1f°" % core.ai_max_tilt_degrees),
 		],
 		[
 			_build_core_motion_envelope(core),
@@ -226,20 +226,20 @@ func _build_core_flight_group(core: DroneCoreDefinition) -> Dictionary:
 
 
 func _build_core_motion_envelope(core: DroneCoreDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Motion envelope",
 		"Bounded translational commands",
 		[
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Horizontal speed",
 				"%.2f m/s" % core.ai_max_horizontal_speed
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Horizontal accel.",
 				"%.2f m/s²" % core.ai_max_horizontal_acceleration
 			),
-			_stat("Vertical speed", "%.2f m/s" % core.ai_max_vertical_speed),
-			_stat(
+			InspectionDocumentBuilder.stat("Vertical speed", "%.2f m/s" % core.ai_max_vertical_speed),
+			InspectionDocumentBuilder.stat(
 				"Vertical accel.",
 				"%.2f m/s²" % core.ai_max_vertical_acceleration
 			),
@@ -248,42 +248,42 @@ func _build_core_motion_envelope(core: DroneCoreDefinition) -> Dictionary:
 
 
 func _build_core_guidance_loop(core: DroneCoreDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Guidance loop",
 		"Position error becomes a damped velocity request",
 		[
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Position gain",
 				"%.2f" % core.ai_horizontal_position_gain
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Velocity gain",
 				"%.2f" % core.ai_horizontal_velocity_gain
 			),
-			_stat("Altitude P", "%.2f" % core.ai_altitude_position_gain),
-			_stat("Altitude V", "%.2f" % core.ai_altitude_velocity_gain),
+			InspectionDocumentBuilder.stat("Altitude P", "%.2f" % core.ai_altitude_position_gain),
+			InspectionDocumentBuilder.stat("Altitude V", "%.2f" % core.ai_altitude_velocity_gain),
 		]
 	)
 
 
 func _build_core_attitude_loop(core: DroneCoreDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Attitude loop",
 		"Upright stability and physical rotor mixing",
 		[
-			_stat("Tilt limit", "%.1f°" % core.ai_max_tilt_degrees),
-			_stat("Attitude response", "%.2f" % core.ai_attitude_response),
-			_stat(
+			InspectionDocumentBuilder.stat("Tilt limit", "%.1f°" % core.ai_max_tilt_degrees),
+			InspectionDocumentBuilder.stat("Attitude response", "%.2f" % core.ai_attitude_response),
+			InspectionDocumentBuilder.stat(
 				"Angular damping",
 				"%.2f" % core.ai_angular_velocity_damping
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Motor mix",
 				"%.0f%%" % (
 					core.ai_motor_mix_authority * PERCENT_SCALE
 				)
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Recovery torque",
 				"%.2f Nm" % core.ai_emergency_upright_torque
 			),
@@ -322,16 +322,16 @@ func _build_battery_charge_group(
 	stored_energy: float,
 	charge_ratio: float
 ) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Charge",
 		"Current runtime energy state",
 		[
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Charge level",
 				"%.1f%%" % (charge_ratio * PERCENT_SCALE)
 			),
-			_stat("Stored", "%.3f Wh" % stored_energy),
-			_stat("Capacity", "%.3f Wh" % battery.energy_capacity_wh),
+			InspectionDocumentBuilder.stat("Stored", "%.3f Wh" % stored_energy),
+			InspectionDocumentBuilder.stat("Capacity", "%.3f Wh" % battery.energy_capacity_wh),
 		]
 	)
 
@@ -339,25 +339,25 @@ func _build_battery_charge_group(
 func _build_battery_power_group(
 	battery: DroneBatteryDefinition
 ) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Power systems",
 		"Output envelope and power quality",
 		[
-			_stat("Nominal output", "%.1f W" % battery.nominal_power_output),
-			_stat("Maximum output", "%.1f W" % battery.maximum_power_output),
+			InspectionDocumentBuilder.stat("Nominal output", "%.1f W" % battery.nominal_power_output),
+			InspectionDocumentBuilder.stat("Maximum output", "%.1f W" % battery.maximum_power_output),
 		],
 		[
-			_node(
+			InspectionDocumentBuilder.node(
 				"Output stability",
 				"Normal delivery characteristics",
 				[
-					_stat(
+					InspectionDocumentBuilder.stat(
 						"Consistency",
 						"%.1f%%" % (
 							battery.power_output_consistency * PERCENT_SCALE
 						)
 					),
-					_stat(
+					InspectionDocumentBuilder.stat(
 						"Fluctuation rate",
 						"%.2f Hz" % battery.fluctuation_rate
 					),
@@ -371,40 +371,40 @@ func _build_battery_power_group(
 func _build_battery_fault_group(
 	battery: DroneBatteryDefinition
 ) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Fault envelope",
 		"Rare drops, boosts and surge coupling",
 		[
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Spike chance",
 				"%.3f / s" % battery.spike_chance_per_second
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Spike duration",
 				"%.2f–%.2f s" % [
 					battery.minimum_spike_duration,
 					battery.maximum_spike_duration,
 				]
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Drop range",
 				"%.0f–%.0f%%" % [
 					battery.minimum_drop_multiplier * PERCENT_SCALE,
 					battery.maximum_drop_multiplier * PERCENT_SCALE,
 				]
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Boost range",
 				"%.0f–%.0f%%" % [
 					battery.minimum_boost_multiplier * PERCENT_SCALE,
 					battery.maximum_boost_multiplier * PERCENT_SCALE,
 				]
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Surge protection",
 				"%.1f%%" % (battery.surge_protection * PERCENT_SCALE)
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Damage coupling",
 				"%.2f%%" % (
 					battery.extreme_spike_damage_coupling * PERCENT_SCALE
@@ -417,48 +417,48 @@ func _build_battery_fault_group(
 func _build_battery_package_group(
 	battery: DroneBatteryDefinition
 ) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Physical package",
 		"Envelope occupied inside the battery dock",
-		[_stat("Body size", _format_size(battery.body_size))]
+		[InspectionDocumentBuilder.stat("Body size", _format_size(battery.body_size))]
 	)
 
 
 func _build_propeller_groups(propeller: DronePropellerDefinition) -> Array:
 	return [
-		_node(
+		InspectionDocumentBuilder.node(
 			"Power systems",
 			"Electrical demand at maximum command",
 			[
-				_stat("Maximum draw", "%.1f W" % propeller.max_power_draw),
+				InspectionDocumentBuilder.stat("Maximum draw", "%.1f W" % propeller.max_power_draw),
 			]
 		),
-		_node(
+		InspectionDocumentBuilder.node(
 			"Rotor geometry",
 			"Physical dimensions and air-working area",
 			[
-				_stat(
+				InspectionDocumentBuilder.stat(
 					"Radius",
 					"%.1f cm" % (propeller.rotor_radius * PERCENT_SCALE)
 				),
-				_stat("Disc area", "%.4f m²" % propeller.get_disk_area()),
+				InspectionDocumentBuilder.stat("Disc area", "%.4f m²" % propeller.get_disk_area()),
 			],
 			[
-				_node(
+				InspectionDocumentBuilder.node(
 					"Aerodynamics",
 					"Conversion of shaft power into airflow",
 					[
-						_stat(
+						InspectionDocumentBuilder.stat(
 							"Efficiency",
 							"%.1f%%" % (
 								propeller.aerodynamic_efficiency * PERCENT_SCALE
 							)
 						),
-						_stat(
+						InspectionDocumentBuilder.stat(
 							"Axial response",
 							"%.3f" % propeller.axial_flow_response
 						),
-						_stat(
+						InspectionDocumentBuilder.stat(
 							"Axial range",
 							"%.2f–%.2f" % [
 								propeller.minimum_axial_flow_factor,
@@ -467,11 +467,11 @@ func _build_propeller_groups(propeller: DronePropellerDefinition) -> Array:
 						),
 					]
 				),
-				_node(
+				InspectionDocumentBuilder.node(
 					"Reaction dynamics",
 					"Counter-torque fed into the airframe",
 					[
-						_stat(
+						InspectionDocumentBuilder.stat(
 							"Reaction torque",
 							"%.4f Nm/N" % propeller.reaction_torque_per_newton
 						),
@@ -495,9 +495,9 @@ func _build_ai_chip_groups(chip: DroneAIChipDefinition) -> Array:
 
 func _build_ai_behavior_group(chip: DroneAIChipDefinition) -> Dictionary:
 	var behavior_values: Array = [
-		_stat("Behavior", str(chip.behavior_id)),
-		_stat("Priority", "%d" % chip.processing_priority),
-		_stat(
+		InspectionDocumentBuilder.stat("Behavior", str(chip.behavior_id)),
+		InspectionDocumentBuilder.stat("Priority", "%d" % chip.processing_priority),
+		InspectionDocumentBuilder.stat(
 			"Implementation",
 			(
 				chip.behavior_script.resource_path
@@ -507,8 +507,8 @@ func _build_ai_behavior_group(chip: DroneAIChipDefinition) -> Dictionary:
 		),
 	]
 	if not chip.behavior_description.is_empty():
-		behavior_values.append(_stat("Profile", chip.behavior_description))
-	return _node(
+		behavior_values.append(InspectionDocumentBuilder.stat("Profile", chip.behavior_description))
+	return InspectionDocumentBuilder.node(
 		"Behavior package",
 		"Commands and movement policy supplied by the chip",
 		behavior_values,
@@ -527,7 +527,7 @@ func _build_ai_behavior_children(chip: DroneAIChipDefinition) -> Array:
 		children.append(_build_ai_movement_group(chip))
 	var parameter_values: Array = _build_parameter_stats(chip)
 	if not parameter_values.is_empty():
-		children.append(_node(
+		children.append(InspectionDocumentBuilder.node(
 			"Behavior parameters",
 			"Raw resource values supplied to the behavior module",
 			parameter_values
@@ -536,20 +536,20 @@ func _build_ai_behavior_children(chip: DroneAIChipDefinition) -> Array:
 
 
 func _build_ai_follow_group(chip: DroneAIChipDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Follow envelope",
 		"World-space donut targeted around the assigned player",
 		[
-			_stat("Target area", chip.get_follow_target_area_description()),
-			_stat(
+			InspectionDocumentBuilder.stat("Target area", chip.get_follow_target_area_description()),
+			InspectionDocumentBuilder.stat(
 				"Preferred radius",
 				"%.1f m" % chip.get_follow_preferred_radius()
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Height offset",
 				"%.1f m" % chip.get_follow_height_offset()
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Movement style",
 				str(chip.get_follow_mode()).capitalize()
 			),
@@ -558,28 +558,28 @@ func _build_ai_follow_group(chip: DroneAIChipDefinition) -> Dictionary:
 
 
 func _build_ai_collision_group(chip: DroneAIChipDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Collision envelope",
 		"Server-side reciprocal velocity planning",
 		[
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Neighbor distance",
 				"%.1f m" % chip.get_avoidance_neighbor_distance()
 			),
-			_stat("Time horizon", "%.2f s" % chip.get_avoidance_time_horizon()),
-			_stat(
+			InspectionDocumentBuilder.stat("Time horizon", "%.2f s" % chip.get_avoidance_time_horizon()),
+			InspectionDocumentBuilder.stat(
 				"Safety padding",
 				"%.2f m" % chip.get_avoidance_radius_padding()
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Vertical window",
 				"±%.2f m" % chip.get_avoidance_vertical_tolerance()
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Maximum peers",
 				"%d drones" % chip.get_avoidance_max_neighbors()
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Reciprocity",
 				"50% with ORCA peer / 100% with passive drone"
 			),
@@ -588,23 +588,23 @@ func _build_ai_collision_group(chip: DroneAIChipDefinition) -> Dictionary:
 
 
 func _build_ai_movement_group(chip: DroneAIChipDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Movement envelope",
 		"Stable shared flight limits requested by this chip",
 		[
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Speed authority",
 				"%.0f%%" % (
 					chip.get_navigation_speed_scale() * PERCENT_SCALE
 				)
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Acceleration authority",
 				"%.0f%%" % (
 					chip.get_navigation_acceleration_scale() * PERCENT_SCALE
 				)
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Jerk authority",
 				"%.0f%%" % (
 					chip.get_navigation_jerk_scale() * PERCENT_SCALE
@@ -615,16 +615,16 @@ func _build_ai_movement_group(chip: DroneAIChipDefinition) -> Dictionary:
 
 
 func _build_ai_processing_group(chip: DroneAIChipDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Processing",
 		"Decision latency and brownout tolerance",
 		[
-			_stat("Response time", "%.3f s" % chip.response_time),
-			_stat(
+			InspectionDocumentBuilder.stat("Response time", "%.3f s" % chip.response_time),
+			InspectionDocumentBuilder.stat(
 				"Efficiency",
 				"%.1f%%" % (chip.processing_efficiency * PERCENT_SCALE)
 			),
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Minimum power",
 				"%.1f%%" % (
 					chip.minimum_operating_power_ratio * PERCENT_SCALE
@@ -635,24 +635,24 @@ func _build_ai_processing_group(chip: DroneAIChipDefinition) -> Dictionary:
 
 
 func _build_ai_power_group(chip: DroneAIChipDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Power systems",
 		"Core-bus demand while idle and executing",
 		[
-			_stat("Idle draw", "%.2f W" % chip.idle_power_draw),
-			_stat("Active draw", "%.2f W" % chip.active_power_draw),
+			InspectionDocumentBuilder.stat("Idle draw", "%.2f W" % chip.idle_power_draw),
+			InspectionDocumentBuilder.stat("Active draw", "%.2f W" % chip.active_power_draw),
 		]
 	)
 
 
 func _build_ai_sensing_group(chip: DroneAIChipDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Sensing & targeting",
 		"Perception and combat-processing quality",
 		[
-			_stat("Sensor range", "%.1f m" % chip.sensor_range),
-			_stat("Aim error", "%.2f°" % chip.aim_error_degrees),
-			_stat(
+			InspectionDocumentBuilder.stat("Sensor range", "%.1f m" % chip.sensor_range),
+			InspectionDocumentBuilder.stat("Aim error", "%.2f°" % chip.aim_error_degrees),
+			InspectionDocumentBuilder.stat(
 				"Friendly ID",
 				"%.3f%%" % (
 					chip.friendly_identification_accuracy * PERCENT_SCALE
@@ -663,12 +663,12 @@ func _build_ai_sensing_group(chip: DroneAIChipDefinition) -> Dictionary:
 
 
 func _build_ai_surge_group(chip: DroneAIChipDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Surge tolerance",
 		"Destructive battery-spike resistance",
 		[
-			_stat("Threshold", "%.2fx" % chip.damaging_spike_threshold),
-			_stat(
+			InspectionDocumentBuilder.stat("Threshold", "%.2fx" % chip.damaging_spike_threshold),
+			InspectionDocumentBuilder.stat(
 				"Protection",
 				(
 					"Immune"
@@ -681,22 +681,22 @@ func _build_ai_surge_group(chip: DroneAIChipDefinition) -> Dictionary:
 
 
 func _build_ai_package_group(chip: DroneAIChipDefinition) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Physical package",
 		"Envelope occupied on the core's AI bus",
-		[_stat("Body size", _format_size(chip.body_size))]
+		[InspectionDocumentBuilder.stat("Body size", _format_size(chip.body_size))]
 	)
 
 
 func _build_weapon_groups(weapon: DroneWeaponDefinition) -> Array:
 	return [
-		_node(
+		InspectionDocumentBuilder.node(
 			"Weapon performance",
 			"Damage output and firing cadence",
 			[
-				_stat("Damage / shot", "%.1f" % weapon.damage_per_shot),
-				_stat("Fire rate", "%.2f rounds/s" % weapon.rounds_per_second),
-				_stat(
+				InspectionDocumentBuilder.stat("Damage / shot", "%.1f" % weapon.damage_per_shot),
+				InspectionDocumentBuilder.stat("Fire rate", "%.2f rounds/s" % weapon.rounds_per_second),
+				InspectionDocumentBuilder.stat(
 					"Sustained damage",
 					"%.1f / s" % (
 						weapon.damage_per_shot * weapon.rounds_per_second
@@ -704,22 +704,22 @@ func _build_weapon_groups(weapon: DroneWeaponDefinition) -> Array:
 				),
 			],
 			[
-				_node(
+				InspectionDocumentBuilder.node(
 					"Ballistics",
 					"Range and projectile travel",
 					[
-						_stat("Effective range", "%.1f m" % weapon.effective_range),
-						_stat(
+						InspectionDocumentBuilder.stat("Effective range", "%.1f m" % weapon.effective_range),
+						InspectionDocumentBuilder.stat(
 							"Projectile speed",
 							"%.1f m/s" % weapon.projectile_speed
 						),
 					]
 				),
-				_node(
+				InspectionDocumentBuilder.node(
 					"Mount mechanics",
 					"Physical aiming limits",
 					[
-						_stat(
+						InspectionDocumentBuilder.stat(
 							"Traverse arc",
 							"%.1f°" % weapon.traverse_arc_degrees
 						),
@@ -734,13 +734,13 @@ func _build_weapon_groups(weapon: DroneWeaponDefinition) -> Array:
 
 func _build_arm_groups(arm: DroneArmDefinition) -> Array:
 	return [
-		_node(
+		InspectionDocumentBuilder.node(
 			"Manipulation",
 			"Physical work envelope of the arm",
 			[
-				_stat("Force", "%.1f N" % arm.manipulation_force),
-				_stat("Reach", "%.2f m" % arm.reach),
-				_stat("Rotation torque", "%.1f Nm" % arm.rotation_torque),
+				InspectionDocumentBuilder.stat("Force", "%.1f N" % arm.manipulation_force),
+				InspectionDocumentBuilder.stat("Reach", "%.2f m" % arm.reach),
+				InspectionDocumentBuilder.stat("Rotation torque", "%.1f Nm" % arm.rotation_torque),
 			]
 		),
 		_build_attachment_power_node(arm),
@@ -763,16 +763,16 @@ func _build_attachment_power_node(
 	var tag_names: Array[String] = []
 	for tag: StringName in attachment.capability_tags:
 		tag_names.append(str(tag))
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Power & capabilities",
 		"Bus demand and services advertised to AI chips",
 		[
-			_stat(
+			InspectionDocumentBuilder.stat(
 				"Capabilities",
 				", ".join(tag_names) if not tag_names.is_empty() else "None"
 			),
-			_stat("Idle draw", "%.2f W" % attachment.idle_power_draw),
-			_stat("Active draw", "%.2f W" % attachment.active_power_draw),
+			InspectionDocumentBuilder.stat("Idle draw", "%.2f W" % attachment.idle_power_draw),
+			InspectionDocumentBuilder.stat("Active draw", "%.2f W" % attachment.active_power_draw),
 		]
 	)
 
@@ -780,11 +780,11 @@ func _build_attachment_power_node(
 func _build_attachment_package_node(
 	attachment: DroneAttachmentDefinition
 ) -> Dictionary:
-	return _node(
+	return InspectionDocumentBuilder.node(
 		"Physical package",
 		"Envelope occupied on a belly attachment rail",
 		[
-			_stat("Body size", _format_size(attachment.body_size)),
+			InspectionDocumentBuilder.stat("Body size", _format_size(attachment.body_size)),
 		]
 	)
 
@@ -797,32 +797,13 @@ func _build_parameter_stats(chip: DroneAIChipDefinition) -> Array:
 
 	var result: Array = []
 	for parameter_name: String in parameter_names:
-		result.append(_stat(
+		result.append(InspectionDocumentBuilder.stat(
 			parameter_name.replace("_", " ").capitalize(),
 			str(chip.get_parameter(StringName(parameter_name), ""))
 		))
 	return result
 
 
-func _node(
-	title: String,
-	subtitle := "",
-	values: Array = [],
-	children: Array = []
-) -> Dictionary:
-	return {
-		"title": title,
-		"subtitle": subtitle,
-		"values": values,
-		"children": children,
-	}
-
-
-func _stat(label: String, value: String) -> Dictionary:
-	return {
-		"label": label,
-		"value": value,
-	}
 
 
 func _format_size(value: Vector3) -> String:

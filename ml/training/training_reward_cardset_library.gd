@@ -300,7 +300,7 @@ static func _configure(
 func _load_custom_cardsets() -> void:
 	if not FileAccess.file_exists(STORAGE_PATH):
 		return
-	var file = FileAccess.open(STORAGE_PATH, FileAccess.READ)
+	var file: FileAccess = FileAccess.open(STORAGE_PATH, FileAccess.READ)
 	if file == null:
 		last_error = "Could not read saved reward cardsets."
 		return
@@ -308,7 +308,7 @@ func _load_custom_cardsets() -> void:
 	if not (parsed is Dictionary):
 		last_error = "Saved reward cardsets are not valid JSON."
 		return
-	var root = parsed as Dictionary
+	var root: Dictionary = parsed as Dictionary
 	var body_records: Variant = root.get("body_types", {})
 	if not (body_records is Dictionary):
 		return
@@ -324,7 +324,7 @@ func _save_custom_cardsets() -> bool:
 	if directory_error != OK:
 		last_error = "Could not create the reward-cardset directory."
 		return false
-	var content = JSON.stringify({
+	var content: String = JSON.stringify({
 		"schema_version": SCHEMA_VERSION,
 		"body_types": custom_cardsets,
 	}, "\t")

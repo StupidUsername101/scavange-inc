@@ -67,67 +67,39 @@ func create_group(
 	if loadout == null or not loadout.ensure_contract():
 		last_error = "The turret body preset/loadout is incomplete."
 		return {}
-	var group = {
-		"group_id": group_id,
-		"body_type": "turret",
-		"name": group_name,
-		"color": color,
+	var group: Dictionary = TrainingCoordinatorGroupState.create(
+		group_id,
+		"turret",
+		group_name,
+		color,
+		worker_count,
+		MAXIMUM_WORKER_COUNT,
+		DECISION_INTERVAL_SECONDS
+	)
+	group.merge({
 		"turret_loadout": loadout,
 		"hardware_revision": 0,
-		"parent_group_id": -1,
-		"branch_weight_variation": 0.0,
 		"source_description": "Fresh stationary-turret policy",
-		"overwrite_saved_versions": true,
-		"rolling_version_id": "",
 		"trainer": TurretPPOTrainer.new(9100009 + group_id * 131, network_config),
 		"reward_deck": TurretRewardDeck.new(),
 		"reward_cardset_id": "builtin:turret_precision",
 		"reward_cardset_name": "Precision Fire",
-		"pending_reward_config": {},
-		"workers": [],
-		"worker_count": clampi(worker_count, 1, MAXIMUM_WORKER_COUNT),
-		"pending_worker_count": clampi(worker_count, 1, MAXIMUM_WORKER_COUNT),
-		"worker_placements": _new_unconfigured_placements(clampi(worker_count, 1, MAXIMUM_WORKER_COUNT)),
+		"worker_placements": _new_unconfigured_placements(
+			clampi(worker_count, 1, MAXIMUM_WORKER_COUNT)
+		),
 		"placement_position": Vector3.ZERO,
 		"placement_yaw_degrees": 0.0,
 		"placement_configured": false,
 		"target_worker_group_id": -1,
 		"resolved_target_entity_id": -1,
 		"resolved_target": {},
-		"control_interval_seconds": DECISION_INTERVAL_SECONDS,
 		"manual_override_enabled": false,
 		"manual_yaw_drive": 0.0,
 		"manual_pitch_drive": 0.0,
 		"manual_trigger": 0.0,
-		"active": false,
-		"episode": 0,
-		"last_mean_reward": 0.0,
-		"best_mean_reward": -INF,
-		"last_update": {},
-		"last_reward_state": {},
-		"optimizer_waiting": false,
-		"respawn_delay_remaining": 0.0,
-		"awaiting_respawn": false,
-		"history": DroneTrainingMetricsHistory.new(),
-		"card": null,
-		"card_button": null,
-		"pause_button": null,
-		"activity_label": null,
-		"candidate_evaluation_label": null,
-		"candidate_evaluation_queue_position": 0,
-		"candidate_evaluation_queue_ticket": 0,
-		"candidate_evaluation_queued_candidate_id": -1,
-		"candidate_evaluation_started_usec": 0,
-		"candidate_evaluation_subject": "",
-		"candidate_evaluation_last_result": {},
-		"best_score_label": null,
-		"worker_label": null,
 		"add_worker_button": null,
-		"reward_label": null,
-		"hardware_label": null,
-		"overwrite_button": null,
-		"card_minimum_height": 0.0,
-	}
+	}, true)
+
 	groups.append(group)
 	groups_by_id[group_id] = group
 	return group
@@ -397,37 +369,10 @@ func set_control_interval(group_id: int, seconds: float) -> bool:
 
 
 func episode_progress_summaries() -> Array[Dictionary]:
-	var summaries: Array[Dictionary] = []
-	for group: Dictionary in groups:
-		var workers: Array = group.get("workers", [])
-		var valid_instances = 0
-		var unfinished_instances = 0
-		var elapsed = 0.0
-		var duration = 0.0
-		for worker_value: Variant in workers:
-			if not (worker_value is Dictionary):
-				continue
-			var worker = worker_value as Dictionary
-			var turret = _worker_turret(worker)
-			if not is_instance_valid(turret):
-				continue
-			valid_instances += 1
-			if not bool(worker.get("finished", false)):
-				unfinished_instances += 1
-			elapsed = maxf(elapsed, float(worker.get("episode_elapsed", 0.0)))
-			duration = maxf(duration, float(worker.get("episode_duration", 0.0)))
-		summaries.append({
-			"group_id": int(group["group_id"]),
-			"name": str(group["name"]),
-			"active": bool(group.get("active", false)),
-			"episode": int(group.get("episode", 0)),
-			"elapsed": elapsed,
-			"duration": duration,
-			"instance_count": valid_instances,
-			"unfinished_instance_count": unfinished_instances,
-			"awaiting_respawn": bool(group.get("awaiting_respawn", false)),
-		})
-	return summaries
+	return TrainingCoordinatorGroupState.episode_progress_summaries(
+		groups,
+		Callable(self, "_worker_turret")
+	)
 
 
 func tick(
@@ -1782,8 +1727,7 @@ func _worker_spawn_transform(worker_index: int, worker_count: int, arena_size: V
 
 
 func _safe_control_interval(value: Variant) -> float:
-	return clampf(
-		RLTrainingMath.finite_float_or(value, DECISION_INTERVAL_SECONDS),
-		1.0 / 60.0,
-		0.5
+	return TrainingCoordinatorGroupState.safe_control_interval(
+		value,
+		DECISION_INTERVAL_SECONDS
 	)

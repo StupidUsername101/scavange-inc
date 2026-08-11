@@ -690,35 +690,16 @@ func _add_group_card(parent: VBoxContainer, group: Dictionary) -> void:
 	name_edit.focus_exited.connect(_on_group_name_focus_exited.bind(group_id))
 	name_edit.gui_input.connect(_on_group_name_gui_input.bind(group_id))
 	header.add_child(name_edit)
-	var candidate_evaluation_label = Label.new()
-	candidate_evaluation_label.custom_minimum_size.x = 86.0
-	candidate_evaluation_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	candidate_evaluation_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	candidate_evaluation_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	candidate_evaluation_label.clip_text = true
-	candidate_evaluation_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	candidate_evaluation_label.add_theme_color_override("font_color", Color("76ddff"))
-	candidate_evaluation_label.tooltip_text = "Fixed-seed evaluation\n\nShows frozen-candidate verification progress without replacing the preserved Best score."
-	candidate_evaluation_label.visible = false
-	header.add_child(candidate_evaluation_label)
-	var best_score_label = Label.new()
-	best_score_label.custom_minimum_size.x = 112.0
-	best_score_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	best_score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	best_score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	best_score_label.clip_text = true
-	best_score_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	best_score_label.add_theme_color_override("font_color", Color("54e6b1"))
-	best_score_label.tooltip_text = "Best fixed-seed evaluation\n\nShows the best policy that passed deterministic verification. Candidate evaluation is separate until promotion."
-	header.add_child(best_score_label)
-	var activity_label = Label.new()
-	activity_label.custom_minimum_size.x = 30.0
-	activity_label.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	activity_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	activity_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	activity_label.add_theme_color_override("font_color", group["color"])
-	activity_label.tooltip_text = "Group activity\n\nAnimated while the turret is running or its PPO model is optimizing."
-	header.add_child(activity_label)
+	var status_labels: Dictionary = DroneTrainingRoomPresentation.build_group_status_labels(
+		header,
+		group["color"],
+		"Fixed-seed evaluation\n\nShows frozen-candidate verification progress without replacing the preserved Best score.",
+		"Best fixed-seed evaluation\n\nShows the best policy that passed deterministic verification. Candidate evaluation is separate until promotion.",
+		"Group activity\n\nAnimated while the turret is running or its PPO model is optimizing."
+	)
+	var candidate_evaluation_label: Label = status_labels["candidate_evaluation_label"] as Label
+	var best_score_label: Label = status_labels["best_score_label"] as Label
+	var activity_label: Label = status_labels["activity_label"] as Label
 	var pause_button: Button = room._button("Ⅱ" if bool(group.get("active", false)) else "▶")
 	pause_button.custom_minimum_size = Vector2(34.0, 30.0)
 	pause_button.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
@@ -820,35 +801,16 @@ func begin_group_rename(group_id: int) -> bool:
 	if group_id != int(room.selected_turret_group_id):
 		return false
 	var group: Dictionary = training.group_by_id(group_id)
-	if group.is_empty():
+	var name_edit: LineEdit = TrainingGroupNameEditor.begin(group)
+	if name_edit == null:
 		return false
-	var name_edit = group.get("name_edit") as LineEdit
-	var select_button = group.get("card_button") as Button
-	if name_edit == null or select_button == null:
-		return false
-	name_edit.text = str(group["name"])
-	select_button.visible = false
-	name_edit.visible = true
-	name_edit.modulate.a = 1.0
-	name_edit.grab_focus()
-	name_edit.select_all()
 	room._blink_group_name_edit(name_edit)
 	return true
 
 
 func _cancel_group_rename(group_id: int) -> void:
 	var group: Dictionary = training.group_by_id(group_id)
-	if group.is_empty():
-		return
-	var name_edit = group.get("name_edit") as LineEdit
-	var select_button = group.get("card_button") as Button
-	if name_edit != null:
-		name_edit.text = str(group["name"])
-		name_edit.visible = false
-		name_edit.modulate.a = 1.0
-		name_edit.release_focus()
-	if select_button != null:
-		select_button.visible = true
+	TrainingGroupNameEditor.cancel(group)
 
 
 func _commit_group_name(group_id: int) -> void:
@@ -856,7 +818,6 @@ func _commit_group_name(group_id: int) -> void:
 	if group.is_empty():
 		return
 	var name_edit = group.get("name_edit") as LineEdit
-	var select_button = group.get("card_button") as Button
 	if name_edit == null or not name_edit.visible:
 		return
 	var requested_name: String = name_edit.text.strip_edges()
@@ -877,12 +838,7 @@ func _commit_group_name(group_id: int) -> void:
 		# A rolling saved version keeps its original manifest identity. Force the next save
 		# to create the newly named model instead of hiding it inside the old family.
 		group["rolling_version_id"] = ""
-	name_edit.text = new_name
-	name_edit.visible = false
-	name_edit.modulate.a = 1.0
-	name_edit.release_focus()
-	if select_button != null:
-		select_button.visible = true
+	TrainingGroupNameEditor.finish(group, new_name)
 	room.plots_dirty = true
 	if int(room.selected_turret_group_id) == group_id:
 		room.selected_group_title.text = new_name

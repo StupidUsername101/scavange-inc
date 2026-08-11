@@ -103,60 +103,28 @@ func create_group(
 	else:
 		group_definition = preset_body_template.duplicate_deep(Resource.DEEP_DUPLICATE_ALL) as FourLimbBodyDefinition
 	group_definition.ensure_contract()
-	var group = {
-		"group_id": group_id,
-		"body_type": "four_limb",
-		"name": group_name,
-		"color": color,
+	var group: Dictionary = TrainingCoordinatorGroupState.create(
+		group_id,
+		"four_limb",
+		group_name,
+		color,
+		worker_count,
+		MAXIMUM_WORKER_COUNT,
+		DECISION_INTERVAL_SECONDS
+	)
+	group.merge({
 		"body_definition": group_definition,
 		"body_revision": 0,
-		"parent_group_id": -1,
-		"branch_weight_variation": 0.0,
 		"source_description": "Fresh four-limb policy",
-		# Rolling saves are group-owned and enabled by default. A branch or loaded model
-		# starts a fresh chain so its source checkpoint is never overwritten.
-		"overwrite_saved_versions": true,
-		"rolling_version_id": "",
 		"trainer": FourLimbPPOTrainer.new(7340033 + group_id * 97, network_config),
 		"reward_deck": FourLimbRewardDeck.new(),
 		"reward_cardset_id": "builtin:limb_ground",
 		"reward_cardset_name": "Ground Locomotion",
-		"pending_reward_config": {},
-		"workers": [],
-		"worker_count": clampi(worker_count, 1, MAXIMUM_WORKER_COUNT),
-		"pending_worker_count": clampi(worker_count, 1, MAXIMUM_WORKER_COUNT),
-		"control_interval_seconds": DECISION_INTERVAL_SECONDS,
-		"active": false,
-		"episode": 0,
-		"last_mean_reward": 0.0,
-		"best_mean_reward": -INF,
-		"last_update": {},
-		"last_reward_state": {},
-		"optimizer_waiting": false,
-		"respawn_delay_remaining": 0.0,
-		"awaiting_respawn": false,
-		"history": DroneTrainingMetricsHistory.new(),
-		"card": null,
-		"card_button": null,
-		"pause_button": null,
-		"activity_label": null,
-		"candidate_evaluation_label": null,
-		"candidate_evaluation_queue_position": 0,
-		"candidate_evaluation_queue_ticket": 0,
-		"candidate_evaluation_queued_candidate_id": -1,
-		"candidate_evaluation_started_usec": 0,
-		"candidate_evaluation_subject": "",
-		"candidate_evaluation_last_result": {},
-		"best_score_label": null,
 		"worker_slider": null,
 		"worker_slider_dragging": false,
-		"worker_label": null,
 		"name_edit": null,
-		"reward_label": null,
-		"hardware_label": null,
-		"overwrite_button": null,
-		"card_minimum_height": 0.0,
-	}
+	}, true)
+
 	groups.append(group)
 	groups_by_id[group_id] = group
 	return group
@@ -388,37 +356,10 @@ func set_control_interval(group_id: int, seconds: float) -> bool:
 
 
 func episode_progress_summaries() -> Array[Dictionary]:
-	var summaries: Array[Dictionary] = []
-	for group: Dictionary in groups:
-		var workers: Array = group.get("workers", [])
-		var valid_instances = 0
-		var unfinished_instances = 0
-		var elapsed = 0.0
-		var duration = 0.0
-		for worker_value: Variant in workers:
-			if not (worker_value is Dictionary):
-				continue
-			var worker: Dictionary = worker_value
-			var body = _worker_body(worker)
-			if not is_instance_valid(body):
-				continue
-			valid_instances += 1
-			if not bool(worker.get("finished", false)):
-				unfinished_instances += 1
-			elapsed = maxf(elapsed, float(worker.get("episode_elapsed", 0.0)))
-			duration = maxf(duration, float(worker.get("episode_duration", 0.0)))
-		summaries.append({
-			"group_id": int(group["group_id"]),
-			"name": str(group["name"]),
-			"active": bool(group.get("active", false)),
-			"episode": int(group.get("episode", 0)),
-			"elapsed": elapsed,
-			"duration": duration,
-			"instance_count": valid_instances,
-			"unfinished_instance_count": unfinished_instances,
-			"awaiting_respawn": bool(group.get("awaiting_respawn", false)),
-		})
-	return summaries
+	return TrainingCoordinatorGroupState.episode_progress_summaries(
+		groups,
+		Callable(self, "_worker_body")
+	)
 
 
 func tick(
@@ -1598,48 +1539,18 @@ static func _reward_context(
 	worker: Dictionary,
 	observation: Dictionary = {}
 ) -> Dictionary:
-	var pickup_item = worker.get("pickup_item") as TrainingItem3D
+	var pickup_item: TrainingItem3D = worker.get("pickup_item") as TrainingItem3D
 	var objective: Dictionary = observation.get("objective", {})
-	return {
+	var result: Dictionary = {
 		"action_change_norm": float(worker.get("action_change_pending", 0.0)),
 		"combat_events": worker.get("combat_events", {}),
-		"turret_threat_probe": objective.get("turret_threat_probe", {}),
-		"assigned_pickup_item_id": (
-			pickup_item.get_instance_id() if is_instance_valid(pickup_item) else 0
-		),
-		"pickup_item_reward_value": (
-			pickup_item.reward_value if is_instance_valid(pickup_item) else 0.0
-		),
-		"delivery_destination_present": bool(objective.get("delivery_destination_present", false)),
-		"delivery_destination_group_id": maxi(
-			RLTrainingMath.finite_int_or(objective.get("delivery_destination_group_id", 0), 0),
-			0
-		),
-		"delivery_destination_stable_id": str(objective.get("delivery_destination_stable_id", "")),
-		"delivery_destination_distance_m": maxf(
-			RLTrainingMath.finite_float_or(objective.get("delivery_destination_distance_m", 0.0), 0.0),
-			0.0
-		),
-		"delivery_item_held": bool(objective.get("delivery_item_held", false)),
-		"delivery_item_accepted": bool(objective.get("delivery_item_accepted", false)),
-		"delivery_item_inside": bool(objective.get("delivery_item_inside", false)),
-		"delivery_item_instance_id": maxi(
-			RLTrainingMath.finite_int_or(objective.get("delivery_item_instance_id", 0), 0),
-			0
-		),
-		"delivery_item_reward_value": maxf(
-			RLTrainingMath.finite_float_or(objective.get("delivery_item_reward_value", 0.0), 0.0),
-			0.0
-		),
-		"delivery_approach_reward_scale": maxf(
-			RLTrainingMath.finite_float_or(objective.get("delivery_approach_reward_scale", 1.0), 1.0),
-			0.0
-		),
-		"delivery_completion_reward_scale": maxf(
-			RLTrainingMath.finite_float_or(objective.get("delivery_completion_reward_scale", 1.0), 1.0),
-			0.0
-		),
 	}
+	result.merge(FourLimbRewardContext.task_fields(
+		objective,
+		pickup_item.get_instance_id() if is_instance_valid(pickup_item) else 0,
+		pickup_item.reward_value if is_instance_valid(pickup_item) else 0.0
+	), true)
+	return result
 
 
 func _capture_worker_observation(
@@ -1927,8 +1838,7 @@ func _command_change_norm(
 
 
 func _safe_control_interval(value: Variant) -> float:
-	return clampf(
-		RLTrainingMath.finite_float_or(value, DECISION_INTERVAL_SECONDS),
-		1.0 / 60.0,
-		0.5
+	return TrainingCoordinatorGroupState.safe_control_interval(
+		value,
+		DECISION_INTERVAL_SECONDS
 	)

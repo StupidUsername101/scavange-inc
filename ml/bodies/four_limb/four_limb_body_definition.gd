@@ -210,71 +210,71 @@ func to_dictionary() -> Dictionary:
 
 
 func apply_dictionary(data: Dictionary) -> void:
-	core_size = _vector3_from_value(data.get("core_size", []), core_size)
+	core_size = SafeVariant.vector3_or(data.get("core_size", []), core_size)
 	core_size = Vector3(
 		maxf(core_size.x, 0.1),
 		maxf(core_size.y, 0.1),
 		maxf(core_size.z, 0.1)
 	)
-	core_mass = maxf(_finite_float_or(data.get("core_mass"), core_mass), 0.1)
+	core_mass = maxf(SafeVariant.finite_float_or(data.get("core_mass"), core_mass), 0.1)
 	core_maximum_health = maxf(
-		_finite_float_or(data.get("core_maximum_health"), core_maximum_health),
+		SafeVariant.finite_float_or(data.get("core_maximum_health"), core_maximum_health),
 		0.1
 	)
-	friction = clampf(_finite_float_or(data.get("friction"), friction), 0.0, 1.0)
-	bounce = clampf(_finite_float_or(data.get("bounce"), bounce), 0.0, 1.0)
-	linear_damp = maxf(_finite_float_or(data.get("linear_damp"), linear_damp), 0.0)
-	angular_damp = maxf(_finite_float_or(data.get("angular_damp"), angular_damp), 0.0)
-	hip_stiffness = maxf(_finite_float_or(data.get("hip_stiffness"), hip_stiffness), 0.0)
-	hip_damping = maxf(_finite_float_or(data.get("hip_damping"), hip_damping), 0.0)
+	friction = clampf(SafeVariant.finite_float_or(data.get("friction"), friction), 0.0, 1.0)
+	bounce = clampf(SafeVariant.finite_float_or(data.get("bounce"), bounce), 0.0, 1.0)
+	linear_damp = maxf(SafeVariant.finite_float_or(data.get("linear_damp"), linear_damp), 0.0)
+	angular_damp = maxf(SafeVariant.finite_float_or(data.get("angular_damp"), angular_damp), 0.0)
+	hip_stiffness = maxf(SafeVariant.finite_float_or(data.get("hip_stiffness"), hip_stiffness), 0.0)
+	hip_damping = maxf(SafeVariant.finite_float_or(data.get("hip_damping"), hip_damping), 0.0)
 	maximum_hip_torque = maxf(
-		_finite_float_or(data.get("maximum_hip_torque"), maximum_hip_torque),
+		SafeVariant.finite_float_or(data.get("maximum_hip_torque"), maximum_hip_torque),
 		0.0
 	)
 	hip_horizontal_response_degrees_per_second = maxf(
-		_finite_float_or(
+		SafeVariant.finite_float_or(
 			data.get("hip_horizontal_response_degrees_per_second"),
 			SAFE_HIP_HORIZONTAL_RESPONSE_DEGREES_PER_SECOND
 		),
 		0.0
 	)
-	knee_stiffness = maxf(_finite_float_or(data.get("knee_stiffness"), knee_stiffness), 0.0)
-	knee_damping = maxf(_finite_float_or(data.get("knee_damping"), knee_damping), 0.0)
+	knee_stiffness = maxf(SafeVariant.finite_float_or(data.get("knee_stiffness"), knee_stiffness), 0.0)
+	knee_damping = maxf(SafeVariant.finite_float_or(data.get("knee_damping"), knee_damping), 0.0)
 	maximum_knee_torque = maxf(
-		_finite_float_or(data.get("maximum_knee_torque"), maximum_knee_torque),
+		SafeVariant.finite_float_or(data.get("maximum_knee_torque"), maximum_knee_torque),
 		0.0
 	)
 	joint_limit_soft_zone_degrees = clampf(
-		_finite_float_or(data.get("joint_limit_soft_zone_degrees"), joint_limit_soft_zone_degrees),
+		SafeVariant.finite_float_or(data.get("joint_limit_soft_zone_degrees"), joint_limit_soft_zone_degrees),
 		0.0,
 		45.0
 	)
 	joint_limit_stiffness = maxf(
-		_finite_float_or(data.get("joint_limit_stiffness"), joint_limit_stiffness),
+		SafeVariant.finite_float_or(data.get("joint_limit_stiffness"), joint_limit_stiffness),
 		0.0
 	)
 	joint_limit_damping = maxf(
-		_finite_float_or(data.get("joint_limit_damping"), joint_limit_damping),
+		SafeVariant.finite_float_or(data.get("joint_limit_damping"), joint_limit_damping),
 		0.0
 	)
 	maximum_joint_limit_torque = maxf(
-		_finite_float_or(data.get("maximum_joint_limit_torque"), maximum_joint_limit_torque),
+		SafeVariant.finite_float_or(data.get("maximum_joint_limit_torque"), maximum_joint_limit_torque),
 		0.0
 	)
 	passive_joint_stiffness = maxf(
-		_finite_float_or(data.get("passive_joint_stiffness"), passive_joint_stiffness),
+		SafeVariant.finite_float_or(data.get("passive_joint_stiffness"), passive_joint_stiffness),
 		0.0
 	)
 	passive_joint_damping = maxf(
-		_finite_float_or(data.get("passive_joint_damping"), passive_joint_damping),
+		SafeVariant.finite_float_or(data.get("passive_joint_damping"), passive_joint_damping),
 		0.0
 	)
 	maximum_passive_joint_torque = maxf(
-		_finite_float_or(data.get("maximum_passive_joint_torque"), maximum_passive_joint_torque),
+		SafeVariant.finite_float_or(data.get("maximum_passive_joint_torque"), maximum_passive_joint_torque),
 		0.0
 	)
 	passive_joint_progressive_onset_ratio = clampf(
-		_finite_float_or(
+		SafeVariant.finite_float_or(
 			data.get("passive_joint_progressive_onset_ratio"),
 			passive_joint_progressive_onset_ratio
 		),
@@ -282,14 +282,14 @@ func apply_dictionary(data: Dictionary) -> void:
 		0.95
 	)
 	passive_joint_progressive_ratio = maxf(
-		_finite_float_or(
+		SafeVariant.finite_float_or(
 			data.get("passive_joint_progressive_ratio"),
 			passive_joint_progressive_ratio
 		),
 		0.0
 	)
 	passive_joint_native_fraction = clampf(
-		_finite_float_or(
+		SafeVariant.finite_float_or(
 			data.get("passive_joint_native_fraction"),
 			passive_joint_native_fraction
 		),
@@ -406,27 +406,6 @@ static func _dictionary_has_keys(data: Dictionary, required_keys: Array[String])
 		if not data.has(required_key):
 			return false
 	return true
-
-
-static func _vector3_from_value(value: Variant, fallback: Vector3) -> Vector3:
-	if value is Vector3:
-		return value if (value as Vector3).is_finite() else fallback
-	if value is Array and value.size() >= 3:
-		var result = Vector3(
-			_finite_float_or(value[0], fallback.x),
-			_finite_float_or(value[1], fallback.y),
-			_finite_float_or(value[2], fallback.z)
-		)
-		return result if result.is_finite() else fallback
-	return fallback
-
-
-static func _finite_float_or(value: Variant, fallback: float) -> float:
-	if value is float or value is int:
-		var numeric_value: float = float(value)
-		if is_finite(numeric_value):
-			return numeric_value
-	return fallback
 
 
 func hardware_signature() -> String:

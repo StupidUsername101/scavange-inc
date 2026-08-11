@@ -1366,18 +1366,14 @@ func _selected_reward_cardset() -> Dictionary:
 		return {}
 	var cardset_id: String = str(reward_cardset_picker.get_item_metadata(reward_cardset_picker.selected))
 	var value: Variant = reward_cardsets.get(cardset_id, {})
-	return (value as Dictionary).duplicate(true) if value is Dictionary else {}
+	return SafeVariant.dictionary_copy(value)
 
 
 func _training_request() -> Dictionary:
 	var algorithm_id: String = _selected_algorithm_id()
 	var reward_cardset: Dictionary = _selected_reward_cardset()
 	var reward_cards_value: Variant = reward_cardset.get("cards", {})
-	var reward_cards: Dictionary = (
-		(reward_cards_value as Dictionary).duplicate(true)
-		if reward_cards_value is Dictionary
-		else {}
-	)
+	var reward_cards: Dictionary = SafeVariant.dictionary_copy(reward_cards_value)
 	return {
 		"algorithm_id": algorithm_id,
 		"hidden_layer_width": int(round(hidden_width_input.value)),

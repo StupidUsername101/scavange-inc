@@ -250,32 +250,18 @@ func _process(delta: float) -> void:
 			return
 
 	time_since_last_state += delta
-	var extrapolation_time := minf(
+	ClientProxyMotion.apply_smoothed_motion(
+		self,
+		delta,
 		time_since_last_state,
-		MAX_EXTRAPOLATION_TIME
+		target_position,
+		target_rotation,
+		target_linear_velocity,
+		target_angular_velocity,
+		MAX_EXTRAPOLATION_TIME,
+		INTERP_SPEED,
+		MINIMUM_ANGULAR_SPEED
 	)
-	var predicted_position := (
-		target_position
-		+ target_linear_velocity * extrapolation_time
-	)
-	var predicted_rotation := target_rotation
-	var angular_speed := target_angular_velocity.length()
-	if angular_speed > MINIMUM_ANGULAR_SPEED:
-		predicted_rotation = (
-			Quaternion(
-				target_angular_velocity / angular_speed,
-				angular_speed * extrapolation_time
-			)
-			* target_rotation
-		)
-
-	var weight := clampf(INTERP_SPEED * delta, 0.0, 1.0)
-	global_position += target_linear_velocity * delta
-	global_position = global_position.lerp(predicted_position, weight)
-
-	var current_rotation := global_basis.get_rotation_quaternion()
-	global_basis = Basis(current_rotation.slerp(predicted_rotation, weight))
-
 
 func _update_propeller_visuals(delta: float) -> void:
 	var speed := MAX_ROTOR_VISUAL_SPEED * sqrt(clampf(

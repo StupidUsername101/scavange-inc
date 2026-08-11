@@ -95,7 +95,7 @@ func configure(
 	# pending_evaluation_candidate() already returned a detached snapshot, so this job may own
 	# its plan directly instead of recursively copying 30 case dictionaries a second time.
 	plan = candidate.get("evaluation_plan", {}) as Dictionary
-	evaluation_contract = (candidate.get("evaluation_contract", {}) as Dictionary).duplicate(true)
+	evaluation_contract = SafeVariant.dictionary_copy(candidate.get("evaluation_contract", {}))
 	evaluation_contract_hash = str(candidate.get("evaluation_contract_hash", ""))
 	if (
 		not RLEvaluationContract.is_valid(evaluation_contract, "drone")
@@ -104,11 +104,11 @@ func configure(
 		last_error = "candidate has no valid frozen drone evaluation contract"
 		return false
 	var environment: Dictionary = evaluation_contract.get("environment", {})
-	target_handler_configuration = (environment.get("target_handler", target_configuration) as Dictionary).duplicate(true)
-	reward_cards = (environment.get("reward_cards", candidate_reward_cards) as Dictionary).duplicate(true)
+	target_handler_configuration = SafeVariant.dictionary_copy(environment.get("target_handler", target_configuration))
+	reward_cards = SafeVariant.dictionary_copy(environment.get("reward_cards", candidate_reward_cards))
 	var termination_value: Variant = environment.get("episode_termination", {})
 	episode_termination_options = (
-		(termination_value as Dictionary).duplicate(true)
+		SafeVariant.dictionary_copy(termination_value)
 		if termination_value is Dictionary
 		else {}
 	)
@@ -121,8 +121,8 @@ func configure(
 		if not hardware_record.is_empty()
 		else null
 	)
-	spawn_position = _vector3_from_record(environment.get("spawn_position_m", []), spawn_position_world)
-	arena_size = _vector3_from_record(environment.get("arena_size_m", []), arena_size_world)
+	spawn_position = SafeVariant.vector3_strict_or(environment.get("spawn_position_m", []), spawn_position_world)
+	arena_size = SafeVariant.vector3_strict_or(environment.get("arena_size_m", []), arena_size_world)
 	collision_layer_value = collision_layer
 	# Candidate physics are isolated from live editable walls. The evaluator constructs its
 	# own floor and scenario geometry on a private layer, so room edits cannot redefine Best.
@@ -496,13 +496,6 @@ func _configure_case_target(scenario_id: String, case_seed: int) -> void:
 			path_system.set_behavior(0)
 
 
-func _vector3_from_record(value: Variant, fallback: Vector3) -> Vector3:
-	if value is Array and (value as Array).size() >= 3:
-		var values: Array = value as Array
-		return Vector3(float(values[0]), float(values[1]), float(values[2]))
-	return fallback
-
-
 func _build_case_environment(scenario_id: String, case_seed: int) -> bool:
 	if not supports_scenario_id(scenario_id):
 		return false
@@ -562,31 +555,19 @@ func _build_corridor_course(case_seed: int) -> void:
 
 
 func _build_turret_exposure(case_seed: int) -> bool:
-	var threat_loadout: TurretLoadout = MLBodyPresetLibrary.stationary_turret_loadout()
-	if threat_loadout == null or not threat_loadout.ensure_contract():
-		last_error = "drone evaluator could not load the stationary threat-turret preset"
-		return false
-	var threat_runtime_loadout: TurretLoadout = (
-		MLBodyPartContract.deep_duplicate_resource(threat_loadout) as TurretLoadout
-	)
-	if threat_runtime_loadout == null or not threat_runtime_loadout.ensure_contract():
-		last_error = "drone evaluator could not duplicate the stationary threat-turret preset"
-		return false
-	evaluation_turret = TurretPhysicalBody3D.new()
-	evaluation_turret.name = "CandidateEvaluationThreatTurret"
-	evaluation_turret.loadout = threat_runtime_loadout
-	evaluation_turret.auto_start_active = true
-	evaluation_turret.training_invulnerable = true
-	evaluation_turret.visible = false
-	add_child(evaluation_turret)
 	var turret_position: Vector3 = Vector3(5.5, 0.0, -5.0)
-	if not evaluation_turret.reset_body(
-		Transform3D(Basis.IDENTITY, turret_position),
+	var build_result: Dictionary = TrainingEvaluationTurretSupport.create_hidden_threat_turret(
+		self,
+		"CandidateEvaluationThreatTurret",
+		turret_position,
 		case_seed + 70001
-	):
-		last_error = "drone evaluator threat turret could not initialize its accepted body"
-		evaluation_turret.queue_free()
-		evaluation_turret = null
+	)
+	evaluation_turret = build_result.get("turret") as TurretPhysicalBody3D
+	if evaluation_turret == null:
+		last_error = "drone evaluator %s" % str(build_result.get(
+			"error",
+			"could not create its threat turret"
+		))
 		return false
 	evaluation_turret_adapter = TurretTrainingCombatantAdapter.new(
 		evaluation_turret,
@@ -595,16 +576,18 @@ func _build_turret_exposure(case_seed: int) -> bool:
 		0,
 		2
 	)
-	scenario_entity_spatial_hash.register_entity(
-		evaluation_turret_adapter.spatial_key(),
-		evaluation_turret,
-		evaluation_turret_adapter.entity_kind,
-		evaluation_turret_adapter.entity_id,
-		evaluation_turret_adapter.metadata()
-	)
 	var shot_callable: Callable = _on_evaluation_turret_shot_requested
-	if not evaluation_turret.shot_requested.is_connected(shot_callable):
-		evaluation_turret.shot_requested.connect(shot_callable)
+	if not TrainingEvaluationTurretSupport.register_hidden_threat_turret(
+		evaluation_turret,
+		evaluation_turret_adapter,
+		scenario_entity_spatial_hash,
+		shot_callable
+	):
+		evaluation_turret.queue_free()
+		evaluation_turret = null
+		evaluation_turret_adapter = null
+		last_error = "could not register the evaluation threat turret"
+		return false
 	return true
 
 
@@ -632,37 +615,21 @@ func _register_evaluation_drone_combatant() -> void:
 func _update_evaluation_turret_aim() -> void:
 	if not is_instance_valid(evaluation_turret) or not is_instance_valid(drone):
 		return
-	var direction_world: Vector3 = drone.global_position - evaluation_turret.global_position
-	if direction_world.length_squared() <= 0.000001:
-		return
-	var local_direction: Vector3 = evaluation_turret.global_basis.inverse() * direction_world.normalized()
-	var horizontal: float = sqrt(local_direction.x * local_direction.x + local_direction.z * local_direction.z)
-	evaluation_turret.yaw_angle_radians = atan2(-local_direction.x, -local_direction.z)
-	evaluation_turret.pitch_angle_radians = clampf(
-		atan2(local_direction.y, maxf(horizontal, 0.000001)),
-		deg_to_rad(evaluation_turret.loadout.gun.minimum_pitch_degrees),
-		deg_to_rad(evaluation_turret.loadout.gun.maximum_pitch_degrees)
-	)
-	evaluation_turret.yaw_velocity_radians_per_second = 0.0
-	evaluation_turret.pitch_velocity_radians_per_second = 0.0
-	evaluation_turret._apply_joint_transforms()
-	evaluation_turret.submit_manual_controls(0.0, 0.0, 1.0)
+	TrainingEvaluationTurretSupport.aim_and_fire(evaluation_turret, drone.global_position)
 
 
 func _on_evaluation_turret_shot_requested(request: Dictionary) -> void:
 	if evaluation_turret_adapter == null:
 		return
-	var projectile: TurretTrainingProjectile3D = TurretTrainingProjectile3D.new()
-	add_child(projectile)
-	if not projectile.configure(
+	var projectile: TurretTrainingProjectile3D = TrainingEvaluationTurretSupport.create_hidden_projectile(
+		self,
 		request,
 		evaluation_turret_adapter,
 		scenario_entity_spatial_hash,
 		scenario_wall_spatial_hash
-	):
-		projectile.queue_free()
+	)
+	if projectile == null:
 		return
-	projectile.visible = false
 	evaluation_projectiles.append(projectile)
 
 

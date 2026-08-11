@@ -12,6 +12,36 @@ static func pending_candidate_id(candidate: Dictionary) -> int:
 	return RLTrainingMath.finite_int_or(candidate.get("candidate_id", -1), -1)
 
 
+static func evaluation_job_progress(
+	status: String,
+	group_id: int,
+	candidate_id: int,
+	plan: Dictionary,
+	records: Array[Dictionary],
+	case_index: int,
+	current_case: Dictionary,
+	case_elapsed_seconds: float,
+	case_duration_seconds: float,
+	restart_count: int,
+	last_error: String
+) -> Dictionary:
+	var cases_value: Variant = plan.get("cases", [])
+	var total_cases: int = (cases_value as Array).size() if cases_value is Array else 0
+	return {
+		"status": status,
+		"group_id": group_id,
+		"candidate_id": candidate_id,
+		"completed_cases": records.size(),
+		"current_case_number": mini(case_index + 1, total_cases),
+		"total_cases": total_cases,
+		"scenario_id": str(current_case.get("scenario_id", "")),
+		"case_elapsed_seconds": case_elapsed_seconds,
+		"case_duration_seconds": case_duration_seconds,
+		"restart_count": restart_count,
+		"last_error": last_error,
+	}
+
+
 static func is_resumable_candidate(
 	candidate: Dictionary,
 	candidate_network_state: Dictionary,

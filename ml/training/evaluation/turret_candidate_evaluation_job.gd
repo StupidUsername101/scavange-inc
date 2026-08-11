@@ -82,8 +82,8 @@ func configure(
 	group_id = new_group_id
 	candidate_id = RLTrainingMath.finite_int_or(candidate.get("candidate_id", -1), -1)
 	candidate_hash = str(candidate.get("candidate_hash", ""))
-	plan = (candidate.get("evaluation_plan", {}) as Dictionary).duplicate(true)
-	evaluation_contract = (candidate.get("evaluation_contract", {}) as Dictionary).duplicate(true)
+	plan = SafeVariant.dictionary_copy(candidate.get("evaluation_plan", {}))
+	evaluation_contract = SafeVariant.dictionary_copy(candidate.get("evaluation_contract", {}))
 	evaluation_contract_hash = str(candidate.get("evaluation_contract_hash", ""))
 	environment_revision = initial_environment_revision
 	candidate_checkpoint = checkpoint.duplicate(true)
@@ -303,20 +303,19 @@ func restart_for_environment(new_environment_revision: int) -> void:
 
 
 func progress() -> Dictionary:
-	var total_cases: int = (plan.get("cases", []) as Array).size()
-	return {
-		"status": status,
-		"group_id": group_id,
-		"candidate_id": candidate_id,
-		"completed_cases": records.size(),
-		"current_case_number": mini(case_index + 1, total_cases),
-		"total_cases": total_cases,
-		"scenario_id": str(current_case.get("scenario_id", "")),
-		"case_elapsed_seconds": case_elapsed_seconds,
-		"case_duration_seconds": case_duration_seconds,
-		"restart_count": restart_count,
-		"last_error": last_error,
-	}
+	return RLTrainingCandidateSupport.evaluation_job_progress(
+		status,
+		group_id,
+		candidate_id,
+		plan,
+		records,
+		case_index,
+		current_case,
+		case_elapsed_seconds,
+		case_duration_seconds,
+		restart_count,
+		last_error
+	)
 
 
 func shutdown() -> void:
