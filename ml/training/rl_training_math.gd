@@ -71,6 +71,26 @@ static func half_life_seconds(
 	return log(0.5) / log(discount) * reference
 
 
+static func packed_all_finite(values: PackedFloat64Array) -> bool:
+	for value: float in values:
+		if not is_finite(value):
+			return false
+	return true
+
+
+static func packed_all_in_range(
+	values: PackedFloat64Array,
+	minimum: float,
+	maximum: float
+) -> bool:
+	if minimum > maximum:
+		return false
+	for value: float in values:
+		if not is_finite(value) or value < minimum or value > maximum:
+			return false
+	return true
+
+
 static func finite_statistics(values: PackedFloat64Array) -> Dictionary:
 	var count = 0
 	var total = 0.0
@@ -149,12 +169,7 @@ static func bounded_command_diagnostics(
 		var commands: PackedFloat64Array = transition.get("commands", PackedFloat64Array())
 		if commands.size() != action_count:
 			continue
-		var finite = true
-		for command in commands:
-			if not is_finite(command):
-				finite = false
-				break
-		if not finite:
+		if not packed_all_finite(commands):
 			continue
 		var worker_id = int(transition.get("worker_id", 0))
 		var delta_seconds = maxf(

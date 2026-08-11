@@ -102,22 +102,9 @@ func config_values() -> Dictionary:
 
 
 func configuration_controls() -> Array[Dictionary]:
-	var controls: Array[Dictionary] = [
-		{"key": "learning_rate", "title": "Learning rate", "minimum": 0.000001, "maximum": 0.01, "step": 0.000001, "tooltip": "Adam learning rate used by both actor and critic."},
-		{"key": "gamma", "title": "Discount factor", "minimum": 0.90, "maximum": 1.0, "step": 0.001, "tooltip": "How strongly future reward contributes to the current update."},
-		{"key": "gae_lambda", "title": "GAE lambda", "minimum": 0.0, "maximum": 1.0, "step": 0.01, "tooltip": "Bias/variance balance for generalized advantage estimation."},
-		{"key": "clip_range", "title": "PPO clip range", "minimum": 0.01, "maximum": 0.5, "step": 0.01, "tooltip": "Maximum trusted policy-ratio change per PPO update."},
-		{"key": "entropy_coefficient", "title": "Exploration strength", "minimum": 0.0, "maximum": 0.1, "step": 0.0005, "tooltip": "Regularizes the Gaussian policy before tanh squashes it into physical turret commands. This is latent-policy entropy, not literal servo-command entropy."},
-		{"key": "value_coefficient", "title": "Value loss weight", "minimum": 0.0, "maximum": 2.0, "step": 0.01, "tooltip": "Relative critic-loss weight."},
-		{"key": "maximum_gradient_norm", "title": "Maximum gradient norm", "minimum": 0.0, "maximum": 10.0, "step": 0.05, "tooltip": "Gradient clipping threshold used to limit unstable updates."},
-		{"key": "rollout_size", "title": "Rollout transitions", "minimum": 64.0, "maximum": 4096.0, "step": 64.0, "integer": true, "tooltip": "Transitions collected before a normal background PPO update starts."},
-		{"key": "minimum_update_transitions", "title": "Minimum partial update", "minimum": 16.0, "maximum": 1024.0, "step": 16.0, "integer": true, "tooltip": "Smallest rollout accepted for a forced partial update at an episode boundary."},
-		{"key": "epochs", "title": "PPO epochs", "minimum": 1.0, "maximum": 16.0, "step": 1.0, "integer": true, "tooltip": "Number of optimization passes over each detached rollout."},
-		{"key": "batch_size", "title": "Minibatch size", "minimum": 16.0, "maximum": 512.0, "step": 16.0, "integer": true, "tooltip": "Samples processed before each optimizer step."},
-		{"key": "target_kl", "title": "Target KL", "minimum": 0.0, "maximum": 0.2, "step": 0.001, "tooltip": "Stops an update early when the policy moves too far from the behavior policy."},
-	]
-	return controls
-
+	return PPOTrainingConfigSupport.body_configuration_controls(
+		"physical turret commands"
+	)
 
 func set_config_value(key: String, value: Variant) -> bool:
 	last_error = ""
@@ -283,8 +270,8 @@ func add_transition(
 		or commands.size() != TurretMLAction.ACTION_COUNT
 		or not TurretMLFeatureEncoder.is_normalized(actor_input)
 		or not TurretMLFeatureEncoder.is_normalized(critic_input)
-		or not _finite_packed(latent_action)
-		or not _normalized_packed(commands)
+		or not RLTrainingMath.packed_all_finite(latent_action)
+		or not RLTrainingMath.packed_all_in_range(commands, -1.000001, 1.000001)
 		or not is_finite(old_log_probability)
 		or not is_finite(old_value)
 		or not is_finite(next_value)
@@ -808,26 +795,12 @@ func evaluation_contract() -> Dictionary:
 func best_selection_summary() -> Dictionary:
 	if not has_best_checkpoint():
 		return {}
-	var summary = promoted_training_summary.duplicate(true)
-	if summary.is_empty():
-		return {
-			"selection_score": best_episode_score if is_finite(best_episode_score) else 0.0,
-			"selection_method": "legacy_training_candidate_unverified",
-			"evaluation_verified": false,
-			"exact_policy_match": false,
-		}
-	summary["training_selection_score"] = RLTrainingMath.finite_float_or(
-		summary.get("selection_score", 0.0), 0.0
+	return RLTrainingCandidateSupport.best_selection_summary(
+		promoted_training_summary,
+		best_evaluation,
+		best_episode_score,
+		false
 	)
-	summary["selection_score"] = RLTrainingMath.finite_float_or(
-		best_evaluation.get("selection_score", summary.get("selection_score", 0.0)),
-		RLTrainingMath.finite_float_or(summary.get("selection_score", 0.0), 0.0)
-	)
-	summary["selection_method"] = "deterministic_fixed_seed_suite_v2"
-	summary["evaluation_verified"] = not best_evaluation.is_empty()
-	summary["evaluation"] = best_evaluation.duplicate(true)
-	return summary
-
 
 func candidate_checkpoint(
 	hardware_signature: String,
@@ -847,11 +820,10 @@ func pending_evaluation_candidate() -> Dictionary:
 
 
 func pending_evaluation_candidate_id() -> int:
-	return RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1)
-
+	return RLTrainingCandidateSupport.pending_candidate_id(pending_candidate)
 
 func discard_pending_evaluation_candidate(candidate_id: int) -> bool:
-	if RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) != candidate_id:
+	if RLTrainingCandidateSupport.pending_candidate_id(pending_candidate) != candidate_id:
 		return false
 	pending_candidate.clear()
 	candidate_network_state.clear()
@@ -859,37 +831,39 @@ func discard_pending_evaluation_candidate(candidate_id: int) -> bool:
 	candidate_nomination_score = -INF
 	return true
 
-
-func record_deterministic_evaluation(candidate_id: int, evaluation_summary: Dictionary) -> Dictionary:
-	if RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) != candidate_id:
-		return {"promoted": false, "reason": "candidate_id_mismatch"}
-	if candidate_network_state.is_empty():
-		return {"promoted": false, "reason": "missing_candidate_network"}
-	var expected_hash = str(pending_candidate.get("candidate_hash", ""))
-	if (
-		expected_hash.is_empty()
-		or expected_hash != RLDeterministicEvaluator.candidate_hash(candidate_network_state)
-	):
-		return {"promoted": false, "reason": "candidate_network_hash_mismatch"}
-	var evaluation_plan: Dictionary = pending_candidate.get("evaluation_plan", {})
-	var validation = RLDeterministicEvaluationSuite.validate_summary_for_plan(
-		evaluation_plan,
+func record_deterministic_evaluation(
+	candidate_id: int,
+	evaluation_summary: Dictionary
+) -> Dictionary:
+	var evaluation_result: Dictionary = RLTrainingCandidateSupport.evaluate_candidate_summary(
+		pending_candidate,
+		candidate_network_state,
+		candidate_id,
 		evaluation_summary,
-		expected_hash
+		best_evaluation
 	)
-	if not bool(validation.get("valid", false)):
+	if not bool(evaluation_result.get("valid", false)):
 		return {
 			"promoted": false,
-			"reason": str(validation.get("reason", "invalid_evaluation_summary")),
+			"reason": str(evaluation_result.get("reason", "invalid_evaluation_summary")),
 		}
-	var verified_summary = evaluation_summary.duplicate(true)
-	verified_summary["candidate_hash"] = expected_hash
-	var decision = RLDeterministicEvaluator.promotion_decision(verified_summary, best_evaluation)
-	if bool(decision.get("promote", false)):
+	var promoted: bool = bool(evaluation_result.get("promoted", false))
+	var expected_hash: String = str(evaluation_result.get("candidate_hash", ""))
+	var verified_summary: Dictionary = (
+		(evaluation_result.get("evaluation", {}) as Dictionary).duplicate(true)
+		if evaluation_result.get("evaluation", {}) is Dictionary
+		else {}
+	)
+	if promoted:
 		best_network_state = candidate_network_state.duplicate(true)
 		promoted_training_summary = candidate_training_summary.duplicate(true)
-		best_evaluation = verified_summary
-		best_evaluation_contract = (pending_candidate.get("evaluation_contract", {}) as Dictionary).duplicate(true)
+		best_evaluation = verified_summary.duplicate(true)
+		var contract_value: Variant = pending_candidate.get("evaluation_contract", {})
+		best_evaluation_contract = (
+			(contract_value as Dictionary).duplicate(true)
+			if contract_value is Dictionary
+			else {}
+		)
 		pending_promoted_candidate = best_selection_summary()
 		pending_promoted_candidate["candidate_id"] = candidate_id
 		pending_promoted_candidate["candidate_hash"] = expected_hash
@@ -899,79 +873,66 @@ func record_deterministic_evaluation(candidate_id: int, evaluation_summary: Dict
 	candidate_network_state.clear()
 	candidate_training_summary.clear()
 	return {
-		"promoted": bool(decision.get("promote", false)),
-		"reason": str(decision.get("reason", "unknown")),
+		"promoted": promoted,
+		"reason": str(evaluation_result.get("reason", "unknown")),
 		"evaluation": verified_summary,
 	}
-
 
 func record_deterministic_evaluation_records(
 	candidate_id: int,
 	records: Array[Dictionary]
 ) -> Dictionary:
-	if RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) != candidate_id:
-		return {"promoted": false, "reason": "candidate_id_mismatch"}
-	var plan: Dictionary = pending_candidate.get("evaluation_plan", {})
-	var candidate_hash = str(pending_candidate.get("candidate_hash", ""))
-	var summary = RLDeterministicEvaluationSuite.aggregate_complete_suite(
-		plan,
-		records,
-		candidate_hash
+	var aggregate_result: Dictionary = RLTrainingCandidateSupport.aggregate_candidate_records(
+		pending_candidate,
+		candidate_id,
+		records
 	)
-	if summary.is_empty():
+	if not bool(aggregate_result.get("valid", false)):
+		return {
+			"promoted": false,
+			"reason": str(aggregate_result.get("reason", "invalid_evaluation_records")),
+		}
+	var summary_value: Variant = aggregate_result.get("summary", {})
+	if not (summary_value is Dictionary):
 		return {"promoted": false, "reason": "invalid_evaluation_records"}
-	return record_deterministic_evaluation(candidate_id, summary)
-
+	return record_deterministic_evaluation(candidate_id, summary_value as Dictionary)
 
 func record_best_deterministic_evaluation_records(
 	evaluation_plan: Dictionary,
 	records: Array[Dictionary]
 ) -> Dictionary:
-	if best_network_state.is_empty():
-		return {"recorded": false, "reason": "missing_best_network"}
-	var best_hash: String = RLDeterministicEvaluator.candidate_hash(best_network_state)
-	var summary: Dictionary = RLDeterministicEvaluationSuite.aggregate_complete_suite(
+	var evaluation_result: Dictionary = RLTrainingCandidateSupport.evaluate_best_records(
+		best_network_state,
 		evaluation_plan,
 		records,
-		best_hash
+		pending_candidate,
+		evaluation_contract_template,
+		"turret"
 	)
-	if summary.is_empty():
-		return {"recorded": false, "reason": "invalid_best_evaluation_records"}
-	var validation: Dictionary = RLDeterministicEvaluationSuite.validate_summary_for_plan(
-		evaluation_plan,
-		summary,
-		best_hash
-	)
-	if not bool(validation.get("valid", false)):
+	if not bool(evaluation_result.get("recorded", false)):
 		return {
 			"recorded": false,
-			"reason": str(validation.get("reason", "invalid_best_evaluation")),
+			"reason": str(evaluation_result.get("reason", "invalid_best_evaluation")),
 		}
-	best_evaluation = summary.duplicate(true)
-	best_evaluation["candidate_hash"] = best_hash
-	# Best is commonly re-evaluated because a frozen pending Candidate introduced a new
-	# environment contract. The live group may change again while that hidden suite is queued,
-	# so provenance must come from the exact frozen contract whose hash appears in the plan.
-	var plan_contract_hash: String = str(evaluation_plan.get("evaluation_contract_hash", ""))
-	var pending_contract: Dictionary = pending_candidate.get("evaluation_contract", {})
-	if (
-		RLEvaluationContract.is_valid(pending_contract)
-		and str(pending_contract.get("contract_hash", "")) == plan_contract_hash
-	):
-		best_evaluation_contract = pending_contract.duplicate(true)
-	elif (
-		RLEvaluationContract.is_valid(evaluation_contract_template)
-		and str(evaluation_contract_template.get("contract_hash", "")) == plan_contract_hash
-	):
-		best_evaluation_contract = evaluation_contract_template.duplicate(true)
-	else:
-		best_evaluation_contract.clear()
+	var evaluation_value: Variant = evaluation_result.get("evaluation", {})
+	best_evaluation = (
+		(evaluation_value as Dictionary).duplicate(true)
+		if evaluation_value is Dictionary
+		else {}
+	)
+	var contract_value: Variant = evaluation_result.get("evaluation_contract", {})
+	best_evaluation_contract = (
+		(contract_value as Dictionary).duplicate(true)
+		if contract_value is Dictionary
+		else {}
+	)
 	return {
 		"recorded": true,
 		"reason": "best_re_evaluated",
-		"evaluation_contract_hash": str(summary.get("evaluation_contract_hash", "")),
+		"evaluation_contract_hash": str(
+			evaluation_result.get("evaluation_contract_hash", "")
+		),
 	}
-
 
 func best_evaluation_summary() -> Dictionary:
 	return best_evaluation.duplicate(true)
@@ -1117,33 +1078,18 @@ func load_checkpoint(checkpoint: Dictionary, expected_hardware_signature: String
 	# Pending candidates are resumable only when their frozen evaluation contract is present.
 	# Older checkpoints remain loadable, but their pre-contract pending candidate must not enter
 	# the fixed-seed queue under whatever room settings happen to be active after loading.
-	if not pending_candidate.is_empty():
-		var pending_contract_value: Variant = pending_candidate.get("evaluation_contract", {})
-		var pending_plan_value: Variant = pending_candidate.get("evaluation_plan", {})
-		var pending_contract: Dictionary = (
-			(pending_contract_value as Dictionary) if pending_contract_value is Dictionary else {}
+	if (
+		not pending_candidate.is_empty()
+		and not RLTrainingCandidateSupport.is_resumable_candidate(
+			pending_candidate,
+			candidate_network_state,
+			"turret"
 		)
-		var pending_plan: Dictionary = (
-			(pending_plan_value as Dictionary) if pending_plan_value is Dictionary else {}
-		)
-		var pending_contract_valid: bool = (
-			RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) >= 0
-			and not candidate_network_state.is_empty()
-			and not str(pending_candidate.get("candidate_hash", "")).is_empty()
-			and str(pending_candidate.get("candidate_hash", ""))
-				== RLDeterministicEvaluator.candidate_hash(candidate_network_state)
-			and RLEvaluationContract.is_valid(pending_contract, "turret")
-			and str(pending_candidate.get("evaluation_contract_hash", ""))
-				== str(pending_contract.get("contract_hash", ""))
-			and str(pending_plan.get("evaluation_contract_hash", ""))
-				== str(pending_contract.get("contract_hash", ""))
-			and RLDeterministicEvaluationSuite.is_valid_plan(pending_plan, "turret")
-		)
-		if not pending_contract_valid:
-			pending_candidate.clear()
-			candidate_network_state.clear()
-			candidate_training_summary.clear()
-			candidate_nomination_score = -INF
+	):
+		pending_candidate.clear()
+		candidate_network_state.clear()
+		candidate_training_summary.clear()
+		candidate_nomination_score = -INF
 
 	if best_network_state.is_empty():
 		best_evaluation.clear()
@@ -1256,41 +1202,12 @@ func _policy_divergence_metrics(
 	source_rollout: Array[Dictionary],
 	maximum_samples: int = 64
 ) -> Dictionary:
-	if source_rollout.is_empty():
-		return {
-			"maximum_log_probability_error": INF,
-			"approximate_kl": INF,
-			"clip_fraction": 1.0,
-		}
-	var count = mini(source_rollout.size(), maxi(maximum_samples, 1))
-	var maximum_error = 0.0
-	var kl_total = 0.0
-	var clipped_count = 0
-	for index in range(count):
-		var transition: Dictionary = source_rollout[index]
-		var current_log_probability = actor_critic.log_probability_from_input(
-			transition.get("actor_input", PackedFloat64Array()),
-			transition.get("latent_action", PackedFloat64Array())
-		)
-		var old_log_probability = float(transition.get("old_log_probability", NAN))
-		if not is_finite(current_log_probability) or not is_finite(old_log_probability):
-			return {
-				"maximum_log_probability_error": INF,
-				"approximate_kl": INF,
-				"clip_fraction": 1.0,
-			}
-		var error = absf(current_log_probability - old_log_probability)
-		maximum_error = maxf(maximum_error, error)
-		kl_total += old_log_probability - current_log_probability
-		var ratio = exp(clampf(current_log_probability - old_log_probability, -20.0, 20.0))
-		if absf(ratio - 1.0) > float(config["clip_range"]):
-			clipped_count += 1
-	return {
-		"maximum_log_probability_error": maximum_error,
-		"approximate_kl": kl_total / float(count),
-		"clip_fraction": float(clipped_count) / float(count),
-	}
-
+	return PPOTrainingDiagnostics.policy_divergence_metrics(
+		source_rollout,
+		Callable(actor_critic, "log_probability_from_input"),
+		float(config["clip_range"]),
+		maximum_samples
+	)
 
 func _calculate_advantages_and_returns() -> Dictionary:
 	var count = rollout.size()
@@ -1360,27 +1277,17 @@ func _calculate_advantages_and_returns() -> Dictionary:
 
 
 func _rollout_reward_statistics() -> Dictionary:
-	var values = PackedFloat64Array()
+	var values: PackedFloat64Array = PackedFloat64Array()
 	values.resize(rollout.size())
-	for index in range(rollout.size()):
-		values[index] = float(rollout[index].get("reward", 0.0))
-	return _packed_statistics(values)
-
-
-func _packed_statistics(values: PackedFloat64Array) -> Dictionary:
-	if values.is_empty():
-		return {"mean": 0.0, "standard_deviation": 0.0}
-	var mean = 0.0
-	for value in values:
-		mean += value
-	mean /= float(values.size())
-	var variance = 0.0
-	for value in values:
-		variance += pow(value - mean, 2.0)
-	variance /= float(values.size())
+	for index: int in range(rollout.size()):
+		values[index] = RLTrainingMath.finite_float_or(
+			rollout[index].get("reward", 0.0),
+			0.0
+		)
+	var statistics: Dictionary = RLTrainingMath.finite_statistics(values)
 	return {
-		"mean": mean,
-		"standard_deviation": sqrt(maxf(variance, 0.0)),
+		"mean": float(statistics.get("mean", 0.0)),
+		"standard_deviation": float(statistics.get("standard_deviation", 0.0)),
 	}
 
 
@@ -1388,32 +1295,12 @@ func _policy_parameter_delta_rms(
 	actor_parameters_before: PackedFloat64Array,
 	log_standard_deviation_before: PackedFloat64Array
 ) -> float:
-	var sum_squared = 0.0
-	var count = 0
-	var actor_count = mini(
-		actor_parameters_before.size(),
-		actor_critic.actor.parameters.size()
+	return PPOTrainingDiagnostics.parameter_delta_rms(
+		actor_parameters_before,
+		actor_critic.actor.parameters,
+		log_standard_deviation_before,
+		actor_critic.log_standard_deviation
 	)
-	for index in range(actor_count):
-		var difference = (
-			actor_critic.actor.parameters[index]
-			- actor_parameters_before[index]
-		)
-		sum_squared += difference * difference
-		count += 1
-	var deviation_count = mini(
-		log_standard_deviation_before.size(),
-		actor_critic.log_standard_deviation.size()
-	)
-	for index in range(deviation_count):
-		var difference = (
-			actor_critic.log_standard_deviation[index]
-			- log_standard_deviation_before[index]
-		)
-		sum_squared += difference * difference
-		count += 1
-	return sqrt(sum_squared / float(maxi(count, 1)))
-
 
 func _normalize(values: PackedFloat64Array) -> void:
 	if values.is_empty():
@@ -1439,50 +1326,5 @@ func _shuffle_indices(indices: Array[int]) -> void:
 		indices[swap_index] = temporary
 
 
-func _finite_packed(values: PackedFloat64Array) -> bool:
-	for value in values:
-		if not is_finite(value):
-			return false
-	return true
-
-
-func _normalized_packed(values: PackedFloat64Array) -> bool:
-	for value in values:
-		if not is_finite(value) or value < -1.000001 or value > 1.000001:
-			return false
-	return true
-
-
 func _sanitize_config() -> void:
-	config["learning_rate"] = clampf(RLTrainingMath.finite_float_or(config.get("learning_rate"), DEFAULT_CONFIG["learning_rate"]), 0.000001, 0.1)
-	config["gamma"] = clampf(RLTrainingMath.finite_float_or(config.get("gamma"), DEFAULT_CONFIG["gamma"]), 0.0, 1.0)
-	config["gae_lambda"] = clampf(RLTrainingMath.finite_float_or(config.get("gae_lambda"), DEFAULT_CONFIG["gae_lambda"]), 0.0, 1.0)
-	config["clip_range"] = clampf(RLTrainingMath.finite_float_or(config.get("clip_range"), DEFAULT_CONFIG["clip_range"]), 0.01, 1.0)
-	config["entropy_coefficient"] = maxf(RLTrainingMath.finite_float_or(config.get("entropy_coefficient"), DEFAULT_CONFIG["entropy_coefficient"]), 0.0)
-	config["value_coefficient"] = maxf(RLTrainingMath.finite_float_or(config.get("value_coefficient"), DEFAULT_CONFIG["value_coefficient"]), 0.0)
-	config["maximum_gradient_norm"] = maxf(RLTrainingMath.finite_float_or(config.get("maximum_gradient_norm"), DEFAULT_CONFIG["maximum_gradient_norm"]), 0.0)
-	config["rollout_size"] = maxi(RLTrainingMath.finite_int_or(config.get("rollout_size"), DEFAULT_CONFIG["rollout_size"]), 1)
-	config["minimum_update_transitions"] = clampi(
-		RLTrainingMath.finite_int_or(config.get("minimum_update_transitions"), DEFAULT_CONFIG["minimum_update_transitions"]),
-		1,
-		int(config["rollout_size"])
-	)
-	config["epochs"] = maxi(RLTrainingMath.finite_int_or(config.get("epochs"), DEFAULT_CONFIG["epochs"]), 1)
-	config["batch_size"] = maxi(RLTrainingMath.finite_int_or(config.get("batch_size"), DEFAULT_CONFIG["batch_size"]), 1)
-	config["target_kl"] = maxf(RLTrainingMath.finite_float_or(config.get("target_kl"), DEFAULT_CONFIG["target_kl"]), 0.0)
-	config["control_interval_seconds"] = clampf(
-		RLTrainingMath.finite_float_or(config.get("control_interval_seconds"), DEFAULT_CONFIG["control_interval_seconds"]), 0.001, 1.0
-	)
-	config["discount_reference_interval_seconds"] = clampf(
-		RLTrainingMath.finite_float_or(config.get("discount_reference_interval_seconds"), DEFAULT_CONFIG["discount_reference_interval_seconds"]), 0.001, 1.0
-	)
-	config["hidden_layer_width"] = clampi(
-		RLTrainingMath.finite_int_or(config.get("hidden_layer_width"), DEFAULT_CONFIG["hidden_layer_width"]),
-		DronePPOMLP.MINIMUM_HIDDEN_WIDTH,
-		DronePPOMLP.MAXIMUM_HIDDEN_WIDTH
-	)
-	config["hidden_layer_depth"] = clampi(
-		RLTrainingMath.finite_int_or(config.get("hidden_layer_depth"), DEFAULT_CONFIG["hidden_layer_depth"]),
-		DronePPOMLP.MINIMUM_HIDDEN_DEPTH,
-		DronePPOMLP.MAXIMUM_HIDDEN_DEPTH
-	)
+	PPOTrainingConfigSupport.sanitize_body_config(config, DEFAULT_CONFIG)

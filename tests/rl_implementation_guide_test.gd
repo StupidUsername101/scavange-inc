@@ -55,6 +55,21 @@ func _test_non_finite_config_sanitization() -> void:
 		and not RLTrainingMath.bool_or(NAN, false),
 		"shared config conversion rejects non-finite scalar values before clamping"
 	)
+	_expect(
+		RLTrainingMath.packed_all_finite(PackedFloat64Array([-1.0, 0.0, 1.0]))
+		and not RLTrainingMath.packed_all_finite(PackedFloat64Array([0.0, NAN]))
+		and RLTrainingMath.packed_all_in_range(
+			PackedFloat64Array([-1.0, 0.0, 1.0]),
+			-1.0,
+			1.0
+		)
+		and not RLTrainingMath.packed_all_in_range(
+			PackedFloat64Array([0.0, 1.01]),
+			-1.0,
+			1.0
+		),
+		"shared packed-array validation rejects non-finite and out-of-range model commands"
+	)
 	var drone_ppo = DronePPOTrainer.new(_ppo_config({}), 13001)
 	drone_ppo.config["learning_rate"] = NAN
 	drone_ppo.config["rollout_transitions"] = NAN

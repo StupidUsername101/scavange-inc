@@ -349,8 +349,8 @@ func add_transition(
 		or commands.size() != behavior_actor_critic.action_count
 		or not DronePPOObservationEncoder.is_normalized_tensor(actor_input)
 		or not DronePPOObservationEncoder.is_normalized_tensor(critic_input)
-		or not _finite_packed(latent_action)
-		or not _finite_packed(commands)
+		or not RLTrainingMath.packed_all_finite(latent_action)
+		or not RLTrainingMath.packed_all_finite(commands)
 		or not is_finite(old_log_probability)
 		or not is_finite(old_value)
 	):
@@ -918,28 +918,13 @@ func evaluation_contract() -> Dictionary:
 func best_selection_summary() -> Dictionary:
 	if not has_best_checkpoint():
 		return {}
-	var summary = promoted_training_summary.duplicate(true)
-	if summary.is_empty():
-		summary = {
-			"selection_score": best_candidate_score if is_finite(best_candidate_score) else 0.0,
-			"selection_method": "legacy_training_candidate_unverified",
-			"exact_policy_match": true,
-			"evaluation_verified": false,
-		}
-	else:
-		summary["training_selection_score"] = RLTrainingMath.finite_float_or(
-		summary.get("selection_score", 0.0), 0.0
+	return RLTrainingCandidateSupport.best_selection_summary(
+		promoted_training_summary,
+		best_evaluation,
+		best_candidate_score,
+		true,
+		true
 	)
-		summary["selection_score"] = RLTrainingMath.finite_float_or(
-			best_evaluation.get("selection_score", summary.get("selection_score", 0.0)),
-			RLTrainingMath.finite_float_or(summary.get("selection_score", 0.0), 0.0)
-		)
-		summary["selection_method"] = "deterministic_fixed_seed_suite_v2"
-		summary["exact_policy_match"] = true
-		summary["evaluation_verified"] = not best_evaluation.is_empty()
-		summary["evaluation"] = best_evaluation.duplicate(true)
-	return summary
-
 
 func candidate_checkpoint() -> Dictionary:
 	if candidate_network_state.is_empty() or pending_candidate.is_empty():
@@ -956,11 +941,10 @@ func pending_evaluation_candidate() -> Dictionary:
 
 
 func pending_evaluation_candidate_id() -> int:
-	return RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1)
-
+	return RLTrainingCandidateSupport.pending_candidate_id(pending_candidate)
 
 func discard_pending_evaluation_candidate(candidate_id: int) -> bool:
-	if RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) != candidate_id:
+	if RLTrainingCandidateSupport.pending_candidate_id(pending_candidate) != candidate_id:
 		return false
 	pending_candidate.clear()
 	candidate_network_state.clear()
@@ -968,127 +952,109 @@ func discard_pending_evaluation_candidate(candidate_id: int) -> bool:
 	best_candidate_score = -INF
 	return true
 
-
 func record_deterministic_evaluation(
 	candidate_id: int,
 	evaluation_summary: Dictionary
 ) -> Dictionary:
-	if RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) != candidate_id:
-		return {"promoted": false, "reason": "candidate_id_mismatch"}
-	if candidate_network_state.is_empty():
-		return {"promoted": false, "reason": "missing_candidate_network"}
-	var expected_hash = str(pending_candidate.get("candidate_hash", ""))
-	if (
-		expected_hash.is_empty()
-		or expected_hash != RLDeterministicEvaluator.candidate_hash(candidate_network_state)
-	):
-		return {"promoted": false, "reason": "candidate_network_hash_mismatch"}
-	var evaluation_plan: Dictionary = pending_candidate.get("evaluation_plan", {})
-	var validation = RLDeterministicEvaluationSuite.validate_summary_for_plan(
-		evaluation_plan,
-		evaluation_summary,
-		expected_hash
-	)
-	if not bool(validation.get("valid", false)):
-		return {
-			"promoted": false,
-			"reason": str(validation.get("reason", "invalid_evaluation_summary")),
-		}
-	var decision = RLDeterministicEvaluator.promotion_decision(
+	var evaluation_result: Dictionary = RLTrainingCandidateSupport.evaluate_candidate_summary(
+		pending_candidate,
+		candidate_network_state,
+		candidate_id,
 		evaluation_summary,
 		best_evaluation
 	)
-	var promoted = bool(decision.get("promote", false))
+	if not bool(evaluation_result.get("valid", false)):
+		return {
+			"promoted": false,
+			"reason": str(evaluation_result.get("reason", "invalid_evaluation_summary")),
+		}
+	var promoted: bool = bool(evaluation_result.get("promoted", false))
+	var expected_hash: String = str(evaluation_result.get("candidate_hash", ""))
+	var verified_summary: Dictionary = (
+		(evaluation_result.get("evaluation", {}) as Dictionary).duplicate(true)
+		if evaluation_result.get("evaluation", {}) is Dictionary
+		else {}
+	)
 	if promoted:
 		best_network_state = candidate_network_state.duplicate(true)
 		promoted_training_summary = candidate_training_summary.duplicate(true)
-		best_evaluation = evaluation_summary.duplicate(true)
-		best_evaluation_contract = (pending_candidate.get("evaluation_contract", {}) as Dictionary).duplicate(true)
-		best_evaluation["candidate_hash"] = expected_hash
+		best_evaluation = verified_summary.duplicate(true)
+		var contract_value: Variant = pending_candidate.get("evaluation_contract", {})
+		best_evaluation_contract = (
+			(contract_value as Dictionary).duplicate(true)
+			if contract_value is Dictionary
+			else {}
+		)
 		pending_promoted_candidate = best_selection_summary()
 		pending_promoted_candidate["candidate_id"] = candidate_id
 		pending_promoted_candidate["candidate_hash"] = expected_hash
-	var result = {
-		"promoted": promoted,
-		"reason": str(decision.get("reason", "unknown")),
-		"candidate_id": candidate_id,
-	}
+	if not promoted:
+		# A rejected rollout score must not permanently block a lower-scoring but safer candidate.
+		best_candidate_score = -INF
 	pending_candidate.clear()
 	candidate_network_state.clear()
 	candidate_training_summary.clear()
-	# A rejected rollout score must not permanently block a lower-scoring but safer candidate.
-	if not promoted:
-		best_candidate_score = -INF
-	return result
-
+	return {
+		"promoted": promoted,
+		"reason": str(evaluation_result.get("reason", "unknown")),
+		"candidate_id": candidate_id,
+	}
 
 func record_deterministic_evaluation_records(
 	candidate_id: int,
 	records: Array[Dictionary]
 ) -> Dictionary:
-	if RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) != candidate_id:
-		return {"promoted": false, "reason": "candidate_id_mismatch"}
-	var plan: Dictionary = pending_candidate.get("evaluation_plan", {})
-	var candidate_hash = str(pending_candidate.get("candidate_hash", ""))
-	var summary = RLDeterministicEvaluationSuite.aggregate_complete_suite(
-		plan,
-		records,
-		candidate_hash
+	var aggregate_result: Dictionary = RLTrainingCandidateSupport.aggregate_candidate_records(
+		pending_candidate,
+		candidate_id,
+		records
 	)
-	if summary.is_empty():
+	if not bool(aggregate_result.get("valid", false)):
+		return {
+			"promoted": false,
+			"reason": str(aggregate_result.get("reason", "invalid_evaluation_records")),
+		}
+	var summary_value: Variant = aggregate_result.get("summary", {})
+	if not (summary_value is Dictionary):
 		return {"promoted": false, "reason": "invalid_evaluation_records"}
-	return record_deterministic_evaluation(candidate_id, summary)
-
+	return record_deterministic_evaluation(candidate_id, summary_value as Dictionary)
 
 func record_best_deterministic_evaluation_records(
 	evaluation_plan: Dictionary,
 	records: Array[Dictionary]
 ) -> Dictionary:
-	if best_network_state.is_empty():
-		return {"recorded": false, "reason": "missing_best_network"}
-	var best_hash: String = RLDeterministicEvaluator.candidate_hash(best_network_state)
-	var summary: Dictionary = RLDeterministicEvaluationSuite.aggregate_complete_suite(
+	var evaluation_result: Dictionary = RLTrainingCandidateSupport.evaluate_best_records(
+		best_network_state,
 		evaluation_plan,
 		records,
-		best_hash
+		pending_candidate,
+		evaluation_contract_template,
+		"drone"
 	)
-	if summary.is_empty():
-		return {"recorded": false, "reason": "invalid_best_evaluation_records"}
-	var validation: Dictionary = RLDeterministicEvaluationSuite.validate_summary_for_plan(
-		evaluation_plan,
-		summary,
-		best_hash
-	)
-	if not bool(validation.get("valid", false)):
+	if not bool(evaluation_result.get("recorded", false)):
 		return {
 			"recorded": false,
-			"reason": str(validation.get("reason", "invalid_best_evaluation")),
+			"reason": str(evaluation_result.get("reason", "invalid_best_evaluation")),
 		}
-	best_evaluation = summary.duplicate(true)
-	best_evaluation["candidate_hash"] = best_hash
-	# Best is commonly re-evaluated because a frozen pending Candidate introduced a new
-	# environment contract. The live group may change again while that hidden suite is queued,
-	# so provenance must come from the exact frozen contract whose hash appears in the plan.
-	var plan_contract_hash: String = str(evaluation_plan.get("evaluation_contract_hash", ""))
-	var pending_contract: Dictionary = pending_candidate.get("evaluation_contract", {})
-	if (
-		RLEvaluationContract.is_valid(pending_contract)
-		and str(pending_contract.get("contract_hash", "")) == plan_contract_hash
-	):
-		best_evaluation_contract = pending_contract.duplicate(true)
-	elif (
-		RLEvaluationContract.is_valid(evaluation_contract_template)
-		and str(evaluation_contract_template.get("contract_hash", "")) == plan_contract_hash
-	):
-		best_evaluation_contract = evaluation_contract_template.duplicate(true)
-	else:
-		best_evaluation_contract.clear()
+	var evaluation_value: Variant = evaluation_result.get("evaluation", {})
+	best_evaluation = (
+		(evaluation_value as Dictionary).duplicate(true)
+		if evaluation_value is Dictionary
+		else {}
+	)
+	var contract_value: Variant = evaluation_result.get("evaluation_contract", {})
+	best_evaluation_contract = (
+		(contract_value as Dictionary).duplicate(true)
+		if contract_value is Dictionary
+		else {}
+	)
 	return {
 		"recorded": true,
 		"reason": "best_re_evaluated",
-		"evaluation_contract_hash": str(summary.get("evaluation_contract_hash", "")),
+		"evaluation_contract_hash": str(
+			evaluation_result.get("evaluation_contract_hash", "")
+		),
 	}
-
 
 func best_evaluation_summary() -> Dictionary:
 	return best_evaluation.duplicate(true)
@@ -1298,37 +1264,22 @@ func load_checkpoint(checkpoint: Dictionary) -> bool:
 	# Pending candidates are resumable only when their frozen evaluation contract is present.
 	# Older checkpoints remain loadable, but their pre-contract pending candidate must not enter
 	# the fixed-seed queue under whatever room settings happen to be active after loading.
-	if not pending_candidate.is_empty():
-		var pending_contract_value: Variant = pending_candidate.get("evaluation_contract", {})
-		var pending_plan_value: Variant = pending_candidate.get("evaluation_plan", {})
-		var pending_contract: Dictionary = (
-			(pending_contract_value as Dictionary) if pending_contract_value is Dictionary else {}
+	if (
+		not pending_candidate.is_empty()
+		and not RLTrainingCandidateSupport.is_resumable_candidate(
+			pending_candidate,
+			candidate_network_state,
+			"drone"
 		)
-		var pending_plan: Dictionary = (
-			(pending_plan_value as Dictionary) if pending_plan_value is Dictionary else {}
-		)
-		var pending_contract_valid: bool = (
-			RLTrainingMath.finite_int_or(pending_candidate.get("candidate_id", -1), -1) >= 0
-			and not candidate_network_state.is_empty()
-			and not str(pending_candidate.get("candidate_hash", "")).is_empty()
-			and str(pending_candidate.get("candidate_hash", ""))
-				== RLDeterministicEvaluator.candidate_hash(candidate_network_state)
-			and RLEvaluationContract.is_valid(pending_contract, "drone")
-			and str(pending_candidate.get("evaluation_contract_hash", ""))
-				== str(pending_contract.get("contract_hash", ""))
-			and str(pending_plan.get("evaluation_contract_hash", ""))
-				== str(pending_contract.get("contract_hash", ""))
-			and RLDeterministicEvaluationSuite.is_valid_plan(pending_plan, "drone")
-		)
-		if not pending_contract_valid:
-			pending_candidate.clear()
-			candidate_network_state.clear()
-			candidate_training_summary.clear()
-			best_candidate_score = -INF
-			best_candidate_group_mean_reward = -INF
-			best_candidate_support_reward = -INF
-			best_candidate_worker_reward = -INF
-			best_candidate_robust_worker_reward = -INF
+	):
+		pending_candidate.clear()
+		candidate_network_state.clear()
+		candidate_training_summary.clear()
+		best_candidate_score = -INF
+		best_candidate_group_mean_reward = -INF
+		best_candidate_support_reward = -INF
+		best_candidate_worker_reward = -INF
+		best_candidate_robust_worker_reward = -INF
 
 	if best_network_state.is_empty():
 		best_evaluation.clear()
@@ -1817,41 +1768,12 @@ func _policy_divergence_metrics(
 	source_rollout: Array[Dictionary],
 	maximum_samples: int = 64
 ) -> Dictionary:
-	if source_rollout.is_empty():
-		return {
-			"maximum_log_probability_error": INF,
-			"approximate_kl": INF,
-			"clip_fraction": 1.0,
-		}
-	var count = mini(source_rollout.size(), maxi(maximum_samples, 1))
-	var maximum_error = 0.0
-	var kl_total = 0.0
-	var clipped_count = 0
-	for index in range(count):
-		var transition: Dictionary = source_rollout[index]
-		var current_log_probability = actor_critic.log_probability_from_input(
-			transition.get("actor_input", PackedFloat64Array()),
-			transition.get("latent_action", PackedFloat64Array())
-		)
-		var old_log_probability = float(transition.get("old_log_probability", NAN))
-		if not is_finite(current_log_probability) or not is_finite(old_log_probability):
-			return {
-				"maximum_log_probability_error": INF,
-				"approximate_kl": INF,
-				"clip_fraction": 1.0,
-			}
-		var error = absf(current_log_probability - old_log_probability)
-		maximum_error = maxf(maximum_error, error)
-		kl_total += old_log_probability - current_log_probability
-		var ratio = exp(clampf(current_log_probability - old_log_probability, -20.0, 20.0))
-		if absf(ratio - 1.0) > float(config["clip_range"]):
-			clipped_count += 1
-	return {
-		"maximum_log_probability_error": maximum_error,
-		"approximate_kl": kl_total / float(count),
-		"clip_fraction": float(clipped_count) / float(count),
-	}
-
+	return PPOTrainingDiagnostics.policy_divergence_metrics(
+		source_rollout,
+		Callable(actor_critic, "log_probability_from_input"),
+		float(config["clip_range"]),
+		maximum_samples
+	)
 
 func _prepare_rollout(source_rollout: Array[Dictionary]) -> Dictionary:
 	var advantages = PackedFloat64Array()
@@ -1946,13 +1868,6 @@ func _shuffle(indices: Array[int]) -> void:
 		var temporary = indices[index]
 		indices[index] = indices[swap_index]
 		indices[swap_index] = temporary
-
-
-func _finite_packed(values: PackedFloat64Array) -> bool:
-	for value in values:
-		if not is_finite(value):
-			return false
-	return true
 
 
 func _safe_average(total: float, count: int) -> float:

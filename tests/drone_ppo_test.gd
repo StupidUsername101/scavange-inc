@@ -535,6 +535,42 @@ func _test_feature_audit() -> void:
 		(report.get("high_correlation_pairs", []) as Array).size() == 1,
 		"feature audit reports the correlated pair"
 	)
+	var malformed_samples: Array = [
+		PackedFloat64Array([-1.0, -1.0, 0.0]),
+		"not-a-feature-vector",
+		PackedFloat64Array([0.0, 0.0]),
+		PackedFloat64Array([NAN, 0.0, 0.0]),
+		PackedFloat64Array([1.0, 1.0, 0.0]),
+	]
+	var malformed_report: Dictionary = DronePPOFeatureAudit.analyze_samples(
+		malformed_samples,
+		names
+	)
+	_expect(
+		int(malformed_report.get("sample_count", 0)) == 2
+		and int(malformed_report.get("effective_rank", 0)) == 1,
+		"feature audit ignores malformed or non-finite direct samples instead of poisoning diagnostics"
+	)
+	var correlated_names: Array[String] = []
+	for feature_index: int in range(8):
+		correlated_names.append("copy_%d" % feature_index)
+	var correlated_samples: Array = []
+	for value: float in [-1.0, 0.0, 1.0, 2.0]:
+		var copied: PackedFloat64Array = PackedFloat64Array()
+		copied.resize(correlated_names.size())
+		for feature_index: int in range(copied.size()):
+			copied[feature_index] = value
+		correlated_samples.append(copied)
+	var correlated_report: Dictionary = DronePPOFeatureAudit.analyze_samples(
+		correlated_samples,
+		correlated_names
+	)
+	_expect(
+		int(correlated_report.get("high_correlation_pair_count", 0)) == 28
+		and (correlated_report.get("high_correlation_pairs", []) as Array).size()
+		== PPOFeatureAudit.MAXIMUM_REPORTED_CORRELATION_PAIRS,
+		"feature audit counts every correlated pair without letting diagnostic payloads grow without bound"
+	)
 
 
 func _test_policy_and_checkpoint(observation: Dictionary) -> void:

@@ -1531,6 +1531,28 @@ func _test_model_files_round_trip() -> void:
 		not saved.is_empty(),
 		"a four-limb model is written to its own model folder"
 	)
+	var manifest_path: String = str(saved.get("storage_path", "")).path_join(
+		TrainingModelRegistryBase.MANIFEST_FILE_NAME
+	)
+	var saved_manifest: Dictionary = TrainingFileIO.read_json_dictionary(manifest_path)
+	var redirected_manifest: Dictionary = saved_manifest.duplicate(true)
+	redirected_manifest["checkpoint_file"] = "../redirected-checkpoint.json"
+	_expect(
+		TrainingFileIO.write_text_atomic(
+			manifest_path,
+			JSON.stringify(redirected_manifest, "\t", true, true)
+		)
+		and registry.get_version(str(saved.get("version_id", ""))).is_empty()
+		and registry.list_models().is_empty(),
+		"model registry ignores a manifest that redirects its immutable checkpoint path"
+	)
+	_expect(
+		TrainingFileIO.write_text_atomic(
+			manifest_path,
+			JSON.stringify(saved_manifest, "\t", true, true)
+		),
+		"model registry regression restores the valid manifest after corruption test"
+	)
 	var loaded = registry.load_checkpoint(saved)
 	_expect(
 		not loaded.is_empty()

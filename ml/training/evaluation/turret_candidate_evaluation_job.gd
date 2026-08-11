@@ -244,7 +244,7 @@ func tick(
 		time_precisely_aimed_seconds += reward_delta
 	var action: Dictionary = runtime_model.predict_action(observation)
 	var commands: PackedFloat64Array = TurretMLAction.packed_commands(action)
-	if commands.size() != TurretMLAction.ACTION_COUNT or not _commands_finite(commands):
+	if commands.size() != TurretMLAction.ACTION_COUNT or not RLTrainingMath.packed_all_finite(commands):
 		_fail("frozen turret candidate produced an invalid action")
 		return
 	if not adapter.apply_commands(commands):
@@ -383,7 +383,7 @@ func _begin_case(next_case_index: int) -> bool:
 	previous_observation = initial_observation
 	var action: Dictionary = runtime_model.predict_action(initial_observation)
 	var commands: PackedFloat64Array = TurretMLAction.packed_commands(action)
-	if commands.size() != TurretMLAction.ACTION_COUNT or not _commands_finite(commands):
+	if commands.size() != TurretMLAction.ACTION_COUNT or not RLTrainingMath.packed_all_finite(commands):
 		return _fail_start("frozen turret candidate produced an invalid initial action")
 	if not adapter.apply_commands(commands):
 		return _fail_start("hidden turret evaluator rejected the initial candidate action")
@@ -592,13 +592,6 @@ func _clear_case_environment() -> void:
 			wall.queue_free()
 	scenario_walls.clear()
 	wall_spatial_hash.clear()
-
-
-static func _commands_finite(commands: PackedFloat64Array) -> bool:
-	for value: float in commands:
-		if not is_finite(value):
-			return false
-	return true
 
 
 func _fail_start(reason: String) -> bool:

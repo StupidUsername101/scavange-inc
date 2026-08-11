@@ -253,7 +253,7 @@ func tick(
 		time_inside_radius_seconds += reward_delta
 	var action: Dictionary = runtime_model.predict_action(observation)
 	var commands: PackedFloat64Array = FourLimbMLAction.packed_commands(action)
-	if commands.size() != FourLimbMLAction.ACTION_COUNT or not _commands_finite(commands):
+	if commands.size() != FourLimbMLAction.ACTION_COUNT or not RLTrainingMath.packed_all_finite(commands):
 		_fail("frozen four-limb candidate produced an invalid action")
 		return
 	if not adapter.apply_commands(commands):
@@ -376,7 +376,7 @@ func _prime_policy_action() -> bool:
 		return false
 	var action: Dictionary = runtime_model.predict_action(observation)
 	var commands: PackedFloat64Array = FourLimbMLAction.packed_commands(action)
-	if commands.size() != FourLimbMLAction.ACTION_COUNT or not _commands_finite(commands):
+	if commands.size() != FourLimbMLAction.ACTION_COUNT or not RLTrainingMath.packed_all_finite(commands):
 		return false
 	if not adapter.apply_commands(commands):
 		return false
@@ -911,13 +911,6 @@ func _target_distance_from_observation(observation: Dictionary) -> float:
 	var body_state: Dictionary = observation.get("body", {})
 	var objective: Dictionary = observation.get("objective", {})
 	return FourLimbRewardDeck.target_goal_distance(body_state, objective)
-
-
-static func _commands_finite(commands: PackedFloat64Array) -> bool:
-	for value: float in commands:
-		if not is_finite(value):
-			return false
-	return true
 
 
 static func _command_change_norm(previous: PackedFloat64Array, current: PackedFloat64Array) -> float:
