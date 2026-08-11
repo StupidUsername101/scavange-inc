@@ -750,8 +750,12 @@ static func _normalized_control_descriptors(
 			descriptor["neutral"] = clampf(float(descriptor.get("neutral", 0.0)), minimum, maximum)
 			result.append(descriptor)
 		return result
+	# Descriptor-less states are only interpreted as the historical stock quad when the entire
+	# action width matches that legacy contract. A wider creator body must not silently turn its
+	# first four arbitrary controls into propellers with a 70% startup bias.
+	var legacy_quad_fallback: bool = expected_count == PROPELLER_ACTION_COUNT
 	for index in range(expected_count):
-		var propeller_fallback: bool = index < PROPELLER_ACTION_COUNT
+		var propeller_fallback: bool = legacy_quad_fallback
 		result.append({
 			"name": ("propeller_%d.throttle" % index) if propeller_fallback else "control_%d" % index,
 			"slot_id": ("propeller_%d" % index) if propeller_fallback else "",

@@ -283,9 +283,6 @@ func refresh_group_cards() -> void:
 		if activity != null:
 			activity.visible = active
 			activity.text = str(room.GROUP_ACTIVITY_FRAMES[room.group_activity_animation_frame])
-		var worker_slider = group.get("worker_slider") as HSlider
-		if worker_slider != null and not bool(group.get("worker_slider_dragging", false)):
-			worker_slider.set_value_no_signal(float(group.get("pending_worker_count", group.get("worker_count", 1))))
 		var worker_label = group.get("worker_label") as Label
 		if worker_label != null:
 			worker_label.text = "Turrets: %d" % int(group.get("worker_count", 1))
@@ -739,7 +736,6 @@ func _add_group_card(parent: VBoxContainer, group: Dictionary) -> void:
 	add_worker_button.tooltip_text = "Add one turret worker\n\nPauses the group temporarily and lets you place the new turret on the floor or an obstacle top. It then shares this group's policy and training history."
 	add_worker_button.pressed.connect(room._begin_add_turret_worker.bind(group_id))
 	worker_row.add_child(add_worker_button)
-	var worker_slider: HSlider = null
 	var details = VBoxContainer.new()
 	details.visible = selected
 	details.add_theme_constant_override("separation", 6)
@@ -810,7 +806,6 @@ func _add_group_card(parent: VBoxContainer, group: Dictionary) -> void:
 	group["activity_label"] = activity_label
 	group["candidate_evaluation_label"] = candidate_evaluation_label
 	group["best_score_label"] = best_score_label
-	group["worker_slider"] = worker_slider
 	group["worker_label"] = worker_label
 	group["add_worker_button"] = add_worker_button
 	group["reward_label"] = reward_label
@@ -953,42 +948,6 @@ func _on_group_pause_pressed(group_id: int) -> void:
 	var group: Dictionary = training.group_by_id(group_id)
 	if not group.is_empty():
 		set_group_active(group_id, not bool(group.get("active", false)))
-
-
-func _on_worker_slider_drag_started(group_id: int) -> void:
-	var group: Dictionary = training.group_by_id(group_id)
-	if not group.is_empty():
-		group["worker_slider_dragging"] = true
-
-
-func _on_worker_slider_value_changed(value: float, group_id: int) -> void:
-	var group: Dictionary = training.group_by_id(group_id)
-	if group.is_empty():
-		return
-	var worker_label = group.get("worker_label") as Label
-	if is_instance_valid(worker_label):
-		worker_label.text = "Turrets: %d" % int(round(value))
-	if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-		set_group_worker_count(group_id, int(round(value)))
-
-
-func _on_worker_slider_drag_ended(value_changed: bool, group_id: int) -> void:
-	var group: Dictionary = training.group_by_id(group_id)
-	if group.is_empty():
-		return
-	group["worker_slider_dragging"] = false
-	if not value_changed:
-		return
-	var worker_slider = group.get("worker_slider") as HSlider
-	if is_instance_valid(worker_slider):
-		set_group_worker_count(group_id, int(round(worker_slider.value)))
-
-
-func _on_worker_slider_focus_exited(group_id: int) -> void:
-	var group: Dictionary = training.group_by_id(group_id)
-	var worker_slider = group.get("worker_slider") as HSlider
-	if is_instance_valid(worker_slider):
-		set_group_worker_count(group_id, int(round(worker_slider.value)))
 
 
 func _on_group_overwrite_toggled(enabled: bool, group_id: int) -> void:

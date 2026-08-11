@@ -1577,7 +1577,15 @@ func _test_worker_checkpoint_registry() -> void:
 		and not registry.load_checkpoint(overwritten).is_empty(),
 		"rolling saves reject an unusable turret network before replacing the valid checkpoint"
 	)
-	registry.delete_model(overwritten)
+	var deleted_version: int = int(overwritten.get("version", 0))
+	_expect(registry.delete_model(overwritten), "the selected turret version can be deleted")
+	var replacement: Dictionary = registry.save_checkpoint("Regression Turret", checkpoint)
+	_expect(
+		not replacement.is_empty()
+		and int(replacement.get("version", 0)) > deleted_version,
+		"deleted turret version identities are never reused by later saves"
+	)
+	registry.delete_model(replacement)
 	_remove_directory(ProjectSettings.globalize_path(root_path))
 
 

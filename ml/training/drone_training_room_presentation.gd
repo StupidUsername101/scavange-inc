@@ -6,6 +6,15 @@ extends RefCounted
 # and compact control widgets without mixing presentation code into episode orchestration.
 #######################################################
 
+const REWARD_COMPONENT_LABELS = {
+	"approach": "Move toward target",
+	"radius": "Hold near target",
+	"survival": "Stay alive",
+	"ground_safety": "Keep ground clearance",
+	"smoothness": "Smooth motor commands",
+	"obstacle": "Avoid walls",
+	"failure": "Avoid terminal failure",
+}
 const SPINBOX_TARGET_ARROW_TICKS = 100.0
 const SPINBOX_MAX_ARROW_STEP_MULTIPLIER = 10
 const PART_GEOMETRY = preload("res://scripts/drones/drone_part_geometry.gd")

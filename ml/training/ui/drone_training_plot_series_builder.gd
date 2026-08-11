@@ -1,6 +1,84 @@
 class_name DroneTrainingPlotSeriesBuilder
 extends RefCounted
 
+
+const GROUP_PLOT_DEFINITIONS = {
+	"progress": {
+		"title": "Episode progress",
+		"tooltip": "What this shows\nReward per second and the body-specific task-success share (target hold, precise aim, or hover).\n\nHow to read it\nHigher values usually mean the worker group is improving.",
+		"x_axis": "episode",
+		"y_axis": "reward / hover share",
+	},
+	"tracking": {
+		"title": "Target tracking",
+		"tooltip": "What this shows\nHow far the worker finished from its current target, plus any body-specific tracking measurement.\n\nHow to read it\nLower target distance is usually better.",
+		"x_axis": "episode",
+		"y_axis": "distance in metres",
+	},
+	"rewards": {
+		"title": "Reward components",
+		"tooltip": "What this shows\nWhere the episode score came from.\n\nHow to read it\nPositive lines are rewards. Negative lines are body/task-specific costs.",
+		"x_axis": "episode",
+		"y_axis": "reward points",
+	},
+	"losses": {
+		"title": "Learning errors",
+		"tooltip": "What this shows\nPolicy and critic learning errors. PPO has one value critic; SAC-HER has two independent Q critics (Q1/Q2).\n\nHow to read it\nThese lines can jump around. A perfectly flat zero critic on an active SAC learner is suspicious; judge actual capability with the episode plots.",
+		"x_axis": "learning update",
+		"y_axis": "loss",
+	},
+	"stability": {
+		"title": "Policy stability",
+		"tooltip": "What this shows\nHow strongly the policy changes and how much action variation remains.\n\nHow to read it\nLarge sudden spikes can mean unstable learning. Very low exploration can explain repetitive behaviour.",
+		"x_axis": "learning update",
+		"y_axis": "stability metric",
+	},
+	"checkpoints": {
+		"title": "Best-save improvement",
+		"tooltip": "What this shows\nThe score change between consecutive Best saves.\n\nHow to read it\nPositive means the newly saved best model improved. Save Current versions are not included.",
+		"x_axis": "saved version number",
+		"y_axis": "reward/s gained",
+	},
+}
+const ALL_PLOT_DEFINITIONS = {
+	"progress": {
+		"title": "Live reward comparison",
+		"tooltip": "What this shows\nOne reward line for every running group.\n\nHow to read it\nHigher is better only when groups use comparable reward settings. Otherwise compare the task-success and target-distance plots.",
+		"x_axis": "episode",
+		"y_axis": "mean reward / second",
+	},
+	"tracking": {
+		"title": "Live task-success comparison",
+		"tooltip": "What this shows\nEach body type's normalized task-success share: drone hover/target hold, limb target hold, or turret precise-aim time.\n\nHow to read it\n1 means the task condition held for the whole episode; 0 means none of it.",
+		"x_axis": "episode",
+		"y_axis": "time inside target (0 to 1)",
+	},
+	"rewards": {
+		"title": "Live distance comparison",
+		"tooltip": "What this shows\nThe final target distance for every group.\n\nHow to read it\nLines moving downward mean workers are finishing closer to their target.",
+		"x_axis": "episode",
+		"y_axis": "distance in metres",
+	},
+	"losses": {
+		"title": "Reward-prediction comparison",
+		"tooltip": "What this shows\nHow wrong each group was when predicting future reward.\n\nHow to read it\nLarge spikes can warn of unstable learning, but actual flight performance matters more.",
+		"x_axis": "learning update",
+		"y_axis": "prediction error",
+	},
+	"stability": {
+		"title": "Policy-change comparison",
+		"tooltip": "What this shows\nHow much each learning update changed the policy.\n\nHow to read it\nRepeated large values can mean the model is changing too aggressively.",
+		"x_axis": "learning update",
+		"y_axis": "policy change",
+	},
+	"checkpoints": {
+		"title": "Saved-best improvement",
+		"tooltip": "What this shows\nThe score change between consecutive Best saves.\n\nHow to read it\nPositive means improvement. Negative means the newer saved best performed worse.",
+		"x_axis": "saved version number",
+		"y_axis": "reward/s gained",
+	},
+}
+
 #######################################################
 # Pure plot-series assembly for the training UI. The room owns simulation state and selection;
 # this helper only translates already-recorded histories/checkpoints into chart data.

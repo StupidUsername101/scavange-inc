@@ -877,15 +877,6 @@ func _get_local_bend_fallback(
 	return bend.normalized()
 
 
-func _sample_ground(
-	desired: Vector3,
-	space_state: PhysicsDirectSpaceState3D,
-	exclude: Array[RID]
-) -> Vector3:
-	var result := _sample_ground_result(desired, space_state, exclude)
-	return result.get("position", desired) if bool(result.get("hit", false)) else desired
-
-
 func _sample_ground_result(
 	desired: Vector3,
 	space_state: PhysicsDirectSpaceState3D,

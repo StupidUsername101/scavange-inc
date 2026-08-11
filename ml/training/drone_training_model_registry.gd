@@ -785,19 +785,7 @@ func _record_next_version_floor(model_path: String, requested_floor: int) -> boo
 
 
 func _model_key(model_name: String) -> String:
-	var result = ""
-	var previous_was_separator = false
-	var lowered = model_name.to_lower()
-	for index in range(lowered.length()):
-		var character = lowered.substr(index, 1)
-		if "abcdefghijklmnopqrstuvwxyz0123456789".contains(character):
-			result += character
-			previous_was_separator = false
-		elif not previous_was_separator and not result.is_empty():
-			result += "-"
-			previous_was_separator = true
-	result = result.trim_suffix("-")
-	return result if not result.is_empty() else "model"
+	return TrainingFileIO.storage_key(model_name, "model")
 
 
 func _sort_versions(a: Dictionary, b: Dictionary) -> bool:

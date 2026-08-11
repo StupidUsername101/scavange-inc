@@ -328,16 +328,4 @@ func _record_next_version_floor(family_path: String, requested_floor: int) -> bo
 
 
 func _map_key(map_name: String) -> String:
-	var result := ""
-	var previous_was_separator := false
-	var lowered := map_name.to_lower()
-	for index in range(lowered.length()):
-		var character := lowered.substr(index, 1)
-		if "abcdefghijklmnopqrstuvwxyz0123456789".contains(character):
-			result += character
-			previous_was_separator = false
-		elif not previous_was_separator and not result.is_empty():
-			result += "-"
-			previous_was_separator = true
-	result = result.trim_suffix("-")
-	return result if not result.is_empty() else "training-map"
+	return TrainingFileIO.storage_key(map_name, "training-map")

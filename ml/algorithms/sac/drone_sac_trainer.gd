@@ -1826,19 +1826,6 @@ func _safe_hindsight_goal(observation: Dictionary) -> bool:
 	)
 
 
-func _goal_reached(observation: Dictionary, radius_override: float = -1.0) -> bool:
-	var body: Dictionary = observation.get("body", {})
-	var objective: Dictionary = observation.get("objective", {})
-	var position: Vector3 = body.get("position_world", Vector3.ZERO)
-	var target: Vector3 = objective.get("target_position_world", position)
-	var radius = (
-		maxf(radius_override, 0.1)
-		if radius_override > 0.0
-		else maxf(float(objective.get("target_hover_radius_m", 1.0)), 0.1)
-	)
-	return position.distance_to(target) <= radius
-
-
 func _blocked_detour_relief(
 	old_observation: Dictionary,
 	next_observation: Dictionary

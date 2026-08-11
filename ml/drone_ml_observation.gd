@@ -255,10 +255,16 @@ static func _capture_parts(drone) -> Dictionary:
 	var loadout = drone.loadout
 	if loadout == null:
 		return {}
+	var attachments: Array[DroneAttachmentDefinition] = []
+	var attachment_slot_count: int = (
+		maxi(loadout.core.attachment_slot_count, 0) if loadout.core != null else 0
+	)
+	for slot_index: int in range(attachment_slot_count):
+		attachments.append(loadout.get_attachment(slot_index))
 	return {
 		"core": _core_stats(loadout.core),
 		"battery": _battery_stats(loadout.battery),
-		"attachments": _part_array(loadout.attachments),
+		"attachments": _part_array(attachments),
 	}
 
 

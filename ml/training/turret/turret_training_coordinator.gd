@@ -121,8 +121,6 @@ func create_group(
 		"candidate_evaluation_subject": "",
 		"candidate_evaluation_last_result": {},
 		"best_score_label": null,
-		"worker_slider": null,
-		"worker_slider_dragging": false,
 		"worker_label": null,
 		"add_worker_button": null,
 		"reward_label": null,

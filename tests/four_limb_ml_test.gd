@@ -1567,6 +1567,13 @@ func _test_model_files_round_trip() -> void:
 		registry.delete_model(overwritten),
 		"deleting the saved test model removes only that version"
 	)
+	var replacement = registry.save_checkpoint("Four Limb Save Check", checkpoint)
+	_expect(
+		not replacement.is_empty()
+		and int(replacement.get("version", 0)) > int(overwritten.get("version", 0)),
+		"deleted four-limb version identities are never reused by later saves"
+	)
+	registry.delete_model(replacement)
 
 
 func _test_unified_coordinator_contract() -> void:

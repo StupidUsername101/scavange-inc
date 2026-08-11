@@ -28,6 +28,79 @@ func _init() -> void:
 		"model-forge drone presets do not carry the removed legacy AI chips"
 	)
 
+	# Core-mounted hardware must never survive without the Core that owns its slots. A previous
+	# edit-session path could remove a Core while leaving propellers invisibly installed.
+	var coreless_loadout: DroneLoadout = DroneLoadout.new()
+	var detached_propeller: DronePropellerDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(baseline.get_propeller(0)) as DronePropellerDefinition
+	)
+	_expect(
+		not coreless_loadout.install_propeller(0, detached_propeller),
+		"a propeller cannot be installed before a Core provides its mount slot"
+	)
+	coreless_loadout.install_core(
+		MLBodyPartContract.deep_duplicate_resource(baseline.core) as DroneCoreDefinition
+	)
+	coreless_loadout.install_battery(
+		MLBodyPartContract.deep_duplicate_resource(baseline.battery) as DroneBatteryDefinition
+	)
+	_expect(
+		coreless_loadout.install_propeller(0, detached_propeller)
+		and coreless_loadout.has_core_mounted_parts(),
+		"Core-owned hardware is detected before Core removal"
+	)
+	var battery_only_mass: float = coreless_loadout.battery.get_mass()
+	coreless_loadout.remove_core()
+	_expect(
+		coreless_loadout.core == null
+		and coreless_loadout.propellers.is_empty()
+		and coreless_loadout.ai_chips.is_empty()
+		and coreless_loadout.attachments.is_empty()
+		and coreless_loadout.get_propeller_presence().is_empty()
+		and not coreless_loadout.has_core_mounted_parts(),
+		"removing a Core removes every part mounted to Core-owned slots"
+	)
+	_expect(
+		is_equal_approx(coreless_loadout.get_total_mass(), maxf(battery_only_mass, 0.001)),
+		"orphaned Core hardware cannot continue contributing invisible runtime mass"
+	)
+
+	var replacement_guard_loadout: DroneLoadout = DroneTrainingLoadoutConfig.duplicate_loadout(baseline)
+	var undersized_replacement_core: DroneCoreDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(baseline.core) as DroneCoreDefinition
+	)
+	if undersized_replacement_core != null:
+		undersized_replacement_core.propeller_slot_count = 3
+	_expect(
+		undersized_replacement_core != null
+		and not replacement_guard_loadout.can_replace_core_without_dropping_parts(
+			undersized_replacement_core
+		),
+		"Core replacement refuses to silently discard an occupied propeller slot"
+	)
+	var compatible_replacement_core: DroneCoreDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(baseline.core) as DroneCoreDefinition
+	)
+	_expect(
+		compatible_replacement_core != null
+		and replacement_guard_loadout.can_replace_core_without_dropping_parts(
+			compatible_replacement_core
+		),
+		"Core replacement accepts a chassis that still exposes every occupied slot"
+	)
+	var malformed_replacement_core: DroneCoreDefinition = (
+		MLBodyPartContract.deep_duplicate_resource(baseline.core) as DroneCoreDefinition
+	)
+	if malformed_replacement_core != null:
+		malformed_replacement_core.propeller_slot_count = -1
+	_expect(
+		malformed_replacement_core != null
+		and not replacement_guard_loadout.can_replace_core_without_dropping_parts(
+			malformed_replacement_core
+		),
+		"malformed negative Core slot counts fail closed instead of indexing from the array tail"
+	)
+
 	var private_copy = DroneTrainingLoadoutConfig.duplicate_loadout(baseline)
 	_expect(private_copy != baseline, "loadout container is copied")
 	_expect(private_copy.core != baseline.core, "core resource is copied")

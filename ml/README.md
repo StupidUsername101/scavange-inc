@@ -39,15 +39,19 @@ Pass a `DroneMLModel` instance to `enable_ml_control(model)` for in-process infe
 trainers submit an action whenever it changes; the controller validates it once and holds the
 same motor targets until the next action arrives.
 
-## Variable propeller counts
+## Ordered propeller topology
 
-Observations contain an ordered `propellers` array with stable `slot_index` fields. Actions must contain the same number and order. Nothing in this ML layer assumes four propellers.
+Observations contain an ordered `propellers` array with stable `slot_index` fields, and accepted
+body manifests carry explicit control descriptors instead of inferring hardware from action width.
+The snapshot/manifest formats can therefore describe variable propeller topology. The current
+`ServerDrone` training/evaluation runtime still instantiates at most four physical propeller slots;
+wider rotor layouts require expanding that runtime cap rather than changing the snapshot schema.
 
 The general `encoded` snapshot entry contains `global_features` and one `propeller_features` row
 per slot. Feature names travel beside both arrays so their order cannot silently drift. Those raw
-diagnostic values deliberately remain in physical units. A model must use a model-specific
-encoder; the quad-only PPO encoder selects its fixed subset and maps every learned input to
-`[-1, 1]`.
+diagnostic values deliberately remain in physical units. A model uses its model-specific encoder;
+accepted creator bodies append the exact body controls/observations frozen into their manifest and
+map learned inputs to the normalized contract expected by that policy.
 
 A conventional dense neural network still needs fixed dimensions for one trained policy. The
 model-forge solution is an editable body draft followed by an explicit **Accept** boundary. Accept

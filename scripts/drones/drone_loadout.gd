@@ -34,11 +34,43 @@ func install_core(value: DroneCoreDefinition) -> void:
 
 
 func remove_core() -> void:
+	# Propellers, AI chips and attachments are Core-mounted parts. None of them has a meaningful
+	# runtime slot once the Core is gone, so remove them together instead of leaving invisible
+	# hardware that can still affect mass or unexpectedly reappear on the next Core.
 	core = null
+	propellers.clear()
 	propeller_slot_transforms.clear()
 	ai_chips.clear()
 	attachments.clear()
 	attachment_slot_transforms.clear()
+
+
+func has_core_mounted_parts() -> bool:
+	for propeller: DronePropellerDefinition in propellers:
+		if propeller != null:
+			return true
+	for chip: DroneAIChipDefinition in ai_chips:
+		if chip != null:
+			return true
+	for attachment: DroneAttachmentDefinition in attachments:
+		if attachment != null:
+			return true
+	return false
+
+
+func can_replace_core_without_dropping_parts(value: DroneCoreDefinition) -> bool:
+	if value == null:
+		return false
+	for slot_index: int in range(maxi(value.propeller_slot_count, 0), propellers.size()):
+		if propellers[slot_index] != null:
+			return false
+	for slot_index: int in range(maxi(value.ai_chip_slot_count, 0), ai_chips.size()):
+		if ai_chips[slot_index] != null:
+			return false
+	for slot_index: int in range(maxi(value.attachment_slot_count, 0), attachments.size()):
+		if attachments[slot_index] != null:
+			return false
+	return true
 
 
 func install_battery(value: DroneBatteryDefinition) -> void:
@@ -53,9 +85,7 @@ func install_propeller(
 	slot_index: int,
 	value: DronePropellerDefinition
 ) -> bool:
-	if slot_index < 0:
-		return false
-	if core != null and slot_index >= core.propeller_slot_count:
+	if core == null or slot_index < 0 or slot_index >= _propeller_slot_count():
 		return false
 
 	while propellers.size() <= slot_index:
@@ -71,16 +101,18 @@ func remove_propeller(slot_index: int) -> void:
 
 
 func get_propeller(slot_index: int) -> DronePropellerDefinition:
-	if slot_index < 0 or slot_index >= propellers.size():
+	if (
+		core == null
+		or slot_index < 0
+		or slot_index >= _propeller_slot_count()
+		or slot_index >= propellers.size()
+	):
 		return null
-	if core != null and slot_index >= core.propeller_slot_count:
-		return null
-
 	return propellers[slot_index]
 
 
 func set_propeller_slot_transform(slot_index: int, value: Transform3D) -> bool:
-	if core == null or slot_index < 0 or slot_index >= core.propeller_slot_count:
+	if core == null or slot_index < 0 or slot_index >= _propeller_slot_count():
 		return false
 	if not _mount_transform_is_valid(value):
 		return false
@@ -93,7 +125,7 @@ func set_propeller_slot_transform(slot_index: int, value: Transform3D) -> bool:
 
 
 func get_propeller_slot_transform(slot_index: int) -> Transform3D:
-	if core == null or slot_index < 0 or slot_index >= core.propeller_slot_count:
+	if core == null or slot_index < 0 or slot_index >= _propeller_slot_count():
 		return Transform3D.IDENTITY
 	_ensure_propeller_slot_transforms()
 	return propeller_slot_transforms[slot_index]
@@ -108,7 +140,7 @@ func install_ai_chip(
 	slot_index: int,
 	value: DroneAIChipDefinition
 ) -> bool:
-	if core == null or slot_index < 0 or slot_index >= core.ai_chip_slot_count:
+	if core == null or slot_index < 0 or slot_index >= _ai_chip_slot_count():
 		return false
 
 	while ai_chips.size() <= slot_index:
@@ -127,7 +159,7 @@ func get_ai_chip(slot_index: int) -> DroneAIChipDefinition:
 	if (
 		core == null
 		or slot_index < 0
-		or slot_index >= core.ai_chip_slot_count
+		or slot_index >= _ai_chip_slot_count()
 		or slot_index >= ai_chips.size()
 	):
 		return null
@@ -136,7 +168,7 @@ func get_ai_chip(slot_index: int) -> DroneAIChipDefinition:
 
 func get_ai_chip_presence() -> Array[bool]:
 	var result: Array[bool] = []
-	var slot_count = core.ai_chip_slot_count if core != null else 0
+	var slot_count: int = _ai_chip_slot_count()
 	for slot_index in range(slot_count):
 		result.append(get_ai_chip(slot_index) != null)
 	return result
@@ -146,7 +178,7 @@ func install_attachment(
 	slot_index: int,
 	value: DroneAttachmentDefinition
 ) -> bool:
-	if core == null or slot_index < 0 or slot_index >= core.attachment_slot_count:
+	if core == null or slot_index < 0 or slot_index >= _attachment_slot_count():
 		return false
 	while attachments.size() <= slot_index:
 		attachments.append(null)
@@ -163,7 +195,7 @@ func get_attachment(slot_index: int) -> DroneAttachmentDefinition:
 	if (
 		core == null
 		or slot_index < 0
-		or slot_index >= core.attachment_slot_count
+		or slot_index >= _attachment_slot_count()
 		or slot_index >= attachments.size()
 	):
 		return null
@@ -171,7 +203,7 @@ func get_attachment(slot_index: int) -> DroneAttachmentDefinition:
 
 
 func set_attachment_slot_transform(slot_index: int, value: Transform3D) -> bool:
-	if core == null or slot_index < 0 or slot_index >= core.attachment_slot_count:
+	if core == null or slot_index < 0 or slot_index >= _attachment_slot_count():
 		return false
 	if not _mount_transform_is_valid(value):
 		return false
@@ -184,7 +216,7 @@ func set_attachment_slot_transform(slot_index: int, value: Transform3D) -> bool:
 
 
 func get_attachment_slot_transform(slot_index: int) -> Transform3D:
-	if core == null or slot_index < 0 or slot_index >= core.attachment_slot_count:
+	if core == null or slot_index < 0 or slot_index >= _attachment_slot_count():
 		return Transform3D.IDENTITY
 	_ensure_attachment_slot_transforms()
 	return attachment_slot_transforms[slot_index]
@@ -194,9 +226,10 @@ func get_attachment_slot_transforms() -> Array[Transform3D]:
 	_ensure_attachment_slot_transforms()
 	return attachment_slot_transforms.duplicate()
 
+
 func get_attachment_presence() -> Array[bool]:
 	var result: Array[bool] = []
-	var slot_count = core.attachment_slot_count if core != null else 0
+	var slot_count: int = _attachment_slot_count()
 	for slot_index in range(slot_count):
 		result.append(get_attachment(slot_index) != null)
 	return result
@@ -206,7 +239,7 @@ func find_attachment_slots_with_capability(
 	capability: StringName
 ) -> Array[int]:
 	var result: Array[int] = []
-	var slot_count = core.attachment_slot_count if core != null else 0
+	var slot_count: int = _attachment_slot_count()
 	for slot_index in range(slot_count):
 		var attachment := get_attachment(slot_index)
 		if attachment != null and attachment.provides_capability(capability):
@@ -215,13 +248,7 @@ func find_attachment_slots_with_capability(
 
 
 func supports_propeller_slot(slot_index: int) -> bool:
-	if slot_index < 0:
-		return false
-	return (
-		slot_index < core.propeller_slot_count
-		if core != null
-		else slot_index < propellers.size()
-	)
+	return core != null and slot_index >= 0 and slot_index < _propeller_slot_count()
 
 
 func get_total_mass() -> float:
@@ -229,16 +256,17 @@ func get_total_mass() -> float:
 	if battery != null:
 		result += battery.get_mass()
 
-	for propeller in propellers:
-		if propeller != null:
-			result += propeller.get_mass()
-
 	if core != null:
-		for slot_index in range(core.ai_chip_slot_count):
+		for slot_index: int in range(_propeller_slot_count()):
+			var propeller: DronePropellerDefinition = get_propeller(slot_index)
+			if propeller != null:
+				result += propeller.get_mass()
+
+		for slot_index: int in range(_ai_chip_slot_count()):
 			var chip := get_ai_chip(slot_index)
 			if chip != null:
 				result += chip.get_mass()
-		for slot_index in range(core.attachment_slot_count):
+		for slot_index: int in range(_attachment_slot_count()):
 			var attachment := get_attachment(slot_index)
 			if attachment != null:
 				result += attachment.get_mass()
@@ -251,7 +279,7 @@ func get_total_propeller_power_demand() -> float:
 	if core == null:
 		return result
 
-	for slot_index in range(mini(propellers.size(), core.propeller_slot_count)):
+	for slot_index: int in range(mini(propellers.size(), _propeller_slot_count())):
 		var propeller := propellers[slot_index]
 		if propeller != null:
 			result += maxf(propeller.max_power_draw, 0.0)
@@ -261,31 +289,24 @@ func get_total_propeller_power_demand() -> float:
 
 func get_propeller_presence() -> Array[bool]:
 	var result: Array[bool] = []
-	var slot_count := propellers.size()
-	if core != null:
-		slot_count = maxi(slot_count, core.propeller_slot_count)
-
-	for slot_index in range(slot_count):
+	var slot_count: int = _propeller_slot_count()
+	for slot_index: int in range(slot_count):
 		result.append(get_propeller(slot_index) != null)
-
 	return result
 
 
 func get_propeller_definition_paths() -> Array[String]:
 	var result: Array[String] = []
-	var slot_count := propellers.size()
-	if core != null:
-		slot_count = maxi(slot_count, core.propeller_slot_count)
-
-	for slot_index in range(slot_count):
-		var propeller := get_propeller(slot_index)
+	var slot_count: int = _propeller_slot_count()
+	for slot_index: int in range(slot_count):
+		var propeller: DronePropellerDefinition = get_propeller(slot_index)
 		result.append(definition_path(propeller))
 	return result
 
 
 func get_ai_chip_definition_paths() -> Array[String]:
 	var result: Array[String] = []
-	var slot_count = core.ai_chip_slot_count if core != null else 0
+	var slot_count: int = _ai_chip_slot_count()
 	for slot_index in range(slot_count):
 		var chip := get_ai_chip(slot_index)
 		result.append(definition_path(chip))
@@ -294,7 +315,7 @@ func get_ai_chip_definition_paths() -> Array[String]:
 
 func get_attachment_definition_paths() -> Array[String]:
 	var result: Array[String] = []
-	var slot_count = core.attachment_slot_count if core != null else 0
+	var slot_count: int = _attachment_slot_count()
 	for slot_index in range(slot_count):
 		var attachment := get_attachment(slot_index)
 		result.append(definition_path(attachment))
@@ -307,8 +328,20 @@ static func definition_path(part: DronePartDefinition) -> String:
 	return MLBodyPartContract.resource_source_path(part)
 
 
+func _propeller_slot_count() -> int:
+	return maxi(core.propeller_slot_count, 0) if core != null else 0
+
+
+func _ai_chip_slot_count() -> int:
+	return maxi(core.ai_chip_slot_count, 0) if core != null else 0
+
+
+func _attachment_slot_count() -> int:
+	return maxi(core.attachment_slot_count, 0) if core != null else 0
+
+
 func _trim_unsupported_propellers() -> void:
-	var supported_count = core.propeller_slot_count if core != null else 0
+	var supported_count: int = _propeller_slot_count()
 	if propellers.size() > supported_count:
 		propellers.resize(supported_count)
 	if propeller_slot_transforms.size() > supported_count:
@@ -316,19 +349,19 @@ func _trim_unsupported_propellers() -> void:
 
 
 func _trim_unsupported_ai_chips() -> void:
-	var supported_count = core.ai_chip_slot_count if core != null else 0
+	var supported_count: int = _ai_chip_slot_count()
 	if ai_chips.size() > supported_count:
 		ai_chips.resize(supported_count)
 
 
 func _trim_unsupported_attachments() -> void:
-	var supported_count = core.attachment_slot_count if core != null else 0
+	var supported_count: int = _attachment_slot_count()
 	if attachments.size() > supported_count:
 		attachments.resize(supported_count)
 
 
 func _ensure_attachment_slot_transforms() -> void:
-	var supported_count: int = core.attachment_slot_count if core != null else 0
+	var supported_count: int = _attachment_slot_count()
 	if attachment_slot_transforms.size() > supported_count:
 		attachment_slot_transforms.resize(supported_count)
 	while attachment_slot_transforms.size() < supported_count:
@@ -342,7 +375,7 @@ func _ensure_attachment_slot_transforms() -> void:
 
 
 func _ensure_propeller_slot_transforms() -> void:
-	var supported_count: int = core.propeller_slot_count if core != null else 0
+	var supported_count: int = _propeller_slot_count()
 	if propeller_slot_transforms.size() > supported_count:
 		propeller_slot_transforms.resize(supported_count)
 	while propeller_slot_transforms.size() < supported_count:

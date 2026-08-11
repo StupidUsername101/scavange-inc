@@ -537,43 +537,18 @@ func _core_supports_current_loadout(
 ) -> bool:
 	if slot.get("kind", &"") != &"core":
 		return true
-
-	var core := definition as DroneCoreDefinition
-	if core == null or preview_drone.loadout == null:
+	if preview_drone.loadout == null:
 		return false
-	for slot_index in range(
-		core.propeller_slot_count,
-		preview_drone.loadout.propellers.size()
-	):
-		if preview_drone.loadout.propellers[slot_index] != null:
-			return false
-	for slot_index in range(
-		core.ai_chip_slot_count,
-		preview_drone.loadout.ai_chips.size()
-	):
-		if preview_drone.loadout.ai_chips[slot_index] != null:
-			return false
-	for slot_index in range(
-		core.attachment_slot_count,
-		preview_drone.loadout.attachments.size()
-	):
-		if preview_drone.loadout.attachments[slot_index] != null:
-			return false
-	return true
-
+	return preview_drone.loadout.can_replace_core_without_dropping_parts(
+		definition as DroneCoreDefinition
+	)
 
 func _can_remove_slot(slot: Dictionary) -> bool:
 	if slot.get("kind", &"") != &"core":
 		return true
 	if preview_drone.loadout == null:
 		return true
-	for chip in preview_drone.loadout.ai_chips:
-		if chip != null:
-			return false
-	for attachment in preview_drone.loadout.attachments:
-		if attachment != null:
-			return false
-	return true
+	return not preview_drone.loadout.has_core_mounted_parts()
 
 
 func _spawn_pending_output(
@@ -616,18 +591,12 @@ func _remember_external_input(part: RigidBody3D) -> void:
 
 
 func _initialize_slot_tokens() -> void:
+	# Missing entries already mean "no external loose-part token". Keep only the intrinsic slots
+	# here instead of baking old quad/attachment counts into a creator-facing edit session.
 	slot_tokens = {
 		"core": -1,
 		"battery": -1,
-		"propeller:0": -1,
-		"propeller:1": -1,
-		"propeller:2": -1,
-		"propeller:3": -1,
 	}
-	for slot_index in range(8):
-		slot_tokens["ai_chip:%d" % slot_index] = -1
-	for slot_index in range(4):
-		slot_tokens["attachment:%d" % slot_index] = -1
 
 
 func _slot_key(slot: Dictionary) -> String:

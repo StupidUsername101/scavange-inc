@@ -74,7 +74,7 @@ const CUSTOM_WALL_DEFAULT_THICKNESS_M = 0.35
 const CUSTOM_WALL_COLOR = Color("34485c")
 const CUSTOM_WALL_SELECTED_COLOR = Color("f0a84b")
 const CUSTOM_WALL_PREVIEW_COLOR = Color(0.33, 0.82, 1.0, 0.42)
-const CUSTOM_WALL_PICK_RAY_LENGTH_M = 1000000.0
+const EDITOR_PICK_RAY_LENGTH_M = 1000000.0
 const TRAINING_ITEM_DEFAULT_DEFINITION: TrainingItemDefinition = preload(
 	"res://resources/training/items/generic_cargo.tres"
 )
@@ -82,6 +82,7 @@ const TRAINING_ITEM_DEFAULT_TYPE: String = TrainingItem3D.DEFAULT_ITEM_TYPE
 const DELIVERY_DESTINATION_DEFAULT_RADIUS_M = 1.25
 const DELIVERY_DESTINATION_DEFAULT_HEIGHT_M = 1.25
 const DELIVERY_DESTINATION_PREVIEW_ALPHA = 0.34
+const DELIVERY_DESTINATION_MINIMUM_SURFACE_NORMAL_Y = 0.55
 const DELIVERY_DESTINATION_COLORS: Array[Color] = [
 	Color("54e6b1"), Color("8de1ff"), Color("ffad42"), Color("b08cff"),
 	Color("ff6b8a"), Color("7ee787"),
@@ -115,92 +116,6 @@ const DRONE_DISABLE_SOUND_MINIMUM_VOLUME_DB = -40.0
 const DRONE_DISABLE_SOUND_MAXIMUM_VOLUME_DB = -3.0
 const DRONE_DISABLE_SOUND_MAX_DISTANCE_M = 90.0
 const DRONE_DISABLE_SOUND_PLAYER_COUNT = 8
-const REWARD_COMPONENT_LABELS = {
-	"approach": "Move toward target",
-	"radius": "Hold near target",
-	"survival": "Stay alive",
-	"ground_safety": "Keep ground clearance",
-	"smoothness": "Smooth motor commands",
-	"obstacle": "Avoid walls",
-	"failure": "Avoid terminal failure",
-}
-const GROUP_PLOT_DEFINITIONS = {
-	"progress": {
-		"title": "Episode progress",
-		"tooltip": "What this shows\nReward per second and the body-specific task-success share (target hold, precise aim, or hover).\n\nHow to read it\nHigher values usually mean the worker group is improving.",
-		"x_axis": "episode",
-		"y_axis": "reward / hover share",
-	},
-	"tracking": {
-		"title": "Target tracking",
-		"tooltip": "What this shows\nHow far the worker finished from its current target, plus any body-specific tracking measurement.\n\nHow to read it\nLower target distance is usually better.",
-		"x_axis": "episode",
-		"y_axis": "distance in metres",
-	},
-	"rewards": {
-		"title": "Reward components",
-		"tooltip": "What this shows\nWhere the episode score came from.\n\nHow to read it\nPositive lines are rewards. Negative lines are body/task-specific costs.",
-		"x_axis": "episode",
-		"y_axis": "reward points",
-	},
-	"losses": {
-		"title": "Learning errors",
-		"tooltip": "What this shows\nPolicy and critic learning errors. PPO has one value critic; SAC-HER has two independent Q critics (Q1/Q2).\n\nHow to read it\nThese lines can jump around. A perfectly flat zero critic on an active SAC learner is suspicious; judge actual capability with the episode plots.",
-		"x_axis": "learning update",
-		"y_axis": "loss",
-	},
-	"stability": {
-		"title": "Policy stability",
-		"tooltip": "What this shows\nHow strongly the policy changes and how much action variation remains.\n\nHow to read it\nLarge sudden spikes can mean unstable learning. Very low exploration can explain repetitive behaviour.",
-		"x_axis": "learning update",
-		"y_axis": "stability metric",
-	},
-	"checkpoints": {
-		"title": "Best-save improvement",
-		"tooltip": "What this shows\nThe score change between consecutive Best saves.\n\nHow to read it\nPositive means the newly saved best model improved. Save Current versions are not included.",
-		"x_axis": "saved version number",
-		"y_axis": "reward/s gained",
-	},
-}
-const ALL_PLOT_DEFINITIONS = {
-	"progress": {
-		"title": "Live reward comparison",
-		"tooltip": "What this shows\nOne reward line for every running group.\n\nHow to read it\nHigher is better only when groups use comparable reward settings. Otherwise compare the task-success and target-distance plots.",
-		"x_axis": "episode",
-		"y_axis": "mean reward / second",
-	},
-	"tracking": {
-		"title": "Live task-success comparison",
-		"tooltip": "What this shows\nEach body type's normalized task-success share: drone hover/target hold, limb target hold, or turret precise-aim time.\n\nHow to read it\n1 means the task condition held for the whole episode; 0 means none of it.",
-		"x_axis": "episode",
-		"y_axis": "time inside target (0 to 1)",
-	},
-	"rewards": {
-		"title": "Live distance comparison",
-		"tooltip": "What this shows\nThe final target distance for every group.\n\nHow to read it\nLines moving downward mean workers are finishing closer to their target.",
-		"x_axis": "episode",
-		"y_axis": "distance in metres",
-	},
-	"losses": {
-		"title": "Reward-prediction comparison",
-		"tooltip": "What this shows\nHow wrong each group was when predicting future reward.\n\nHow to read it\nLarge spikes can warn of unstable learning, but actual flight performance matters more.",
-		"x_axis": "learning update",
-		"y_axis": "prediction error",
-	},
-	"stability": {
-		"title": "Policy-change comparison",
-		"tooltip": "What this shows\nHow much each learning update changed the policy.\n\nHow to read it\nRepeated large values can mean the model is changing too aggressively.",
-		"x_axis": "learning update",
-		"y_axis": "policy change",
-	},
-	"checkpoints": {
-		"title": "Saved-best improvement",
-		"tooltip": "What this shows\nThe score change between consecutive Best saves.\n\nHow to read it\nPositive means improvement. Negative means the newer saved best performed worse.",
-		"x_axis": "saved version number",
-		"y_axis": "reward/s gained",
-	},
-}
-
 #######################################################
 # Scanner-style mixed-body learning lab. The established quadrotor path remains the default;
 # optional four-limb and turret groups share the arena while keeping independent trainers,
@@ -5085,61 +5000,16 @@ func _update_delivery_destination_preview() -> void:
 
 
 func _delivery_destination_surface_hit(screen_position: Vector2) -> Dictionary:
-	var camera: Camera3D = _interaction_camera()
-	if camera == null or get_world_3d() == null:
-		return {}
-	var ray_origin: Vector3 = camera.project_ray_origin(screen_position)
-	var ray_direction: Vector3 = camera.project_ray_normal(screen_position)
-	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(
-		ray_origin,
-		ray_origin + ray_direction * CUSTOM_WALL_PICK_RAY_LENGTH_M,
-		ARENA_COLLISION_LAYER
+	return DroneTrainingEditorRaycast.authored_surface_hit(
+		_interaction_camera(),
+		get_world_3d(),
+		screen_position,
+		EDITOR_PICK_RAY_LENGTH_M,
+		ARENA_COLLISION_LAYER,
+		TRAINING_ITEM_PLACEMENT_MAXIMUM_RAY_RETRIES,
+		DELIVERY_DESTINATION_MINIMUM_SURFACE_NORMAL_Y,
+		false
 	)
-	query.collide_with_areas = false
-	query.collide_with_bodies = true
-	var exclusions: Array[RID] = []
-	for _attempt_index: int in range(TRAINING_ITEM_PLACEMENT_MAXIMUM_RAY_RETRIES):
-		query.exclude = exclusions
-		var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
-		if hit.is_empty():
-			return {}
-		var collider: Node3D = hit.get("collider") as Node3D
-		if collider == null:
-			return {}
-		var normal_value: Variant = hit.get("normal", Vector3.UP)
-		var point_value: Variant = hit.get("position", Vector3.ZERO)
-		var authored_static_surface: bool = (
-			bool(collider.get_meta("training_ground", false))
-			or bool(collider.get_meta("training_custom_wall", false))
-			or bool(collider.get_meta("training_wall", false))
-		)
-		var usable_surface: bool = (
-			authored_static_surface
-			and normal_value is Vector3
-			and point_value is Vector3
-			and (normal_value as Vector3).is_finite()
-			and (point_value as Vector3).is_finite()
-			and (normal_value as Vector3).y >= TURRET_PLACEMENT_MINIMUM_UP_NORMAL
-		)
-		if usable_surface:
-			return {
-				"point": point_value as Vector3,
-				"normal": normal_value as Vector3,
-				"collider": collider,
-			}
-		# Delivery zones are authored world volumes, not cargo attachments. Like turret placement,
-		# they belong on arena/obstacle support surfaces. Ray through authored/fallback items and
-		# other dynamic layer-1 bodies so a crate under the cursor cannot make the floor behind it
-		# unplaceable or silently turn its transient top face into the destination's authored base.
-		var collision_object: CollisionObject3D = collider as CollisionObject3D
-		if collision_object == null:
-			return {}
-		var collider_rid: RID = collision_object.get_rid()
-		if not collider_rid.is_valid() or exclusions.has(collider_rid):
-			return {}
-		exclusions.append(collider_rid)
-	return {}
-
 
 func _update_delivery_destination_position_from_screen(screen_position: Vector2) -> bool:
 	if not delivery_destination_placement_active:
@@ -5753,67 +5623,16 @@ func _update_training_item_preview() -> void:
 
 
 func _training_item_surface_hit(screen_position: Vector2) -> Dictionary:
-	var camera: Camera3D = _interaction_camera()
-	if camera == null or get_world_3d() == null:
-		return {}
-	var ray_origin: Vector3 = camera.project_ray_origin(screen_position)
-	var ray_direction: Vector3 = camera.project_ray_normal(screen_position)
-	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(
-		ray_origin,
-		ray_origin + ray_direction * CUSTOM_WALL_PICK_RAY_LENGTH_M,
-		ARENA_COLLISION_LAYER
+	return DroneTrainingEditorRaycast.authored_surface_hit(
+		_interaction_camera(),
+		get_world_3d(),
+		screen_position,
+		EDITOR_PICK_RAY_LENGTH_M,
+		ARENA_COLLISION_LAYER,
+		TRAINING_ITEM_PLACEMENT_MAXIMUM_RAY_RETRIES,
+		TRAINING_ITEM_MINIMUM_SURFACE_NORMAL_Y,
+		true
 	)
-	query.collide_with_areas = false
-	query.collide_with_bodies = true
-	var exclusions: Array[RID] = []
-	for _attempt_index: int in range(TRAINING_ITEM_PLACEMENT_MAXIMUM_RAY_RETRIES):
-		query.exclude = exclusions
-		var hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
-		if hit.is_empty():
-			return {}
-		var collider: Node3D = hit.get("collider") as Node3D
-		if collider == null:
-			return {}
-		var authored_item: bool = (
-			collider is TrainingItem3D
-			and bool(collider.get_meta("training_authored_item", false))
-		)
-		var supported_surface: bool = (
-			authored_item
-			or bool(collider.get_meta("training_ground", false))
-			or bool(collider.get_meta("training_custom_wall", false))
-			or bool(collider.get_meta("training_wall", false))
-		)
-		var normal_value: Variant = hit.get("normal", Vector3.UP)
-		var point_value: Variant = hit.get("position", Vector3.ZERO)
-		var usable_surface: bool = (
-			supported_surface
-			and normal_value is Vector3
-			and point_value is Vector3
-			and (normal_value as Vector3).is_finite()
-			and (point_value as Vector3).is_finite()
-			and (normal_value as Vector3).y >= TRAINING_ITEM_MINIMUM_SURFACE_NORMAL_Y
-		)
-		if usable_surface:
-			return {
-				"point": point_value as Vector3,
-				"normal": normal_value as Vector3,
-				"collider": collider,
-			}
-		# Fallback pickup props and other layer-1 bodies are not authored placement surfaces. Do
-		# not let them make the floor behind them unplaceable; skip the whole collider and continue
-		# the same ray. Steep wall/item side faces are skipped for the same reason, while their top
-		# faces remain valid stacking surfaces.
-		var collision_object: CollisionObject3D = collider as CollisionObject3D
-		if collision_object == null:
-			return {}
-		var collider_rid: RID = collision_object.get_rid()
-		if not collider_rid.is_valid() or exclusions.has(collider_rid):
-			return {}
-		exclusions.append(collider_rid)
-	return {}
-
-
 
 func _update_training_item_position_from_screen(screen_position: Vector2) -> bool:
 	if not training_item_placement_active:
@@ -6070,39 +5889,14 @@ func _has_active_delivery_destinations() -> bool:
 
 
 func _pick_training_item_from_screen(screen_position: Vector2) -> TrainingItem3D:
-	var camera: Camera3D = _interaction_camera()
-	if camera == null or get_world_3d() == null:
-		return null
-	var ray_origin: Vector3 = camera.project_ray_origin(screen_position)
-	var ray_direction: Vector3 = camera.project_ray_normal(screen_position)
-	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(
-		ray_origin,
-		ray_origin + ray_direction * CUSTOM_WALL_PICK_RAY_LENGTH_M,
-		ARENA_COLLISION_LAYER
+	return DroneTrainingEditorRaycast.pick_authored_training_item(
+		_interaction_camera(),
+		get_world_3d(),
+		screen_position,
+		EDITOR_PICK_RAY_LENGTH_M,
+		ARENA_COLLISION_LAYER,
+		TRAINING_ITEM_PLACEMENT_MAXIMUM_RAY_RETRIES
 	)
-	query.collide_with_areas = false
-	query.collide_with_bodies = true
-	var exclusions: Array[RID] = []
-	for _attempt_index: int in range(TRAINING_ITEM_PLACEMENT_MAXIMUM_RAY_RETRIES):
-		query.exclude = exclusions
-		var result: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
-		if result.is_empty():
-			return null
-		var item: TrainingItem3D = result.get("collider") as TrainingItem3D
-		if item != null:
-			if bool(item.get_meta("training_authored_item", false)):
-				return item
-			# The private fallback pickup cube is also a TrainingItem3D on arena layer 1. It is
-			# simulation content, not editor content, so let selection look through it instead of
-			# making an authored item behind it impossible to select.
-			var item_rid: RID = item.get_rid()
-			if item_rid.is_valid() and not exclusions.has(item_rid):
-				exclusions.append(item_rid)
-				continue
-		# Real arena/obstacle geometry remains an occluder for selection.
-		return null
-	return null
-
 
 func _select_training_item(item: TrainingItem3D) -> void:
 	if is_instance_valid(selected_training_item) and selected_training_item != item:
@@ -6750,7 +6544,7 @@ func _turret_placement_surface_hit(screen_position: Vector2) -> Dictionary:
 	var ray_direction: Vector3 = camera.project_ray_normal(screen_position)
 	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(
 		ray_origin,
-		ray_origin + ray_direction * CUSTOM_WALL_PICK_RAY_LENGTH_M,
+		ray_origin + ray_direction * EDITOR_PICK_RAY_LENGTH_M,
 		ARENA_COLLISION_LAYER
 	)
 	query.collide_with_areas = false
@@ -6980,44 +6774,14 @@ func _update_wall_position_from_screen(screen_position: Vector2) -> bool:
 
 
 func _pick_custom_wall_from_screen(screen_position: Vector2) -> StaticBody3D:
-	var camera: Camera3D = _interaction_camera()
-	if camera == null or get_world_3d() == null:
-		return null
-	var ray_origin: Vector3 = camera.project_ray_origin(screen_position)
-	var ray_direction: Vector3 = camera.project_ray_normal(screen_position)
-	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(
-		ray_origin,
-		ray_origin + ray_direction * CUSTOM_WALL_PICK_RAY_LENGTH_M,
-		ARENA_COLLISION_LAYER
+	return DroneTrainingEditorRaycast.pick_custom_wall(
+		_interaction_camera(),
+		get_world_3d(),
+		screen_position,
+		EDITOR_PICK_RAY_LENGTH_M,
+		ARENA_COLLISION_LAYER,
+		TRAINING_ITEM_PLACEMENT_MAXIMUM_RAY_RETRIES
 	)
-	query.collide_with_areas = false
-	query.collide_with_bodies = true
-	var exclusions: Array[RID] = []
-	for _attempt_index: int in range(TRAINING_ITEM_PLACEMENT_MAXIMUM_RAY_RETRIES):
-		query.exclude = exclusions
-		var result: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
-		if result.is_empty():
-			return null
-		var collider: Node3D = result.get("collider") as Node3D
-		var wall: StaticBody3D = collider as StaticBody3D
-		if (
-			wall != null
-			and wall.has_meta("training_custom_wall")
-			and bool(wall.get_meta("training_custom_wall"))
-		):
-			return wall
-		# Training items are editor content too. The item picker gets first refusal in the click
-		# path, so reaching this function means an authored item was not selected. Let fallback
-		# lesson props and other TrainingItem3D bodies stop occluding a custom wall behind them.
-		var training_item: TrainingItem3D = collider as TrainingItem3D
-		if training_item == null:
-			return null
-		var item_rid: RID = training_item.get_rid()
-		if not item_rid.is_valid() or exclusions.has(item_rid):
-			return null
-		exclusions.append(item_rid)
-	return null
-
 
 func _confirm_wall_placement() -> void:
 	if not wall_placement_active:
@@ -7867,7 +7631,7 @@ func _normalize_selected_loadout_values(
 				loadout.battery.maximum_power_output
 			)
 	if part_kind == &"propeller":
-		var propeller_count: int = loadout.core.propeller_slot_count if loadout.core != null else loadout.propellers.size()
+		var propeller_count: int = maxi(loadout.core.propeller_slot_count, 0) if loadout.core != null else 0
 		for slot_index in range(propeller_count):
 			var propeller = loadout.get_propeller(slot_index)
 			if propeller == null:
@@ -10450,7 +10214,7 @@ func _build_branch_dialog() -> void:
 		"smoothness", "obstacle", "failure",
 	]:
 		var check = CheckBox.new()
-		check.text = str(REWARD_COMPONENT_LABELS[reward_key])
+		check.text = str(DroneTrainingRoomPresentation.REWARD_COMPONENT_LABELS[reward_key])
 		check.tooltip_text = _reward_component_tooltip(reward_key)
 		check.toggled.connect(func(_enabled: bool) -> void:
 			_update_branch_reward_warning()
@@ -10704,8 +10468,8 @@ func _build_plot_dashboard(content: VBoxContainer) -> void:
 	plot_grid.add_theme_constant_override("h_separation", 8)
 	plot_grid.add_theme_constant_override("v_separation", 8)
 	content.add_child(plot_grid)
-	for plot_id in GROUP_PLOT_DEFINITIONS:
-		_add_plot_card(plot_id, GROUP_PLOT_DEFINITIONS[plot_id])
+	for plot_id in DroneTrainingPlotSeriesBuilder.GROUP_PLOT_DEFINITIONS:
+		_add_plot_card(plot_id, DroneTrainingPlotSeriesBuilder.GROUP_PLOT_DEFINITIONS[plot_id])
 
 
 func _build_action_trace_card(content: VBoxContainer) -> void:
@@ -13327,7 +13091,7 @@ func _reward_summary(rewards: Dictionary) -> String:
 		"smoothness", "obstacle", "failure",
 	]:
 		if bool(rewards.get(reward_key, true)):
-			enabled.append(str(REWARD_COMPONENT_LABELS[reward_key]))
+			enabled.append(str(DroneTrainingRoomPresentation.REWARD_COMPONENT_LABELS[reward_key]))
 	return " · ".join(PackedStringArray(enabled)) if not enabled.is_empty() else "None"
 
 
@@ -17831,9 +17595,9 @@ func _refresh_plots() -> void:
 			continue
 		var plot = plot_widgets[plot_id] as Control
 		var definitions = (
-			ALL_PLOT_DEFINITIONS
+			DroneTrainingPlotSeriesBuilder.ALL_PLOT_DEFINITIONS
 			if group.is_empty() and limb_group.is_empty() and turret_group.is_empty()
-			else GROUP_PLOT_DEFINITIONS
+			else DroneTrainingPlotSeriesBuilder.GROUP_PLOT_DEFINITIONS
 		)
 		var definition: Dictionary = definitions.get(plot_id, {})
 		var title = plot_title_labels.get(plot_id) as Label

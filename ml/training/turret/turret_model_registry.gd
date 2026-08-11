@@ -4,6 +4,7 @@ extends RefCounted
 const DEFAULT_ROOT_PATH = "user://ml_turret_models"
 const MANIFEST_FILE_NAME = "model.json"
 const CHECKPOINT_FILE_NAME = "checkpoint.json"
+const NEXT_VERSION_FILE_NAME = "next_version.txt"
 const SCHEMA_VERSION = 1
 
 #######################################################
@@ -34,9 +35,19 @@ func save_checkpoint(model_name: String, checkpoint: Dictionary) -> Dictionary:
 	if directory_error != OK:
 		last_error = "Could not create the model folder."
 		return {}
+	if not TrainingFileIO.preserve_next_version_floor(
+		family_path,
+		NEXT_VERSION_FILE_NAME,
+		version + 1
+	):
+		last_error = "Could not preserve the turret model version sequence."
+		TrainingFileIO.remove_directory_recursive_absolute(
+			ProjectSettings.globalize_path(version_path)
+		)
+		return {}
 	if not _write_json(version_path.path_join(CHECKPOINT_FILE_NAME), checkpoint):
 		last_error = "Could not write the model checkpoint."
-		_remove_directory(ProjectSettings.globalize_path(version_path))
+		TrainingFileIO.remove_directory_recursive_absolute(ProjectSettings.globalize_path(version_path))
 		return {}
 	var now = int(Time.get_unix_time_from_system() * 1000.0)
 	var record = {
@@ -57,7 +68,7 @@ func save_checkpoint(model_name: String, checkpoint: Dictionary) -> Dictionary:
 	}
 	if not _write_json(version_path.path_join(MANIFEST_FILE_NAME), record):
 		last_error = "Could not write the model manifest."
-		_remove_directory(ProjectSettings.globalize_path(version_path))
+		TrainingFileIO.remove_directory_recursive_absolute(ProjectSettings.globalize_path(version_path))
 		return {}
 	record["storage_path"] = version_path
 	var stored_record = _resolve(record)
@@ -66,7 +77,7 @@ func save_checkpoint(model_name: String, checkpoint: Dictionary) -> Dictionary:
 	)
 	if stored_record.is_empty() or not _is_compatible_checkpoint(stored_checkpoint):
 		last_error = "The model files were written but failed the save verification check."
-		_remove_directory(ProjectSettings.globalize_path(version_path))
+		TrainingFileIO.remove_directory_recursive_absolute(ProjectSettings.globalize_path(version_path))
 		return {}
 	return stored_record
 
@@ -163,7 +174,7 @@ func delete_model(record_or_id: Variant) -> bool:
 	if record.is_empty():
 		last_error = "The selected turret model no longer exists."
 		return false
-	return _remove_directory(ProjectSettings.globalize_path(str(record["storage_path"])))
+	return TrainingFileIO.remove_directory_recursive_absolute(ProjectSettings.globalize_path(str(record["storage_path"])))
 
 
 func display_name(record: Dictionary) -> String:
@@ -244,56 +255,14 @@ func _is_compatible_checkpoint(checkpoint: Dictionary) -> bool:
 
 
 func _next_version(path: String) -> int:
-	var highest = 0
-	var directory = DirAccess.open(path)
-	if directory != null:
-		directory.list_dir_begin()
-		var entry = directory.get_next()
-		while not entry.is_empty():
-			if directory.current_is_dir() and entry.begins_with("v"):
-				highest = maxi(highest, entry.trim_prefix("v").to_int())
-			entry = directory.get_next()
-		directory.list_dir_end()
-	return highest + 1
+	return TrainingFileIO.next_version_directory_number(path, NEXT_VERSION_FILE_NAME)
 
 
 func _key(value: String) -> String:
-	var result = ""
-	var separator = false
-	for index in range(value.length()):
-		var character = value.substr(index, 1).to_lower()
-		if "abcdefghijklmnopqrstuvwxyz0123456789".contains(character):
-			result += character
-			separator = false
-		elif not separator and not result.is_empty():
-			result += "-"
-			separator = true
-	return result.trim_suffix("-") if not result.trim_suffix("-").is_empty() else "turret-model"
+	return TrainingFileIO.storage_key(value, "turret-model")
 
 
 func _write_json(path: String, value: Dictionary) -> bool:
 	var stored = value.duplicate(true)
 	stored.erase("storage_path")
 	return TrainingFileIO.write_text_atomic(path, JSON.stringify(stored, "\t", true, true))
-
-
-func _remove_directory(absolute_path: String) -> bool:
-	var directory = DirAccess.open(absolute_path)
-	if directory == null:
-		return false
-	directory.list_dir_begin()
-	var entry = directory.get_next()
-	while not entry.is_empty():
-		if entry != "." and entry != "..":
-			var child = absolute_path.path_join(entry)
-			if directory.current_is_dir():
-				if not _remove_directory(child):
-					directory.list_dir_end()
-					return false
-			else:
-				if directory.remove(entry) != OK:
-					directory.list_dir_end()
-					return false
-		entry = directory.get_next()
-	directory.list_dir_end()
-	return DirAccess.remove_absolute(absolute_path) == OK

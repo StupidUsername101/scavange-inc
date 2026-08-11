@@ -15,6 +15,7 @@ func _init() -> void:
 	var observation = _observation(0.25)
 	_test_network_capacity()
 	_test_configured_initial_control_bias()
+	_test_descriptorless_generic_body_fallback()
 	_test_observation_tensor(observation)
 	_test_feature_audit()
 	_test_policy_and_checkpoint(observation)
@@ -72,6 +73,43 @@ func _test_configured_initial_control_bias() -> void:
 	_expect(
 		all_match,
 		"fresh PPO actor honors body-specific initial control targets instead of forcing every rotor to the stock 70% bias"
+	)
+
+
+func _test_descriptorless_generic_body_fallback() -> void:
+	var generic_network: DronePPOActorCritic = DronePPOActorCritic.new(
+		7712,
+		DronePPOObservationEncoder.SCHEMA_VERSION,
+		DronePPOActorCritic.HIDDEN_SIZE,
+		DronePPOActorCritic.HIDDEN_LAYER_COUNT,
+		6,
+		0,
+		[],
+		""
+	)
+	var all_generic: bool = generic_network.control_descriptors.size() == 6
+	for descriptor: Dictionary in generic_network.control_descriptors:
+		all_generic = (
+			all_generic
+			and str(descriptor.get("kind", "")) == "generic"
+			and is_equal_approx(float(descriptor.get("minimum", 0.0)), -1.0)
+			and is_equal_approx(float(descriptor.get("neutral", 1.0)), 0.0)
+		)
+	_expect(
+		all_generic,
+		"descriptor-less wider PPO bodies recover neutral generic controls instead of assuming their first four channels are quad rotors"
+	)
+	var legacy_quad: DronePPOActorCritic = DronePPOActorCritic.new(7713)
+	var all_legacy_rotors: bool = legacy_quad.control_descriptors.size() == 4
+	for descriptor: Dictionary in legacy_quad.control_descriptors:
+		all_legacy_rotors = (
+			all_legacy_rotors
+			and str(descriptor.get("kind", "")) == "propeller_throttle"
+			and is_equal_approx(float(descriptor.get("minimum", -1.0)), 0.0)
+		)
+	_expect(
+		all_legacy_rotors,
+		"descriptor-less four-control PPO states retain the historical quad compatibility fallback"
 	)
 
 

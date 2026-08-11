@@ -39,7 +39,11 @@ static func duplicate_loadout(source: DroneLoadout) -> DroneLoadout:
 	# learned model owns control; carrying old behavior chips into a worker body would mix two
 	# independent control systems and exposes meaningless creator slots.
 	result.ai_chips.clear()
-	for attachment in source.attachments:
+	var attachment_slot_count: int = (
+		maxi(source.core.attachment_slot_count, 0) if source.core != null else 0
+	)
+	for slot_index: int in range(attachment_slot_count):
+		var attachment: DroneAttachmentDefinition = source.get_attachment(slot_index)
 		var attachment_copy: DroneAttachmentDefinition = null
 		if attachment != null:
 			attachment_copy = MLBodyPartContract.deep_duplicate_resource(attachment) as DroneAttachmentDefinition
@@ -127,7 +131,7 @@ static func install_training_belly_grabber(loadout: DroneLoadout) -> bool:
 	if source == null:
 		return false
 	var target_slot = -1
-	for slot_index in range(loadout.core.attachment_slot_count):
+	for slot_index in range(maxi(loadout.core.attachment_slot_count, 0)):
 		if loadout.get_attachment(slot_index) == null:
 			target_slot = slot_index
 			break
@@ -150,11 +154,13 @@ static func remove_training_belly_grabber(loadout: DroneLoadout) -> void:
 
 
 static func limb_action_count(loadout: DroneLoadout) -> int:
-	if loadout == null:
+	if loadout == null or loadout.core == null:
 		return 0
 	var result: int = 0
-	for attachment in loadout.attachments:
-		var limb_attachment = attachment as DroneLimbAttachmentDefinition
+	for slot_index: int in range(maxi(loadout.core.attachment_slot_count, 0)):
+		var limb_attachment: DroneLimbAttachmentDefinition = (
+			loadout.get_attachment(slot_index) as DroneLimbAttachmentDefinition
+		)
 		if limb_attachment != null:
 			result += limb_attachment.required_limb_action_count()
 	return result
@@ -461,7 +467,7 @@ static func _external_limb_body_mass(loadout: DroneLoadout) -> float:
 	if loadout == null or loadout.core == null:
 		return 0.0
 	var result = 0.0
-	for slot_index in range(loadout.core.attachment_slot_count):
+	for slot_index in range(maxi(loadout.core.attachment_slot_count, 0)):
 		var attachment = loadout.get_attachment(slot_index) as DroneLimbAttachmentDefinition
 		if attachment == null:
 			continue
@@ -651,7 +657,7 @@ static func _attachment_idle_power(loadout: DroneLoadout) -> float:
 	if loadout == null or loadout.core == null:
 		return 0.0
 	var result: float = 0.0
-	for slot_index: int in range(loadout.core.attachment_slot_count):
+	for slot_index: int in range(maxi(loadout.core.attachment_slot_count, 0)):
 		var attachment: DroneAttachmentDefinition = loadout.get_attachment(slot_index)
 		if attachment != null and not (attachment is DroneCameraAttachmentDefinition):
 			result += maxf(attachment.idle_power_draw, 0.0)
@@ -852,11 +858,9 @@ static func _restore_part_slots(
 
 
 static func _propeller_slot_count(loadout: DroneLoadout) -> int:
-	if loadout == null:
+	if loadout == null or loadout.core == null:
 		return 0
-	if loadout.core != null:
-		return maxi(loadout.core.propeller_slot_count, 0)
-	return loadout.propellers.size()
+	return maxi(loadout.core.propeller_slot_count, 0)
 
 
 static func _duplicate_core(source: DroneCoreDefinition) -> DroneCoreDefinition:
