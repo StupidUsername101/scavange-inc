@@ -72,7 +72,7 @@ func to_dictionary() -> Dictionary:
 func load_dictionary(value: Dictionary) -> void:
 	if str(value.get("id", card_id)) != card_id:
 		return
-	enabled = RLTrainingMath.bool_or(value.get("enabled", enabled), enabled)
-	var loaded_intensity: float = RLTrainingMath.finite_float_or(value.get("intensity", intensity), intensity)
+	enabled = SafeVariant.bool_or(value.get("enabled", enabled), enabled)
+	var loaded_intensity: float = SafeVariant.finite_float_or(value.get("intensity", intensity), intensity)
 	if is_finite(loaded_intensity):
 		intensity = clampf(loaded_intensity, minimum_intensity, maximum_intensity)

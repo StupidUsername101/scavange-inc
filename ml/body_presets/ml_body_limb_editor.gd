@@ -99,9 +99,10 @@ static func set_end_effector(
 
 
 static func end_effector_templates() -> Array[LimbEndEffectorDefinition]:
-	var paths: Array[String] = []
-	_collect_tres_paths(END_EFFECTOR_TEMPLATE_ROOT, paths)
-	paths.sort()
+	var paths: Array[String] = ResourcePathDiscovery.collect(
+		END_EFFECTOR_TEMPLATE_ROOT,
+		["tres", "res"]
+	)
 	var result: Array[LimbEndEffectorDefinition] = []
 	for path: String in paths:
 		var definition: LimbEndEffectorDefinition = load(path) as LimbEndEffectorDefinition
@@ -151,22 +152,3 @@ static func _limb_at(part: Resource, limb_index: int) -> GenericLimbDefinition:
 	if limb_index < 0 or limb_index >= limbs.size():
 		return null
 	return limbs[limb_index]
-
-
-static func _collect_tres_paths(directory_path: String, target: Array[String]) -> void:
-	var directory: DirAccess = DirAccess.open(directory_path)
-	if directory == null:
-		return
-	directory.list_dir_begin()
-	while true:
-		var entry: String = directory.get_next()
-		if entry.is_empty():
-			break
-		if entry == "." or entry == "..":
-			continue
-		var child_path: String = directory_path.path_join(entry)
-		if directory.current_is_dir():
-			_collect_tres_paths(child_path, target)
-		elif entry.get_extension().to_lower() in ["tres", "res"]:
-			target.append(child_path)
-	directory.list_dir_end()

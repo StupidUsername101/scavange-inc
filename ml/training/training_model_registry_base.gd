@@ -38,16 +38,6 @@ func save_checkpoint(model_name: String, checkpoint: Dictionary) -> Dictionary:
 	if directory_error != OK:
 		last_error = "Could not create the model folder."
 		return {}
-	if not TrainingFileIO.preserve_next_version_floor(
-		family_path,
-		NEXT_VERSION_FILE_NAME,
-		version + 1
-	):
-		last_error = "Could not preserve the %s model version sequence." % _body_label()
-		TrainingFileIO.remove_directory_recursive_absolute(
-			ProjectSettings.globalize_path(version_path)
-		)
-		return {}
 	if not _write_json(version_path.path_join(CHECKPOINT_FILE_NAME), checkpoint):
 		last_error = "Could not write the model checkpoint."
 		TrainingFileIO.remove_directory_recursive_absolute(
@@ -84,6 +74,19 @@ func save_checkpoint(model_name: String, checkpoint: Dictionary) -> Dictionary:
 	)
 	if stored_record.is_empty() or not _is_compatible_checkpoint(stored_checkpoint):
 		last_error = "The model files were written but failed the save verification check."
+		TrainingFileIO.remove_directory_recursive_absolute(
+			ProjectSettings.globalize_path(version_path)
+		)
+		return {}
+	# Reserve the next immutable identity only after the version has been written and verified. A
+	# failed save therefore consumes nothing, while a successful save cannot be silently reused if
+	# its directory is later removed outside this registry.
+	if not TrainingFileIO.preserve_next_version_floor(
+		family_path,
+		NEXT_VERSION_FILE_NAME,
+		version + 1
+	):
+		last_error = "Could not preserve the %s model version sequence." % _body_label()
 		TrainingFileIO.remove_directory_recursive_absolute(
 			ProjectSettings.globalize_path(version_path)
 		)
@@ -153,21 +156,19 @@ func overwrite_checkpoint(record_or_id: Variant, checkpoint: Dictionary) -> Dict
 func list_models() -> Array[Dictionary]:
 	last_error = ""
 	var result: Array[Dictionary] = []
-	var root: DirAccess = DirAccess.open(root_path)
-	if root == null:
-		return result
-	root.list_dir_begin()
-	var family: String = root.get_next()
-	while not family.is_empty():
-		if root.current_is_dir():
-			_collect_family(root_path.path_join(family), result)
-		family = root.get_next()
-	root.list_dir_end()
+	for version_id: String in TrainingFileIO.list_version_ids(
+		root_path,
+		_storage_key_fallback()
+	):
+		var record: Dictionary = _resolve(version_id)
+		if not record.is_empty():
+			result.append(record)
 	result.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
-		return (
-			SafeVariant.integral_int_or(left.get("updated_unix_ms", 0), 0)
-			> SafeVariant.integral_int_or(right.get("updated_unix_ms", 0), 0)
-		)
+		var left_updated: int = SafeVariant.integral_int_or(left.get("updated_unix_ms", 0), 0)
+		var right_updated: int = SafeVariant.integral_int_or(right.get("updated_unix_ms", 0), 0)
+		if left_updated == right_updated:
+			return str(left.get("version_id", "")) < str(right.get("version_id", ""))
+		return left_updated > right_updated
 	)
 	return result
 
@@ -199,8 +200,21 @@ func delete_model(record_or_id: Variant) -> bool:
 	if record.is_empty():
 		last_error = "The selected %s model no longer exists." % _body_label()
 		return false
+	var version_path: String = str(record["storage_path"])
+	var family_path: String = version_path.get_base_dir()
+	var version: int = SafeVariant.integral_int_or(record.get("version", 0), 0)
+	if version <= 0:
+		last_error = "The selected %s model has an invalid version identity." % _body_label()
+		return false
+	if not TrainingFileIO.preserve_next_version_floor(
+		family_path,
+		NEXT_VERSION_FILE_NAME,
+		version + 1
+	):
+		last_error = "Could not preserve the %s model version sequence." % _body_label()
+		return false
 	var removed: bool = TrainingFileIO.remove_directory_recursive_absolute(
-		ProjectSettings.globalize_path(str(record["storage_path"]))
+		ProjectSettings.globalize_path(version_path)
 	)
 	if not removed:
 		last_error = "Could not delete the selected %s model version." % _body_label()
@@ -239,23 +253,6 @@ func _resolve(record_or_id: Variant) -> Dictionary:
 	):
 		return {}
 	return record
-
-
-func _collect_family(path: String, result: Array[Dictionary]) -> void:
-	var directory: DirAccess = DirAccess.open(path)
-	if directory == null:
-		return
-	var model_key: String = path.get_file()
-	directory.list_dir_begin()
-	var entry: String = directory.get_next()
-	while not entry.is_empty():
-		if directory.current_is_dir():
-			var version_path: String = path.path_join(entry)
-			var resolved: Dictionary = _resolve("%s/%s" % [model_key, entry])
-			if str(resolved.get("storage_path", "")) == version_path:
-				result.append(resolved)
-		entry = directory.get_next()
-	directory.list_dir_end()
 
 
 func _next_version(path: String) -> int:

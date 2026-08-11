@@ -80,36 +80,27 @@ func configure(
 	initial_environment_revision: int
 ) -> bool:
 	group_id = new_group_id
-	candidate_id = RLTrainingMath.finite_int_or(candidate.get("candidate_id", -1), -1)
-	candidate_hash = str(candidate.get("candidate_hash", ""))
-	plan = SafeVariant.dictionary_copy(candidate.get("evaluation_plan", {}))
-	evaluation_contract = SafeVariant.dictionary_copy(candidate.get("evaluation_contract", {}))
-	evaluation_contract_hash = str(candidate.get("evaluation_contract_hash", ""))
-	environment_revision = initial_environment_revision
-	candidate_checkpoint = checkpoint.duplicate(true)
-	if candidate_id < 0 or candidate_hash.is_empty():
-		last_error = "candidate metadata is incomplete"
+	var job_configuration: Dictionary = RLTrainingCandidateSupport.evaluation_job_configuration(
+		candidate,
+		checkpoint,
+		"turret",
+		initial_environment_revision
+	)
+	if not bool(job_configuration.get("valid", false)):
+		last_error = str(job_configuration.get("error", "candidate evaluation configuration is invalid"))
 		return false
-	if not RLEvaluationContract.is_valid(evaluation_contract, "turret"):
-		last_error = "candidate has no valid frozen turret evaluation contract"
-		return false
-	if evaluation_contract_hash != str(evaluation_contract.get("contract_hash", "")):
-		last_error = "candidate evaluation contract hash is inconsistent"
-		return false
-	if str(plan.get("evaluation_contract_hash", "")) != evaluation_contract_hash:
-		last_error = "candidate evaluation plan does not match its frozen environment contract"
-		return false
-	if (
-		not RLDeterministicEvaluationSuite.is_valid_plan(plan, "turret")
-		or candidate_checkpoint.is_empty()
-	):
-		last_error = "candidate evaluation plan or checkpoint is empty"
-		return false
+	candidate_id = int(job_configuration["candidate_id"])
+	candidate_hash = str(job_configuration["candidate_hash"])
+	plan = job_configuration["plan"] as Dictionary
+	evaluation_contract = job_configuration["evaluation_contract"] as Dictionary
+	evaluation_contract_hash = str(job_configuration["evaluation_contract_hash"])
+	environment_revision = int(job_configuration["environment_revision"])
+	candidate_checkpoint = job_configuration["checkpoint"] as Dictionary
 	var environment: Dictionary = evaluation_contract.get("environment", {})
-	var loadout_record: Dictionary = environment.get(
+	var loadout_record: Dictionary = SafeVariant.dictionary_copy(environment.get(
 		"hardware",
 		candidate_checkpoint.get("turret_loadout", {})
-	)
+	))
 	if not loadout_record.is_empty():
 		loadout = TurretLoadout.from_dictionary(loadout_record)
 	elif fallback_loadout != null:
@@ -124,10 +115,10 @@ func configure(
 	if not runtime_model.load_checkpoint(candidate_checkpoint, expected_signature):
 		last_error = "frozen turret candidate could not load its runtime policy"
 		return false
-	var reward_cards: Dictionary = environment.get(
+	var reward_cards: Dictionary = SafeVariant.dictionary_copy(environment.get(
 		"reward_cards",
 		candidate_checkpoint.get("reward_cards", {})
-	)
+	))
 	if not reward_cards.is_empty():
 		reward_deck.load_configuration(reward_cards)
 	world_offset = EVALUATION_WORLD_BASE + Vector3(

@@ -16,7 +16,7 @@ var cards: Dictionary[String, FourLimbRewardCard] = {}
 
 
 func _init(enabled_components: Dictionary = {}) -> void:
-	_add(
+	RewardCardDeckSupport.add_card(cards,
 		"approach",
 		"Move toward target",
 		"Rewards reducing target distance and applies a small cost while searching far away.",
@@ -26,7 +26,7 @@ func _init(enabled_components: Dictionary = {}) -> void:
 		0.05,
 		FourLimbRewardCard.TYPE_MIXED
 	)
-	_add(
+	RewardCardDeckSupport.add_card(cards,
 		"radius",
 		"Hold near target",
 		"Rewards remaining inside the accepted target radius.",
@@ -36,7 +36,7 @@ func _init(enabled_components: Dictionary = {}) -> void:
 		0.05,
 		FourLimbRewardCard.TYPE_REWARD
 	)
-	_add(
+	RewardCardDeckSupport.add_card(cards,
 		"survival",
 		"Stay alive",
 		"Small reward for remaining operational and a timeout bonus for completing the episode.",
@@ -46,7 +46,7 @@ func _init(enabled_components: Dictionary = {}) -> void:
 		0.05,
 		FourLimbRewardCard.TYPE_REWARD
 	)
-	_add(
+	RewardCardDeckSupport.add_card(cards,
 		"ground_safety",
 		"Keep ground clearance",
 		"Punishes dangerous low flight and descending toward the ground.",
@@ -56,7 +56,7 @@ func _init(enabled_components: Dictionary = {}) -> void:
 		0.05,
 		FourLimbRewardCard.TYPE_PUNISHMENT
 	)
-	_add(
+	RewardCardDeckSupport.add_card(cards,
 		"smoothness",
 		"Smooth motor commands",
 		"Punishes abrupt command changes and sustained extreme propeller commands.",
@@ -66,7 +66,7 @@ func _init(enabled_components: Dictionary = {}) -> void:
 		0.05,
 		FourLimbRewardCard.TYPE_PUNISHMENT
 	)
-	_add(
+	RewardCardDeckSupport.add_card(cards,
 		"obstacle",
 		"Avoid walls",
 		"Punishes closing on nearby obstacles and making contact with them.",
@@ -76,7 +76,7 @@ func _init(enabled_components: Dictionary = {}) -> void:
 		0.05,
 		FourLimbRewardCard.TYPE_PUNISHMENT
 	)
-	_add(
+	RewardCardDeckSupport.add_card(cards,
 		"turret_safety",
 		"Avoid turret fire",
 		"Punishes confirmed hits, damage taken, and remaining exposed to a turret that has line of sight and is aimed at the drone.",
@@ -86,10 +86,10 @@ func _init(enabled_components: Dictionary = {}) -> void:
 		0.05,
 		FourLimbRewardCard.TYPE_PUNISHMENT
 	)
-	_add(
+	RewardCardDeckSupport.add_card(cards,
 		"failure",
 		"Avoid crashes and escape",
-		"Applies the terminal punishment for crashes, flips, deadlocks, and leaving the arena.",
+		"Applies the terminal punishment for crashes, deadlocks, destruction, and leaving the arena.",
 		1.0,
 		0.0,
 		8.0,
@@ -100,12 +100,7 @@ func _init(enabled_components: Dictionary = {}) -> void:
 
 
 func card_list() -> Array[FourLimbRewardCard]:
-	var result: Array[FourLimbRewardCard] = []
-	for card_id: String in CARD_ORDER:
-		var card_value = cards.get(card_id) as FourLimbRewardCard
-		if card_value != null:
-			result.append(card_value)
-	return result
+	return RewardCardDeckSupport.card_list(cards, CARD_ORDER)
 
 
 func card(card_id: String) -> FourLimbRewardCard:
@@ -113,25 +108,19 @@ func card(card_id: String) -> FourLimbRewardCard:
 
 
 func enabled_components_dictionary() -> Dictionary:
-	var result = DroneTrainingReward.DEFAULT_COMPONENTS.duplicate()
-	for card_value: FourLimbRewardCard in card_list():
-		result[card_value.card_id] = card_value.enabled
-	return result
+	return RewardCardDeckSupport.enabled_dictionary(
+		cards,
+		CARD_ORDER,
+		DroneTrainingReward.DEFAULT_COMPONENTS
+	)
 
 
 func configuration_dictionary() -> Dictionary:
-	var result = {}
-	for card_value: FourLimbRewardCard in card_list():
-		result[card_value.card_id] = card_value.to_dictionary()
-	return result
+	return RewardCardDeckSupport.configuration_dictionary(cards, CARD_ORDER)
 
 
 func load_configuration(value: Dictionary) -> void:
-	for card_id: String in cards:
-		var configured_value = value.get(card_id, null)
-		var card_value = cards[card_id] as FourLimbRewardCard
-		if configured_value is Dictionary:
-			card_value.load_dictionary(configured_value)
+	RewardCardDeckSupport.load_configuration(cards, value)
 
 
 func load_legacy_enabled_components(value: Dictionary) -> void:
@@ -143,26 +132,4 @@ func load_legacy_enabled_components(value: Dictionary) -> void:
 		if configured_value is Dictionary:
 			card_value.load_dictionary(configured_value)
 		else:
-			card_value.enabled = bool(configured_value)
-
-
-func _add(
-	id_value: String,
-	name_value: String,
-	explanation_value: String,
-	intensity_value: float,
-	minimum_value: float,
-	maximum_value: float,
-	step_value: float,
-	signal_type_value: int
-) -> void:
-	cards[id_value] = FourLimbRewardCard.new(
-		id_value,
-		name_value,
-		explanation_value,
-		intensity_value,
-		minimum_value,
-		maximum_value,
-		step_value,
-		signal_type_value
-	)
+			card_value.enabled = SafeVariant.bool_or(configured_value, card_value.enabled)

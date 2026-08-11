@@ -141,13 +141,13 @@ static func part_tags(part: Resource) -> Array[StringName]:
 static func control_descriptors(part: Resource) -> Array[Dictionary]:
 	if part == null or not part.has_method("ml_control_descriptors"):
 		return []
-	return _dictionary_array(part.call("ml_control_descriptors"))
+	return SafeVariant.dictionary_array_copy(part.call("ml_control_descriptors"))
 
 
 static func observation_descriptors(part: Resource) -> Array[Dictionary]:
 	if part == null or not part.has_method("ml_observation_descriptors"):
 		return []
-	return _dictionary_array(part.call("ml_observation_descriptors"))
+	return SafeVariant.dictionary_array_copy(part.call("ml_observation_descriptors"))
 
 
 static func encode_observation(
@@ -191,16 +191,6 @@ static func _string_tags(tags: Array[StringName]) -> Array[String]:
 	var result: Array[String] = []
 	for tag: StringName in tags:
 		result.append(str(tag))
-	return result
-
-
-static func _dictionary_array(value: Variant) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	if not (value is Array):
-		return result
-	for item: Variant in value:
-		if item is Dictionary:
-			result.append((item as Dictionary).duplicate(true))
 	return result
 
 

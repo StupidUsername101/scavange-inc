@@ -32,6 +32,10 @@ func _init() -> void:
 	_expect(SafeVariant.bool_or(1, false), "compatibility bool accepts legacy integer one")
 	_expect(not SafeVariant.bool_or(0, true), "compatibility bool accepts legacy integer zero")
 	_expect(
+		SafeVariant.bool_or(0.000000001, false),
+		"compatibility bool treats every finite nonzero float as true instead of approximately zero"
+	)
+	_expect(
 		SafeVariant.strict_bool_or(1, true),
 		"strict bool rejects numeric values and keeps its fallback"
 	)
@@ -73,6 +77,22 @@ func _init() -> void:
 	_expect(
 		SafeVariant.dictionary_copy("not a dictionary").is_empty(),
 		"wrong-type dictionary values fail closed"
+	)
+
+	var dictionary_array_source: Array = [{"value": 1}, "skip", {"value": 2}]
+	var dictionary_array: Array[Dictionary] = SafeVariant.dictionary_array_copy(
+		dictionary_array_source
+	)
+	_expect(
+		dictionary_array.size() == 2
+		and int(dictionary_array[0].get("value", 0)) == 1
+		and int(dictionary_array[1].get("value", 0)) == 2,
+		"dictionary-array decoding filters wrong-type entries consistently"
+	)
+	dictionary_array[0]["value"] = 99
+	_expect(
+		int((dictionary_array_source[0] as Dictionary).get("value", 0)) == 1,
+		"dictionary-array decoding deep-copies accepted records by default"
 	)
 
 	quit(0 if failure_count == 0 else 1)

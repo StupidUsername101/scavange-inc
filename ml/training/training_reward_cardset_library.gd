@@ -14,6 +14,8 @@ const STORAGE_DIRECTORY = "user://ml_reward_cardsets"
 const STORAGE_PATH = STORAGE_DIRECTORY + "/cardsets.json"
 
 var last_error = ""
+var storage_path: String = STORAGE_PATH
+var storage_directory: String = STORAGE_DIRECTORY
 var custom_cardsets: Dictionary = {
 	BODY_TYPE_DRONE: [],
 	BODY_TYPE_FOUR_LIMB: [],
@@ -21,7 +23,9 @@ var custom_cardsets: Dictionary = {
 }
 
 
-func _init() -> void:
+func _init(custom_storage_path: String = STORAGE_PATH) -> void:
+	storage_path = custom_storage_path if not custom_storage_path.is_empty() else STORAGE_PATH
+	storage_directory = storage_path.get_base_dir()
 	_load_custom_cardsets()
 
 
@@ -30,21 +34,10 @@ func cardsets_for_body_type(body_type: String) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	for cardset: Dictionary in _built_in_cardsets(normalized):
 		result.append(cardset.duplicate(true))
-	var custom_values: Array = custom_cardsets.get(normalized, [])
-	var sorted_custom: Array[Dictionary] = []
-	for value: Variant in custom_values:
-		if not (value is Dictionary):
-			continue
-		var record = (value as Dictionary).duplicate(true)
-		if (
-			not str(record.get("id", "")).begins_with("user:")
-			or str(record.get("display_name", "")).strip_edges().is_empty()
-			or not (record.get("cards", {}) is Dictionary)
-		):
-			continue
-		record["body_type"] = normalized
-		record["builtin"] = false
-		sorted_custom.append(record)
+	var sorted_custom: Array[Dictionary] = _valid_custom_records(
+		custom_cardsets.get(normalized, []),
+		normalized
+	)
 	sorted_custom.sort_custom(_sort_by_display_name)
 	result.append_array(sorted_custom)
 	return result
@@ -68,17 +61,23 @@ func save_custom_cardset(
 	if cleaned_name.is_empty():
 		last_error = "Enter a preset name first."
 		return {}
-	if configuration.is_empty():
-		last_error = "The selected group has no reward-card configuration to save."
+	if not RewardCardDeckSupport.valid_configuration_payload(configuration):
+		last_error = "The selected group has no valid reward-card configuration to save."
 		return {}
-	var values: Array = custom_cardsets.get(normalized, [])
+	var stored_values: Variant = custom_cardsets.get(normalized, [])
+	var previous_values: Array = (stored_values as Array).duplicate(true) if stored_values is Array else []
+	var values: Array = _valid_custom_records(stored_values, normalized)
 	var record_id = ""
 	for value: Variant in values:
 		if not (value is Dictionary):
 			continue
 		var existing = value as Dictionary
-		if str(existing.get("display_name", "")).nocasecmp_to(cleaned_name) == 0:
-			record_id = str(existing.get("id", ""))
+		var existing_id: String = str(existing.get("id", ""))
+		if (
+			existing_id.begins_with("user:%s:" % normalized)
+			and str(existing.get("display_name", "")).nocasecmp_to(cleaned_name) == 0
+		):
+			record_id = existing_id
 			break
 	if record_id.is_empty():
 		record_id = "user:%s:%s" % [
@@ -104,6 +103,7 @@ func save_custom_cardset(
 		values.append(record)
 	custom_cardsets[normalized] = values
 	if not _save_custom_cardsets():
+		custom_cardsets[normalized] = previous_values
 		return {}
 	return record.duplicate(true)
 
@@ -114,13 +114,18 @@ func delete_custom_cardset(body_type: String, cardset_id: String) -> bool:
 		last_error = "Built-in reward cardsets cannot be deleted."
 		return false
 	var normalized = _normalized_body_type(body_type)
-	var values: Array = custom_cardsets.get(normalized, [])
+	var stored_values: Variant = custom_cardsets.get(normalized, [])
+	var previous_values: Array = (stored_values as Array).duplicate(true) if stored_values is Array else []
+	var values: Array = _valid_custom_records(stored_values, normalized)
 	for index in range(values.size() - 1, -1, -1):
 		var value: Variant = values[index]
 		if value is Dictionary and str((value as Dictionary).get("id", "")) == cardset_id:
 			values.remove_at(index)
 			custom_cardsets[normalized] = values
-			return _save_custom_cardsets()
+			if _save_custom_cardsets():
+				return true
+			custom_cardsets[normalized] = previous_values
+			return false
 	last_error = "The selected reward preset no longer exists."
 	return false
 
@@ -298,9 +303,9 @@ static func _configure(
 
 
 func _load_custom_cardsets() -> void:
-	if not FileAccess.file_exists(STORAGE_PATH):
+	if not FileAccess.file_exists(storage_path):
 		return
-	var file: FileAccess = FileAccess.open(STORAGE_PATH, FileAccess.READ)
+	var file: FileAccess = FileAccess.open(storage_path, FileAccess.READ)
 	if file == null:
 		last_error = "Could not read saved reward cardsets."
 		return
@@ -314,12 +319,35 @@ func _load_custom_cardsets() -> void:
 		return
 	for body_type in [BODY_TYPE_DRONE, BODY_TYPE_FOUR_LIMB, BODY_TYPE_TURRET]:
 		var loaded: Variant = (body_records as Dictionary).get(body_type, [])
-		custom_cardsets[body_type] = loaded.duplicate(true) if loaded is Array else []
+		custom_cardsets[body_type] = _valid_custom_records(loaded, body_type)
+
+
+static func _valid_custom_records(value: Variant, body_type: String) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if not (value is Array):
+		return result
+	var id_prefix: String = "user:%s:" % body_type
+	for item: Variant in value:
+		if not (item is Dictionary):
+			continue
+		var record: Dictionary = (item as Dictionary).duplicate(true)
+		if (
+			not str(record.get("id", "")).begins_with(id_prefix)
+			or str(record.get("display_name", "")).strip_edges().is_empty()
+			or not record.has("cards")
+			or not (record["cards"] is Dictionary)
+			or not RewardCardDeckSupport.valid_configuration_payload(record["cards"] as Dictionary)
+		):
+			continue
+		record["body_type"] = body_type
+		record["builtin"] = false
+		result.append(record)
+	return result
 
 
 func _save_custom_cardsets() -> bool:
 	last_error = ""
-	var absolute_directory = ProjectSettings.globalize_path(STORAGE_DIRECTORY)
+	var absolute_directory = ProjectSettings.globalize_path(storage_directory)
 	var directory_error = DirAccess.make_dir_recursive_absolute(absolute_directory)
 	if directory_error != OK:
 		last_error = "Could not create the reward-cardset directory."
@@ -328,7 +356,7 @@ func _save_custom_cardsets() -> bool:
 		"schema_version": SCHEMA_VERSION,
 		"body_types": custom_cardsets,
 	}, "\t")
-	if not TrainingFileIO.write_text_atomic(STORAGE_PATH, content):
+	if not TrainingFileIO.write_text_atomic(storage_path, content):
 		last_error = "Could not save reward cardsets."
 		return false
 	return true

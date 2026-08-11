@@ -67,11 +67,15 @@ func save_version(
 		"weights": weights.duplicate(true),
 	}
 	if not _write_json_file(manifest_path, record):
-		var manifest_write_error: String = error_string(FileAccess.get_open_error())
 		TrainingFileIO.remove_directory_recursive_absolute(
 			ProjectSettings.globalize_path(version_path)
 		)
-		last_error = "Could not write model version atomically (%s)." % manifest_write_error
+		last_error = "Could not write the model version atomically."
+		return {}
+	if not _record_next_version_floor(root_path.path_join(model_key), version_number + 1):
+		TrainingFileIO.remove_directory_recursive_absolute(
+			ProjectSettings.globalize_path(version_path)
+		)
 		return {}
 	record["storage_path"] = version_path
 	return record
@@ -111,9 +115,8 @@ func save_training_checkpoint(
 	var manifest_path: String = version_path.path_join(MANIFEST_FILE_NAME)
 	var checkpoint_path = version_path.path_join(PPO_CHECKPOINT_FILE_NAME)
 	if not _write_json_file(checkpoint_path, checkpoint):
-		var checkpoint_write_error = error_string(FileAccess.get_open_error())
 		_remove_directory_recursive_absolute(ProjectSettings.globalize_path(version_path))
-		last_error = "Could not write the training checkpoint (%s)." % checkpoint_write_error
+		last_error = "Could not write the training checkpoint atomically."
 		return {}
 
 	var created_unix_ms = int(Time.get_unix_time_from_system() * 1000.0)
@@ -140,9 +143,13 @@ func save_training_checkpoint(
 		1
 	), true)
 	if not _write_json_file(manifest_path, record):
-		var manifest_write_error = error_string(FileAccess.get_open_error())
 		_remove_directory_recursive_absolute(ProjectSettings.globalize_path(version_path))
-		last_error = "Could not write the training model manifest (%s)." % manifest_write_error
+		last_error = "Could not write the training model manifest atomically."
+		return {}
+	if not _record_next_version_floor(root_path.path_join(model_key), version_number + 1):
+		TrainingFileIO.remove_directory_recursive_absolute(
+			ProjectSettings.globalize_path(version_path)
+		)
 		return {}
 	record["storage_path"] = version_path
 	return record
@@ -207,10 +214,9 @@ func overwrite_training_checkpoint(
 		last_error = "The rolling model's previous checkpoint could not be staged for rollback."
 		return {}
 	if not _write_json_file(checkpoint_path, checkpoint):
-		var checkpoint_write_error = error_string(FileAccess.get_open_error())
 		var run_restored = _restore_directory_backup(absolute_run_path, run_backup_path)
 		last_error = (
-			"Could not overwrite the rolling training checkpoint (%s)." % checkpoint_write_error
+			"Could not overwrite the rolling training checkpoint atomically."
 			if run_restored
 			else "Could not overwrite the rolling checkpoint and could not restore its previous evaluation directory."
 		)
@@ -236,11 +242,10 @@ func overwrite_training_checkpoint(
 	stored_record.erase("last_used_utc")
 	stored_record.erase("use_count")
 	if not _write_json_file(manifest_path, stored_record):
-		var manifest_write_error = error_string(FileAccess.get_open_error())
 		var checkpoint_restored = _write_json_file(checkpoint_path, previous_checkpoint)
 		var run_restored = _restore_directory_backup(absolute_run_path, run_backup_path)
 		if checkpoint_restored and run_restored:
-			last_error = "Could not update the rolling training manifest (%s); the previous checkpoint and evaluation results were restored." % manifest_write_error
+			last_error = "Could not update the rolling training manifest atomically; the previous checkpoint and evaluation results were restored."
 		else:
 			last_error = "Rolling save failed while updating the manifest and rollback was incomplete; inspect this model version before using it."
 		return {}
@@ -341,19 +346,10 @@ func inspect_version(version_record: Dictionary) -> Dictionary:
 func list_versions() -> Array[Dictionary]:
 	last_error = ""
 	var result: Array[Dictionary] = []
-	var root = DirAccess.open(root_path)
-	if root == null:
-		return result
-	root.list_dir_begin()
-	var model_directory = root.get_next()
-	while not model_directory.is_empty():
-		if root.current_is_dir():
-			_collect_model_versions(
-				root_path.path_join(model_directory),
-				result
-			)
-		model_directory = root.get_next()
-	root.list_dir_end()
+	for version_id: String in TrainingFileIO.list_version_ids(root_path, "model"):
+		var record: Dictionary = _resolve_version(version_id)
+		if not record.is_empty():
+			result.append(_with_usage_metadata(record))
 	result.sort_custom(_sort_versions)
 	return result
 
@@ -462,7 +458,7 @@ func record_episode(version_record: Dictionary, result: Dictionary) -> String:
 	stored_result["recorded_unix_ms"] = unix_ms
 	stored_result["recorded_utc"] = Time.get_datetime_string_from_system(true, false) + "Z"
 	if not TrainingFileIO.write_json_dictionary_atomic(result_path, stored_result):
-		last_error = "Could not write episode result (%s)." % error_string(FileAccess.get_open_error())
+		last_error = "Could not write the episode result atomically."
 		return ""
 	return run_id
 
@@ -653,27 +649,6 @@ func _runtime_contract_for_checkpoint(checkpoint: Dictionary) -> Dictionary:
 	return DroneTrainingAlgorithmCatalog.runtime_contract(checkpoint)
 
 
-func _collect_model_versions(
-	model_path: String,
-	result: Array[Dictionary]
-) -> void:
-	var directory = DirAccess.open(model_path)
-	if directory == null:
-		return
-	var model_key: String = model_path.get_file()
-	directory.list_dir_begin()
-	var version_directory = directory.get_next()
-	while not version_directory.is_empty():
-		if directory.current_is_dir():
-			var record: Dictionary = _resolve_version(
-				"%s/%s" % [model_key, version_directory]
-			)
-			if not record.is_empty():
-				result.append(_with_usage_metadata(record))
-		version_directory = directory.get_next()
-	directory.list_dir_end()
-
-
 func _resolve_version(record_or_id: Variant) -> Dictionary:
 	var version_id: String = (
 		str((record_or_id as Dictionary).get("version_id", ""))
@@ -745,9 +720,7 @@ func _record_next_version_floor(model_path: String, requested_floor: int) -> boo
 		NEXT_VERSION_FILE_NAME,
 		requested_floor
 	):
-		last_error = "Could not preserve the model family's version sequence atomically (%s)." % error_string(
-			FileAccess.get_open_error()
-		)
+		last_error = "Could not preserve the model family's version sequence atomically."
 		return false
 	return true
 

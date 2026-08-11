@@ -87,7 +87,10 @@ func configure_components(components: Dictionary) -> void:
 			continue
 		var configured_value = components[key]
 		if configured_value is Dictionary:
-			enabled_components[key] = bool(configured_value.get("enabled", true))
+			enabled_components[key] = SafeVariant.bool_or(
+				configured_value.get("enabled", true),
+				true
+			)
 			component_intensities[key] = maxf(
 				RLTrainingMath.finite_float_or(
 					configured_value.get("intensity"),
@@ -96,7 +99,10 @@ func configure_components(components: Dictionary) -> void:
 				0.0
 			)
 		else:
-			enabled_components[key] = bool(configured_value)
+			enabled_components[key] = SafeVariant.bool_or(
+				configured_value,
+				bool(DEFAULT_COMPONENTS.get(key, true))
+			)
 
 
 func is_component_enabled(component: String) -> bool:
@@ -214,7 +220,11 @@ static func _configured_enabled(components: Dictionary, key: String) -> bool:
 	if not components.has(key):
 		return bool(DEFAULT_COMPONENTS.get(key, true))
 	var value: Variant = components[key]
-	return bool(value.get("enabled", true)) if value is Dictionary else bool(value)
+	return (
+		SafeVariant.bool_or((value as Dictionary).get("enabled", true), true)
+		if value is Dictionary
+		else SafeVariant.bool_or(value, bool(DEFAULT_COMPONENTS.get(key, true)))
+	)
 
 
 static func _configured_intensity(components: Dictionary, key: String) -> float:

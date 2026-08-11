@@ -433,6 +433,69 @@ func _test_malformed_evaluation_metadata_is_rejected_safely() -> void:
 	var decision: Dictionary = RLDeterministicEvaluator.promotion_decision(summary)
 	_expect(not bool(decision.get("promote", true)), "wrong-type promotion score cannot enter Best selection")
 
+	var turret_contract: Dictionary = RLEvaluationContract.create("turret", {
+		"hardware": {"fixture": true},
+		"reward_cards": {"fixture": {"enabled": true}},
+	})
+	var turret_plan: Dictionary = RLDeterministicEvaluationSuite.plan_for_contract(
+		"turret",
+		turret_contract,
+		9393
+	)
+	var candidate: Dictionary = {
+		"candidate_id": 4,
+		"candidate_hash": "candidate-4",
+		"evaluation_contract": turret_contract,
+		"evaluation_contract_hash": str(turret_contract.get("contract_hash", "")),
+		"evaluation_plan": turret_plan,
+	}
+	var configured_job: Dictionary = RLTrainingCandidateSupport.evaluation_job_configuration(
+		candidate,
+		{"checkpoint": true},
+		"turret",
+		17
+	)
+	_expect(
+		bool(configured_job.get("valid", false))
+		and int(configured_job.get("environment_revision", -1)) == 17,
+		"shared evaluator-job metadata accepts a matching frozen plan and contract"
+	)
+	var broken_environment_contract: Dictionary = RLEvaluationContract.create("turret", {
+		"hardware": "broken",
+		"reward_cards": {"fixture": {"enabled": true}},
+	})
+	var broken_environment_candidate: Dictionary = candidate.duplicate(true)
+	broken_environment_candidate["evaluation_contract"] = broken_environment_contract
+	broken_environment_candidate["evaluation_contract_hash"] = str(
+		broken_environment_contract.get("contract_hash", "")
+	)
+	broken_environment_candidate["evaluation_plan"] = RLDeterministicEvaluationSuite.plan_for_contract(
+		"turret",
+		broken_environment_contract,
+		9393
+	)
+	_expect(
+		not bool(RLTrainingCandidateSupport.evaluation_job_configuration(
+			broken_environment_candidate,
+			{"checkpoint": true},
+			"turret",
+			17
+		).get("valid", true)),
+		"shared evaluator-job metadata rejects malformed frozen hardware instead of falling back to live state"
+	)
+	var malformed_job_candidate: Dictionary = candidate.duplicate(true)
+	malformed_job_candidate["evaluation_plan"] = "broken"
+	var malformed_job: Dictionary = RLTrainingCandidateSupport.evaluation_job_configuration(
+		malformed_job_candidate,
+		{"checkpoint": true},
+		"turret",
+		17
+	)
+	_expect(
+		not bool(malformed_job.get("valid", true)),
+		"shared evaluator-job metadata rejects wrong-type plans without a typed Dictionary failure"
+	)
+
 
 func _suite_hash(plan: Dictionary) -> String:
 	var payload: Dictionary = plan.duplicate(true)

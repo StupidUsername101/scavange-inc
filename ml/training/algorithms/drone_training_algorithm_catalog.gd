@@ -110,7 +110,7 @@ static func inspect_checkpoint(checkpoint: Dictionary) -> Dictionary:
 				network.get("body_feature_count", -1), -1
 			)
 			var body_signature: String = str(network.get("body_interface_signature", ""))
-			var control_descriptors: Array[Dictionary] = _dictionary_array(
+			var control_descriptors: Array[Dictionary] = SafeVariant.dictionary_array_copy(
 				network.get("control_descriptors", [])
 			)
 			var body_contract: Dictionary = SafeVariant.dictionary_copy(checkpoint.get("body_interface", {}))
@@ -278,7 +278,7 @@ static func runtime_contract(checkpoint: Dictionary) -> Dictionary:
 				"action_count": RLTrainingMath.finite_int_or(network.get("action_count", 0), -1),
 				"body_feature_count": RLTrainingMath.finite_int_or(network.get("body_feature_count", 0), -1),
 				"body_interface_signature": str(network.get("body_interface_signature", "")),
-				"control_descriptors": _dictionary_array(network.get("control_descriptors", [])),
+				"control_descriptors": SafeVariant.dictionary_array_copy(network.get("control_descriptors", [])),
 				"body_interface": SafeVariant.dictionary_copy(checkpoint.get("body_interface", {})),
 				"hidden_size": RLTrainingMath.finite_int_or(network.get("hidden_size", 0), -1),
 				"hidden_layer_count": RLTrainingMath.finite_int_or(network.get("hidden_layer_count", 0), -1),
@@ -341,18 +341,8 @@ static func _valid_body_contract(
 		and RLTrainingMath.finite_int_or(contract.get("observation_count", -1), -1)
 		== expected_observations
 		and str(contract.get("contract_signature", "")) == expected_signature
-		and _dictionary_array(contract.get("controls", [])) == expected_descriptors
+		and SafeVariant.dictionary_array_copy(contract.get("controls", [])) == expected_descriptors
 	)
-
-
-static func _dictionary_array(value: Variant) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	if not (value is Array):
-		return result
-	for item: Variant in value:
-		if item is Dictionary:
-			result.append((item as Dictionary).duplicate(true))
-	return result
 
 
 static func can_branch(source_id: String, target_id: String) -> bool:

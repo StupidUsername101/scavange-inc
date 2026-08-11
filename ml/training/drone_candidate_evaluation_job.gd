@@ -90,29 +90,31 @@ func configure(
 	initial_environment_revision: int
 ) -> bool:
 	group_id = new_group_id
-	candidate_id = RLTrainingMath.finite_int_or(candidate.get("candidate_id", -1), -1)
-	candidate_hash = str(candidate.get("candidate_hash", ""))
-	# pending_evaluation_candidate() already returned a detached snapshot, so this job may own
-	# its plan directly instead of recursively copying 30 case dictionaries a second time.
-	plan = candidate.get("evaluation_plan", {}) as Dictionary
-	evaluation_contract = SafeVariant.dictionary_copy(candidate.get("evaluation_contract", {}))
-	evaluation_contract_hash = str(candidate.get("evaluation_contract_hash", ""))
-	if (
-		not RLEvaluationContract.is_valid(evaluation_contract, "drone")
-		or evaluation_contract_hash != str(evaluation_contract.get("contract_hash", ""))
-	):
-		last_error = "candidate has no valid frozen drone evaluation contract"
+	var job_configuration: Dictionary = RLTrainingCandidateSupport.evaluation_job_configuration(
+		candidate,
+		candidate_checkpoint,
+		"drone",
+		initial_environment_revision
+	)
+	if not bool(job_configuration.get("valid", false)):
+		last_error = str(job_configuration.get("error", "candidate evaluation configuration is invalid"))
 		return false
+	candidate_id = int(job_configuration["candidate_id"])
+	candidate_hash = str(job_configuration["candidate_hash"])
+	plan = job_configuration["plan"] as Dictionary
+	evaluation_contract = job_configuration["evaluation_contract"] as Dictionary
+	evaluation_contract_hash = str(job_configuration["evaluation_contract_hash"])
+	environment_revision = int(job_configuration["environment_revision"])
 	var environment: Dictionary = evaluation_contract.get("environment", {})
 	target_handler_configuration = SafeVariant.dictionary_copy(environment.get("target_handler", target_configuration))
-	reward_cards = SafeVariant.dictionary_copy(environment.get("reward_cards", candidate_reward_cards))
+	reward_cards = SafeVariant.dictionary_copy(environment.get("reward_cards", {}))
 	var termination_value: Variant = environment.get("episode_termination", {})
 	episode_termination_options = (
 		SafeVariant.dictionary_copy(termination_value)
 		if termination_value is Dictionary
 		else {}
 	)
-	var hardware_record: Dictionary = environment.get("hardware", {})
+	var hardware_record: Dictionary = SafeVariant.dictionary_copy(environment.get("hardware", {}))
 	# The frozen contract is authoritative. For the normal in-session case, use the group's
 	# already-instantiated body only when its canonical serialized hardware is exactly identical
 	# to that frozen record; otherwise reconstruct the frozen body from the record.
@@ -127,20 +129,10 @@ func configure(
 	# Candidate physics are isolated from live editable walls. The evaluator constructs its
 	# own floor and scenario geometry on a private layer, so room edits cannot redefine Best.
 	collision_mask_value = EVALUATION_WORLD_COLLISION_LAYER
-	unlimited_battery = bool(environment.get("unlimited_episode_battery", use_unlimited_battery))
-	environment_revision = initial_environment_revision
-	if candidate_id < 0 or candidate_hash.is_empty():
-		last_error = "candidate metadata is incomplete"
-		return false
-	if plan.is_empty() or not RLDeterministicEvaluationSuite.is_valid_plan(plan, "drone"):
-		last_error = "candidate has no deterministic evaluation plan"
-		return false
-	if str(plan.get("evaluation_contract_hash", "")) != evaluation_contract_hash:
-		last_error = "candidate evaluation plan does not match its frozen environment contract"
-		return false
-	if candidate_checkpoint.is_empty():
-		last_error = "candidate checkpoint is empty"
-		return false
+	unlimited_battery = SafeVariant.strict_bool_or(
+		environment.get("unlimited_episode_battery", use_unlimited_battery),
+		use_unlimited_battery
+	)
 	if base_loadout == null:
 		last_error = "candidate frozen drone hardware could not be reconstructed"
 		return false

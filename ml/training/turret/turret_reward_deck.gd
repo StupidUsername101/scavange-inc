@@ -25,21 +25,16 @@ var cards: Dictionary[String, FourLimbRewardCard] = {}
 
 
 func _init() -> void:
-	_add("aim", "Track the intercept point", "Gives dense signed shaping for the finite-speed intercept solution: turning toward it is rewarded, remaining pointed away is punished, and temporary wall occlusion does not erase the tracking objective. Firing still requires line of sight.", 1.0, 0.0, 5.0, 0.05, FourLimbRewardCard.TYPE_MIXED)
-	_add("hit", "Hit targets", "Rewards confirmed projectile impacts on the routed training target or a live combat target. Live combat hits also receive a small damage-dealt bonus.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_REWARD)
-	_add("shot_discipline", "Take viable shots", "Punishes firing without a shootable target, without line of sight, outside the weapon envelope, far off target, and projectile misses.", 1.0, 0.0, 5.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("smoothness", "Use realistic servo control", "Punishes abrupt changes in yaw, pitch, and trigger commands instead of teleport-like oscillation.", 1.0, 0.0, 3.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("damage_safety", "Avoid incoming fire", "Punishes damage received if turrets later fight combat-capable entities.", 1.0, 0.0, 6.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("failure", "Remain operational", "Applies a terminal punishment when the turret is destroyed.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "aim", "Track the intercept point", "Gives dense signed shaping for the finite-speed intercept solution: turning toward it is rewarded, remaining pointed away is punished, and temporary wall occlusion does not erase the tracking objective. Firing still requires line of sight.", 1.0, 0.0, 5.0, 0.05, FourLimbRewardCard.TYPE_MIXED)
+	RewardCardDeckSupport.add_card(cards, "hit", "Hit targets", "Rewards confirmed projectile impacts on the routed training target or a live combat target. Live combat hits also receive a small damage-dealt bonus.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_REWARD)
+	RewardCardDeckSupport.add_card(cards, "shot_discipline", "Take viable shots", "Punishes firing without a shootable target, without line of sight, outside the weapon envelope, far off target, and projectile misses.", 1.0, 0.0, 5.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "smoothness", "Use realistic servo control", "Punishes abrupt changes in yaw, pitch, and trigger commands instead of teleport-like oscillation.", 1.0, 0.0, 3.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "damage_safety", "Avoid incoming fire", "Punishes damage received if turrets later fight combat-capable entities.", 1.0, 0.0, 6.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "failure", "Remain operational", "Applies a terminal punishment when the turret is destroyed.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
 
 
 func card_list() -> Array[FourLimbRewardCard]:
-	var result: Array[FourLimbRewardCard] = []
-	for card_id in CARD_ORDER:
-		var value = cards.get(card_id) as FourLimbRewardCard
-		if value != null:
-			result.append(value)
-	return result
+	return RewardCardDeckSupport.card_list(cards, CARD_ORDER)
 
 
 func card(card_id: String) -> FourLimbRewardCard:
@@ -47,25 +42,15 @@ func card(card_id: String) -> FourLimbRewardCard:
 
 
 func configuration_dictionary() -> Dictionary:
-	var result = {}
-	for value in card_list():
-		result[value.card_id] = value.to_dictionary()
-	return result
+	return RewardCardDeckSupport.configuration_dictionary(cards, CARD_ORDER)
 
 
 func enabled_components_dictionary() -> Dictionary:
-	var result = {}
-	for value in card_list():
-		result[value.card_id] = value.enabled
-	return result
+	return RewardCardDeckSupport.enabled_dictionary(cards, CARD_ORDER)
 
 
 func load_configuration(value: Dictionary) -> void:
-	for card_id in cards:
-		var configured: Variant = value.get(card_id)
-		var reward_card = cards[card_id] as FourLimbRewardCard
-		if configured is Dictionary:
-			reward_card.load_dictionary(configured)
+	RewardCardDeckSupport.load_configuration(cards, value)
 
 
 func reset_state(initial_observation: Dictionary) -> Dictionary:
@@ -326,25 +311,3 @@ static func _command_change_norm(previous: PackedFloat64Array, current: PackedFl
 		var difference = maxf(absf(current[index] - previous[index]) - ACTION_CHANGE_DEADBAND, 0.0)
 		sum += difference * difference
 	return sqrt(sum / float(current.size()))
-
-
-func _add(
-	id_value: String,
-	name_value: String,
-	explanation_value: String,
-	intensity_value: float,
-	minimum_value: float,
-	maximum_value: float,
-	step_value: float,
-	signal_type_value: int
-) -> void:
-	cards[id_value] = FourLimbRewardCard.new(
-		id_value,
-		name_value,
-		explanation_value,
-		intensity_value,
-		minimum_value,
-		maximum_value,
-		step_value,
-		signal_type_value
-	)

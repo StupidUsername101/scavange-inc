@@ -12,6 +12,67 @@ static func pending_candidate_id(candidate: Dictionary) -> int:
 	return RLTrainingMath.finite_int_or(candidate.get("candidate_id", -1), -1)
 
 
+static func evaluation_job_configuration(
+	candidate: Dictionary,
+	checkpoint: Dictionary,
+	expected_body_kind: String,
+	environment_revision: int
+) -> Dictionary:
+	var candidate_id: int = RLTrainingMath.finite_int_or(
+		candidate.get("candidate_id", -1),
+		-1
+	)
+	var candidate_hash: String = str(candidate.get("candidate_hash", ""))
+	var plan: Dictionary = SafeVariant.dictionary_copy(candidate.get("evaluation_plan", {}))
+	var evaluation_contract: Dictionary = SafeVariant.dictionary_copy(
+		candidate.get("evaluation_contract", {})
+	)
+	var evaluation_contract_hash: String = str(
+		candidate.get("evaluation_contract_hash", "")
+	)
+	if candidate_id < 0 or candidate_hash.is_empty():
+		return {"valid": false, "error": "candidate metadata is incomplete"}
+	if not RLEvaluationContract.is_valid(evaluation_contract, expected_body_kind):
+		var body_label: String = expected_body_kind.replace("_", "-")
+		return {
+			"valid": false,
+			"error": "candidate has no valid frozen %s evaluation contract" % body_label,
+		}
+	var environment: Dictionary = SafeVariant.dictionary_copy(
+		evaluation_contract.get("environment", {})
+	)
+	var hardware: Dictionary = SafeVariant.dictionary_copy(environment.get("hardware", {}))
+	var reward_cards: Dictionary = SafeVariant.dictionary_copy(
+		environment.get("reward_cards", {})
+	)
+	if hardware.is_empty():
+		return {"valid": false, "error": "candidate frozen hardware is missing"}
+	if not RewardCardDeckSupport.valid_configuration_payload(reward_cards):
+		return {"valid": false, "error": "candidate frozen reward-card configuration is invalid"}
+	if evaluation_contract_hash != str(evaluation_contract.get("contract_hash", "")):
+		return {"valid": false, "error": "candidate evaluation contract hash is inconsistent"}
+	if str(plan.get("evaluation_contract_hash", "")) != evaluation_contract_hash:
+		return {
+			"valid": false,
+			"error": "candidate evaluation plan does not match its frozen environment contract",
+		}
+	if (
+		not RLDeterministicEvaluationSuite.is_valid_plan(plan, expected_body_kind)
+		or checkpoint.is_empty()
+	):
+		return {"valid": false, "error": "candidate evaluation plan or checkpoint is empty"}
+	return {
+		"valid": true,
+		"candidate_id": candidate_id,
+		"candidate_hash": candidate_hash,
+		"plan": plan,
+		"evaluation_contract": evaluation_contract,
+		"evaluation_contract_hash": evaluation_contract_hash,
+		"environment_revision": environment_revision,
+		"checkpoint": checkpoint.duplicate(true),
+	}
+
+
 static func evaluation_job_progress(
 	status: String,
 	group_id: int,

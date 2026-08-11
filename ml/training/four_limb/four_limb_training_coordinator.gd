@@ -577,21 +577,10 @@ func load_checkpoint(group_id: int, checkpoint: Dictionary) -> bool:
 
 
 func apply_pending_reward_config(group: Dictionary) -> void:
-	var pending: Dictionary = group.get("pending_reward_config", {})
-	if pending.is_empty():
+	var deck: FourLimbRewardDeck = group.get("reward_deck") as FourLimbRewardDeck
+	if deck == null:
 		return
-	var deck = group["reward_deck"] as FourLimbRewardDeck
-	for card_id: String in pending:
-		var card_value = deck.card(card_id)
-		if card_value == null:
-			continue
-		var values: Dictionary = pending[card_id]
-		card_value.load_dictionary(values)
-	group["pending_reward_config"] = {}
-	group["reward_cardset_id"] = str(group.get("pending_reward_cardset_id", "custom"))
-	group["reward_cardset_name"] = str(group.get("pending_reward_cardset_name", "Custom"))
-	group.erase("pending_reward_cardset_id")
-	group.erase("pending_reward_cardset_name")
+	RewardCardDeckSupport.apply_pending_configuration(group, deck.cards)
 
 
 func _start_group_episode(

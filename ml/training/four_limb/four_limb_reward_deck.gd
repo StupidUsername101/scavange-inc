@@ -55,45 +55,40 @@ var cards: Dictionary[String, FourLimbRewardCard] = {}
 
 
 func _init() -> void:
-	_add("survival", "Stay alive", "Tiny reward for remaining operational.\nIt must never outweigh locomotion toward the target.", 0.003, 0.0, 0.1, 0.001, FourLimbRewardCard.TYPE_REWARD)
-	_add("uprightness", "Stay upright", "Small support reward for keeping the core upright.\nTarget progress remains the primary objective.", 0.02, 0.0, 0.5, 0.005, FourLimbRewardCard.TYPE_REWARD)
-	_add("core_rotational_stability", "Steady core rotation", "Rewards a calm core and punishes pitch/roll angular motion or oscillation.\nSustained yaw turning is free; only rapid left-right yaw reversal counts as jitter.", 0.025, 0.0, 0.5, 0.005, FourLimbRewardCard.TYPE_MIXED)
-	_add("height_stability", "Stable body height", "Rewards holding the chassis at the body's authored standing height and punishes vertical bouncing.\nDisable or reduce this card for jumping lessons.", 0.04, 0.0, 1.0, 0.005, FourLimbRewardCard.TYPE_MIXED)
-	_add("core_clearance", "Protect the core", "Punishes letting the core approach the floor or an object below it.", 0.25, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("core_drag", "Do not crawl on the chassis", "Continuous punishment while the core itself supports or drags across the ground.\nLeg recovery remains possible, but head-rolling cannot farm travel reward.", 0.45, 0.0, 3.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("target_progress", "Move toward target", "Primary locomotion signal.\nPays for reducing full 3D distance to the routed objective, including its target-height requirement, and punishes moving away.", 1.25, 0.0, 4.0, 0.05, FourLimbRewardCard.TYPE_MIXED)
-	_add("climb_reach", "Reach for climbable surface", "Potential-based shaping while an elevated destination requires climbing.\nPays only for moving a free distal grip closer to a visible climbable candidate; backing away gives the reward back, so oscillating cannot farm it.", 0.60, 0.0, 3.0, 0.05, FourLimbRewardCard.TYPE_MIXED)
-	_add("climb_grip", "Useful climbing grip", "One-time contextual discovery reward when an independently controlled limb actually latches a climbable surface while the target is above the body.\nHolding the wall without making target progress pays nothing, so grip cannot replace the real objective.", 1.00, 0.0, 3.0, 0.05, FourLimbRewardCard.TYPE_REWARD)
-	_add("climb_ascent", "Climb upward", "Rewards new high-water core height reached while at least one independently controlled grip is attached to a climbable surface.\nOnly new height pays, so bobbing up and down on one hold cannot farm reward.", 1.00, 0.0, 4.0, 0.05, FourLimbRewardCard.TYPE_REWARD)
-	_add("jump_launch", "Explosive takeoff", "One-time reward after a real jump gains meaningful height and airtime.\nBrief contact flicker or jumping-jack motion cannot trigger it. Disabled in the stock ground-locomotion cardset.", 1.0, 0.0, 5.0, 0.05, FourLimbRewardCard.TYPE_REWARD, false)
-	_add("jump_air_progress", "Airborne target progress", "Rewards horizontal target progress only after a jump has gained meaningful height and airtime.\nUnlike ordinary locomotion progress, it does not require foot support or standing height.", 1.0, 0.0, 6.0, 0.05, FourLimbRewardCard.TYPE_REWARD, false)
-	_add("jump_distance", "Long jump distance", "One-time reward when a qualified jump ends on the feet.\nLonger horizontal travel earns more, scaled by landing quality.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_REWARD, false)
-	_add("landing_quality", "Controlled landing", "Rewards an upright low-impact foot landing after a qualified jump and punishes a hard or chassis-first qualified landing.\nOrdinary foot-contact chatter pays nothing.", 1.0, 0.0, 5.0, 0.05, FourLimbRewardCard.TYPE_MIXED, false)
-	_add("target_search", "Do not idle away from target", "Time cost while outside the accepted target radius.\nA perfectly stable worker that makes no target progress must still lose reward; locomotion progress is what turns a ground episode positive.", 0.10, 0.0, 0.5, 0.005, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("stable_target_hold", "Stable target hold", "Strong reward near the target.\nIt is reduced by speed, poor uprightness, and unstable body height.", 1.0, 0.0, 4.0, 0.05, FourLimbRewardCard.TYPE_REWARD)
-	_add("item_pickup", "Pick up an item", "Rewards first gripping the assigned carryable and pays the larger reward after raising it from the height where this worker first gripped it. Authored training items scale both stages by their Reward value.\nEach item can pay each stage only once per episode, so inherited item height or dropping and re-grabbing cannot farm reward.", 1.5, 0.0, 10.0, 0.05, FourLimbRewardCard.TYPE_REWARD, false)
-	_add("item_delivery", "Deliver held item", "Conditional carry reward. While a compatible item is actually held, pays signed potential progress toward the nearest accepting delivery destination and pays a one-time completion reward when cargo crosses into that destination after being picked up outside it. Moving away gives the shaping reward back, and each physical item can complete only once per worker episode even when several destination groups accept it. Cargo first grabbed while already inside a matching bay is treated as already delivered and cannot be farmed by stepping out and back in.", 2.0, 0.0, 12.0, 0.05, FourLimbRewardCard.TYPE_MIXED, false)
-	_add("foot_support", "Useful foot support", "Tiny support reward when multiple feet support an upright body.\nIt should help locomotion, not replace it.", 0.01, 0.0, 0.4, 0.005, FourLimbRewardCard.TYPE_REWARD)
-	_add("foot_slip", "Foot slipping", "Punishes a planted foot sliding tangentially across its support surface.\nOnly the actual terminal foot shape counts as planted support; shin scraping is not treated as a good foot plant. The stock weight is deliberately strong enough that skating is materially worse than taking real planted steps.", 1.00, 0.0, 1.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("command_change", "Joint command spam", "Punishes large repeated changes to joint targets.\nThe normalized cost is intentionally small enough to permit exploratory gait discovery.", 0.004, 0.0, 0.2, 0.001, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("actuator_saturation", "Sustained actuator limit", "Punishes holding many joints at their extreme limits for too long.", 0.06, 0.0, 0.5, 0.005, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("joint_overstretch", "Joint overstretch / deep crouch", "Punishes continuously loading real joints near their authored physical limits.\nHip elevation and horizontal sweep are weighted most strongly; brief compression for a step or jump is tolerated before the penalty ramps in.", 0.28, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("torque_effort", "Torque use", "Very small cost for unnecessary actuator effort.\nStrong recovery actions remain worthwhile.", 0.002, 0.0, 0.05, 0.0005, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("obstacle_avoidance", "Unsafe wall approach", "Punishes moving quickly toward nearby wall geometry detected by the spatial-hash lidar.", 0.12, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("turret_safety", "Avoid turret fire", "Punishes confirmed projectile hits and damage, with a smaller continuous cost while a visible turret is already aligned and ready to fire.\nThe body can learn evasive movement before impact without drowning out locomotion rewards.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("core_collision", "Body collision", "One-time punishment when any body segment contacts a wall, or when the core contacts the ground.", 0.15, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("falling", "Dangerous fall", "Punishes downward speed when the core is already low.\nReduce or disable this for lessons that deliberately include airborne motion.", 0.20, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("failure", "Fall or destruction", "Large terminal punishment.\nVery early failure is punished more strongly.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
-	_add("timeout", "Survive full episode", "Small bonus for reaching the episode time limit alive.", 0.10, 0.0, 1.0, 0.01, FourLimbRewardCard.TYPE_REWARD)
+	RewardCardDeckSupport.add_card(cards, "survival", "Stay alive", "Tiny reward for remaining operational.\nIt must never outweigh locomotion toward the target.", 0.003, 0.0, 0.1, 0.001, FourLimbRewardCard.TYPE_REWARD)
+	RewardCardDeckSupport.add_card(cards, "uprightness", "Stay upright", "Small support reward for keeping the core upright.\nTarget progress remains the primary objective.", 0.02, 0.0, 0.5, 0.005, FourLimbRewardCard.TYPE_REWARD)
+	RewardCardDeckSupport.add_card(cards, "core_rotational_stability", "Steady core rotation", "Rewards a calm core and punishes pitch/roll angular motion or oscillation.\nSustained yaw turning is free; only rapid left-right yaw reversal counts as jitter.", 0.025, 0.0, 0.5, 0.005, FourLimbRewardCard.TYPE_MIXED)
+	RewardCardDeckSupport.add_card(cards, "height_stability", "Stable body height", "Rewards holding the chassis at the body's authored standing height and punishes vertical bouncing.\nDisable or reduce this card for jumping lessons.", 0.04, 0.0, 1.0, 0.005, FourLimbRewardCard.TYPE_MIXED)
+	RewardCardDeckSupport.add_card(cards, "core_clearance", "Protect the core", "Punishes letting the core approach the floor or an object below it.", 0.25, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "core_drag", "Do not crawl on the chassis", "Continuous punishment while the core itself supports or drags across the ground.\nLeg recovery remains possible, but head-rolling cannot farm travel reward.", 0.45, 0.0, 3.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "target_progress", "Move toward target", "Primary locomotion signal.\nPays for reducing full 3D distance to the routed objective, including its target-height requirement, and punishes moving away.", 1.25, 0.0, 4.0, 0.05, FourLimbRewardCard.TYPE_MIXED)
+	RewardCardDeckSupport.add_card(cards, "climb_reach", "Reach for climbable surface", "Potential-based shaping while an elevated destination requires climbing.\nPays only for moving a free distal grip closer to a visible climbable candidate; backing away gives the reward back, so oscillating cannot farm it.", 0.60, 0.0, 3.0, 0.05, FourLimbRewardCard.TYPE_MIXED)
+	RewardCardDeckSupport.add_card(cards, "climb_grip", "Useful climbing grip", "One-time contextual discovery reward when an independently controlled limb actually latches a climbable surface while the target is above the body.\nHolding the wall without making target progress pays nothing, so grip cannot replace the real objective.", 1.00, 0.0, 3.0, 0.05, FourLimbRewardCard.TYPE_REWARD)
+	RewardCardDeckSupport.add_card(cards, "climb_ascent", "Climb upward", "Rewards new high-water core height reached while at least one independently controlled grip is attached to a climbable surface.\nOnly new height pays, so bobbing up and down on one hold cannot farm reward.", 1.00, 0.0, 4.0, 0.05, FourLimbRewardCard.TYPE_REWARD)
+	RewardCardDeckSupport.add_card(cards, "jump_launch", "Explosive takeoff", "One-time reward after a real jump gains meaningful height and airtime.\nBrief contact flicker or jumping-jack motion cannot trigger it. Disabled in the stock ground-locomotion cardset.", 1.0, 0.0, 5.0, 0.05, FourLimbRewardCard.TYPE_REWARD, false)
+	RewardCardDeckSupport.add_card(cards, "jump_air_progress", "Airborne target progress", "Rewards horizontal target progress only after a jump has gained meaningful height and airtime.\nUnlike ordinary locomotion progress, it does not require foot support or standing height.", 1.0, 0.0, 6.0, 0.05, FourLimbRewardCard.TYPE_REWARD, false)
+	RewardCardDeckSupport.add_card(cards, "jump_distance", "Long jump distance", "One-time reward when a qualified jump ends on the feet.\nLonger horizontal travel earns more, scaled by landing quality.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_REWARD, false)
+	RewardCardDeckSupport.add_card(cards, "landing_quality", "Controlled landing", "Rewards an upright low-impact foot landing after a qualified jump and punishes a hard or chassis-first qualified landing.\nOrdinary foot-contact chatter pays nothing.", 1.0, 0.0, 5.0, 0.05, FourLimbRewardCard.TYPE_MIXED, false)
+	RewardCardDeckSupport.add_card(cards, "target_search", "Do not idle away from target", "Time cost while outside the accepted target radius.\nA perfectly stable worker that makes no target progress must still lose reward; locomotion progress is what turns a ground episode positive.", 0.10, 0.0, 0.5, 0.005, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "stable_target_hold", "Stable target hold", "Strong reward near the target.\nIt is reduced by speed, poor uprightness, and unstable body height.", 1.0, 0.0, 4.0, 0.05, FourLimbRewardCard.TYPE_REWARD)
+	RewardCardDeckSupport.add_card(cards, "item_pickup", "Pick up an item", "Rewards first gripping the assigned carryable and pays the larger reward after raising it from the height where this worker first gripped it. Authored training items scale both stages by their Reward value.\nEach item can pay each stage only once per episode, so inherited item height or dropping and re-grabbing cannot farm reward.", 1.5, 0.0, 10.0, 0.05, FourLimbRewardCard.TYPE_REWARD, false)
+	RewardCardDeckSupport.add_card(cards, "item_delivery", "Deliver held item", "Conditional carry reward. While a compatible item is actually held, pays signed potential progress toward the nearest accepting delivery destination and pays a one-time completion reward when cargo crosses into that destination after being picked up outside it. Moving away gives the shaping reward back, and each physical item can complete only once per worker episode even when several destination groups accept it. Cargo first grabbed while already inside a matching bay is treated as already delivered and cannot be farmed by stepping out and back in.", 2.0, 0.0, 12.0, 0.05, FourLimbRewardCard.TYPE_MIXED, false)
+	RewardCardDeckSupport.add_card(cards, "foot_support", "Useful foot support", "Tiny support reward when multiple feet support an upright body.\nIt should help locomotion, not replace it.", 0.01, 0.0, 0.4, 0.005, FourLimbRewardCard.TYPE_REWARD)
+	RewardCardDeckSupport.add_card(cards, "foot_slip", "Foot slipping", "Punishes a planted foot sliding tangentially across its support surface.\nOnly the actual terminal foot shape counts as planted support; shin scraping is not treated as a good foot plant. The stock weight is deliberately strong enough that skating is materially worse than taking real planted steps.", 1.00, 0.0, 1.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "command_change", "Joint command spam", "Punishes large repeated changes to joint targets.\nThe normalized cost is intentionally small enough to permit exploratory gait discovery.", 0.004, 0.0, 0.2, 0.001, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "actuator_saturation", "Sustained actuator limit", "Punishes holding many joints at their extreme limits for too long.", 0.06, 0.0, 0.5, 0.005, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "joint_overstretch", "Joint overstretch / deep crouch", "Punishes continuously loading real joints near their authored physical limits.\nHip elevation and horizontal sweep are weighted most strongly; brief compression for a step or jump is tolerated before the penalty ramps in.", 0.28, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "torque_effort", "Torque use", "Very small cost for unnecessary actuator effort.\nStrong recovery actions remain worthwhile.", 0.002, 0.0, 0.05, 0.0005, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "obstacle_avoidance", "Unsafe wall approach", "Punishes moving quickly toward nearby wall geometry detected by the spatial-hash lidar.", 0.12, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "turret_safety", "Avoid turret fire", "Punishes confirmed projectile hits and damage, with a smaller continuous cost while a visible turret is already aligned and ready to fire.\nThe body can learn evasive movement before impact without drowning out locomotion rewards.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "core_collision", "Body collision", "One-time punishment when any body segment contacts a wall, or when the core contacts the ground.", 0.15, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "falling", "Dangerous fall", "Punishes downward speed when the core is already low.\nReduce or disable this for lessons that deliberately include airborne motion.", 0.20, 0.0, 2.0, 0.01, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "failure", "Fall or destruction", "Large terminal punishment.\nVery early failure is punished more strongly.", 1.0, 0.0, 8.0, 0.05, FourLimbRewardCard.TYPE_PUNISHMENT)
+	RewardCardDeckSupport.add_card(cards, "timeout", "Survive full episode", "Small bonus for reaching the episode time limit alive.", 0.10, 0.0, 1.0, 0.01, FourLimbRewardCard.TYPE_REWARD)
 
 
 func card_list() -> Array[FourLimbRewardCard]:
-	var result: Array[FourLimbRewardCard] = []
-	for card_id: String in CARD_ORDER:
-		var card = cards.get(card_id) as FourLimbRewardCard
-		if card != null:
-			result.append(card)
-	return result
+	return RewardCardDeckSupport.card_list(cards, CARD_ORDER)
 
 
 func card(card_id: String) -> FourLimbRewardCard:
@@ -931,16 +926,11 @@ func terminal_reward(
 
 
 func configuration_dictionary() -> Dictionary:
-	var result = {}
-	for card_value: FourLimbRewardCard in card_list():
-		result[card_value.card_id] = card_value.to_dictionary()
-	return result
+	return RewardCardDeckSupport.configuration_dictionary(cards, CARD_ORDER)
 
 
 func load_configuration(value: Dictionary) -> void:
-	for card_id: String in cards:
-		if value.get(card_id, {}) is Dictionary:
-			(cards[card_id] as FourLimbRewardCard).load_dictionary(value[card_id])
+	RewardCardDeckSupport.load_configuration(cards, value)
 
 
 func _apply_components(
@@ -965,27 +955,3 @@ func _apply_components(
 	worker_state["episode_totals"] = episode_totals
 	worker_state["last_components"] = scaled
 	return {"total": total, "components": scaled}
-
-
-func _add(
-	id_value: String,
-	name_value: String,
-	explanation_value: String,
-	intensity_value: float,
-	minimum_value: float,
-	maximum_value: float,
-	step_value: float,
-	signal_type_value: int,
-	enabled_value: bool = true
-) -> void:
-	cards[id_value] = FourLimbRewardCard.new(
-		id_value,
-		name_value,
-		explanation_value,
-		intensity_value,
-		minimum_value,
-		maximum_value,
-		step_value,
-		signal_type_value,
-		enabled_value
-	)

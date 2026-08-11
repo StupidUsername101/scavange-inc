@@ -89,9 +89,11 @@ static func _ensure_cache() -> void:
 		return
 	_cache_ready = true
 	_cached_parts.clear()
-	var paths: Array[String] = []
-	_collect_resource_paths(RESOURCE_ROOT, paths)
-	paths.sort()
+	var paths: Array[String] = ResourcePathDiscovery.collect(
+		RESOURCE_ROOT,
+		["tres", "res"],
+		[LEGACY_AI_CHIP_ROOT]
+	)
 	for path: String in paths:
 		var resource: Resource = load(path) as Resource
 		if resource == null:
@@ -104,24 +106,3 @@ static func _ensure_cache() -> void:
 		# method avoids pulling unrelated maps/items/loadouts into every creator dropdown.
 		if resource.has_method("ml_part_tags") and creator_compatibility_error(resource).is_empty():
 			_cached_parts.append(resource)
-
-
-static func _collect_resource_paths(directory_path: String, target: Array[String]) -> void:
-	var directory: DirAccess = DirAccess.open(directory_path)
-	if directory == null:
-		return
-	directory.list_dir_begin()
-	while true:
-		var entry: String = directory.get_next()
-		if entry.is_empty():
-			break
-		if entry == "." or entry == "..":
-			continue
-		var child_path: String = directory_path.path_join(entry)
-		if child_path == LEGACY_AI_CHIP_ROOT or child_path.begins_with(LEGACY_AI_CHIP_ROOT + "/"):
-			continue
-		if directory.current_is_dir():
-			_collect_resource_paths(child_path, target)
-		elif entry.get_extension().to_lower() in ["tres", "res"]:
-			target.append(child_path)
-	directory.list_dir_end()

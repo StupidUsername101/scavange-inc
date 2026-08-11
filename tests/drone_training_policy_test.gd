@@ -419,6 +419,73 @@ func _test_reward_card_configuration() -> void:
 		not restored_deck.card("smoothness").enabled,
 		"drone reward-card enable switches survive configuration serialization"
 	)
+	var legacy_scalar_deck: DroneTrainingRewardDeck = DroneTrainingRewardDeck.new()
+	legacy_scalar_deck.card("approach").enabled = false
+	legacy_scalar_deck.load_legacy_enabled_components({"approach": "true"})
+	_expect(
+		not legacy_scalar_deck.card("approach").enabled,
+		"malformed legacy reward scalars no longer become enabled through generic bool coercion"
+	)
+	var malformed_pending_group: Dictionary = {
+		"pending_reward_config": "broken",
+		"pending_reward_cardset_id": "should-not-apply",
+		"pending_reward_cardset_name": "Should not apply",
+	}
+	_expect(
+		not RewardCardDeckSupport.apply_pending_configuration(
+			malformed_pending_group,
+			restored_deck.cards
+		),
+		"malformed queued reward-card state fails closed instead of throwing"
+	)
+	_expect(
+		malformed_pending_group.get("pending_reward_config", {}) is Dictionary
+		and not malformed_pending_group.has("pending_reward_cardset_id")
+		and not malformed_pending_group.has("pending_reward_cardset_name"),
+		"discarding malformed queued reward-card state also clears stale pending cardset metadata"
+	)
+	var malformed_nested_pending_group: Dictionary = {
+		"pending_reward_config": {"approach": "broken"},
+		"pending_reward_cardset_id": "should-not-apply",
+		"pending_reward_cardset_name": "Should not apply",
+	}
+	_expect(
+		not RewardCardDeckSupport.apply_pending_configuration(
+			malformed_nested_pending_group,
+			restored_deck.cards
+		),
+		"malformed nested reward-card edits are rejected as a whole instead of being labeled active"
+	)
+	_expect(
+		not malformed_nested_pending_group.has("pending_reward_cardset_id")
+		and not malformed_nested_pending_group.has("pending_reward_cardset_name"),
+		"rejecting a malformed nested reward-card edit clears its pending preset identity"
+	)
+	var invalid_field_pending_group: Dictionary = {
+		"pending_reward_config": {"approach": {"enabled": "yes"}},
+		"pending_reward_cardset_id": "should-not-apply",
+		"pending_reward_cardset_name": "Should not apply",
+	}
+	_expect(
+		not RewardCardDeckSupport.apply_pending_configuration(
+			invalid_field_pending_group,
+			restored_deck.cards
+		),
+		"wrong-type fields inside queued reward-card records reject the whole pending edit"
+	)
+	var unknown_card_pending_group: Dictionary = {
+		"pending_reward_config": {"removed_future_card": {"enabled": true}},
+		"pending_reward_cardset_id": "should-not-apply",
+		"pending_reward_cardset_name": "Should not apply",
+	}
+	_expect(
+		not RewardCardDeckSupport.apply_pending_configuration(
+			unknown_card_pending_group,
+			restored_deck.cards
+		)
+		and not unknown_card_pending_group.has("pending_reward_cardset_id"),
+		"unknown queued card IDs fail atomically instead of partially applying a stale preset"
+	)
 	var drone_enabled_before_malformed_scalar: bool = restored_deck.card("approach").enabled
 	restored_deck.load_configuration({"approach": "false"})
 	_expect(
@@ -596,6 +663,12 @@ func _test_controlled_episode() -> void:
 	_expect(
 		not bool(permissive_result.get("episode_termination_options", {}).get("ground_contact", true)),
 		"episode results expose the permissive default ground-contact policy"
+	)
+	_expect(
+		not bool(DroneTrainingEpisode.sanitize_termination_options(
+			{"ground_contact": 1}
+		).get("ground_contact", true)),
+		"malformed numeric terminal flags fail closed instead of becoming enabled booleans"
 	)
 
 	# Historical saved options may still contain a `flipped` key. It must be ignored: inverted
@@ -979,6 +1052,29 @@ func _test_immutable_model_versions() -> void:
 		"saving again creates a distinct immutable version")
 	_expect(int(second.get("version", 0)) == int(first.get("version", 0)) + 1,
 		"model versions increase monotonically")
+	var external_model_name: String = "External Removal %d" % Time.get_ticks_usec()
+	var external_first: Dictionary = registry.save_version(
+		external_model_name,
+		DroneTrainingPolicy.DEFAULT_WEIGHTS
+	)
+	_expect(
+		not external_first.is_empty(),
+		"separate drone model family can be saved for identity-floor coverage"
+	)
+	_expect(
+		TrainingFileIO.remove_directory_recursive_absolute(
+			ProjectSettings.globalize_path(str(external_first.get("storage_path", "")))
+		),
+		"test can simulate a valid drone model directory being removed outside the registry"
+	)
+	var external_second: Dictionary = registry.save_version(
+		external_model_name,
+		DroneTrainingPolicy.DEFAULT_WEIGHTS
+	)
+	_expect(
+		int(external_second.get("version", 0)) == 2,
+		"successfully issued drone model identities remain reserved after external directory removal"
+	)
 	_expect(
 		FileAccess.file_exists(
 			str(first.get("storage_path", "")).path_join("model.json")

@@ -129,6 +129,36 @@ static func parse_version_id(version_id: String, storage_key_fallback: String) -
 	}
 
 
+static func list_version_ids(
+	root_path: String,
+	storage_key_fallback: String
+) -> Array[String]:
+	var result: Array[String] = []
+	var root: DirAccess = DirAccess.open(root_path)
+	if root == null:
+		return result
+	root.list_dir_begin()
+	var family_name: String = root.get_next()
+	while not family_name.is_empty():
+		if root.current_is_dir():
+			var family_path: String = root_path.path_join(family_name)
+			var family: DirAccess = DirAccess.open(family_path)
+			if family != null:
+				family.list_dir_begin()
+				var version_name: String = family.get_next()
+				while not version_name.is_empty():
+					if family.current_is_dir():
+						var version_id: String = "%s/%s" % [family_name, version_name]
+						if not parse_version_id(version_id, storage_key_fallback).is_empty():
+							result.append(version_id)
+					version_name = family.get_next()
+				family.list_dir_end()
+		family_name = root.get_next()
+	root.list_dir_end()
+	result.sort()
+	return result
+
+
 static func resolve_version_manifest(
 	root_path: String,
 	version_id: String,

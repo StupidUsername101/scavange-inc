@@ -25,6 +25,18 @@ class TestSensorAttachment:
 		attachment_tags = PackedStringArray(["sensor"])
 
 
+class FailingOnceFourLimbModelRegistry:
+	extends FourLimbModelRegistry
+
+	var fail_next_checkpoint_write: bool = true
+
+	func _write_json(path: String, value: Dictionary) -> bool:
+		if fail_next_checkpoint_write and path.get_file() == CHECKPOINT_FILE_NAME:
+			fail_next_checkpoint_write = false
+			return false
+		return super._write_json(path, value)
+
+
 var failure_count = 0
 var assertion_count = 0
 var test_root: Node3D
@@ -1526,6 +1538,23 @@ func _test_model_files_round_trip() -> void:
 		registry.save_checkpoint("Malformed Limb Checkpoint", malformed_metadata).is_empty(),
 		"four-limb registry rejects wrong-type checkpoint metadata without throwing"
 	)
+	var failure_registry: FailingOnceFourLimbModelRegistry = FailingOnceFourLimbModelRegistry.new(
+		"user://tests/four_limb_model_failed_save_%d" % Time.get_ticks_usec()
+	)
+	_expect(
+		failure_registry.save_checkpoint("Failed Save Floor", checkpoint).is_empty(),
+		"a filesystem-layer failure after version selection rejects the incomplete limb save"
+	)
+	var retry_after_failed_save: Dictionary = failure_registry.save_checkpoint(
+		"Failed Save Floor",
+		checkpoint
+	)
+	_expect(
+		not retry_after_failed_save.is_empty()
+		and int(retry_after_failed_save.get("version", 0)) == 1,
+		"failed limb saves do not burn immutable version identities before files exist"
+	)
+	failure_registry.delete_model(retry_after_failed_save)
 	var saved = registry.save_checkpoint("Four Limb Save Check", checkpoint)
 	_expect(
 		not saved.is_empty(),

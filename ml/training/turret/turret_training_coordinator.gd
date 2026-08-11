@@ -1277,21 +1277,10 @@ func _emit_worker_action_applied(
 
 
 func _apply_pending_reward_config(group: Dictionary) -> void:
-	var pending: Dictionary = group.get("pending_reward_config", {})
-	if pending.is_empty():
+	var deck: TurretRewardDeck = group.get("reward_deck") as TurretRewardDeck
+	if deck == null:
 		return
-	var deck = group["reward_deck"] as TurretRewardDeck
-	for card_id in pending:
-		var reward_card = deck.card(card_id)
-		if reward_card == null:
-			continue
-		var values: Dictionary = pending[card_id]
-		reward_card.load_dictionary(values)
-	group["pending_reward_config"] = {}
-	group["reward_cardset_id"] = str(group.get("pending_reward_cardset_id", "custom"))
-	group["reward_cardset_name"] = str(group.get("pending_reward_cardset_name", "Custom"))
-	group.erase("pending_reward_cardset_id")
-	group.erase("pending_reward_cardset_name")
+	RewardCardDeckSupport.apply_pending_configuration(group, deck.cards)
 
 
 func _register_combatant(adapter: TrainingCombatantAdapter) -> void:

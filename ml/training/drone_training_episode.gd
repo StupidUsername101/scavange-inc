@@ -88,10 +88,10 @@ func configure_termination_options(options: Dictionary) -> void:
 static func sanitize_termination_options(options: Variant) -> Dictionary:
 	var source: Dictionary = options as Dictionary if options is Dictionary else {}
 	return {
-		"ground_contact": bool(source.get(
-			"ground_contact",
-			DEFAULT_TERMINATION_OPTIONS["ground_contact"]
-		)),
+		"ground_contact": SafeVariant.strict_bool_or(
+			source.get("ground_contact", DEFAULT_TERMINATION_OPTIONS["ground_contact"]),
+			bool(DEFAULT_TERMINATION_OPTIONS["ground_contact"])
+		),
 	}
 
 

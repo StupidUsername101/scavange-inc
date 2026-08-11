@@ -7867,7 +7867,10 @@ func _episode_termination_options_for_group(group: Dictionary) -> Dictionary:
 	if group.is_empty():
 		return DroneTrainingEpisode.DEFAULT_TERMINATION_OPTIONS.duplicate(true)
 	return {
-		"ground_contact": bool(group.get("episode_end_on_ground_contact", false)),
+		"ground_contact": SafeVariant.strict_bool_or(
+			group.get("episode_end_on_ground_contact", false),
+			false
+		),
 	}
 
 
@@ -8552,7 +8555,7 @@ func _rebuild_reward_cards() -> void:
 		return
 	var body_type = str(group.get("body_type", "drone"))
 	var group_id = int(group.get("group_id", -1))
-	var pending: Dictionary = group.get("pending_reward_config", {})
+	var pending: Dictionary = RewardCardDeckSupport.pending_configuration(group)
 	var cards: Array = deck.call("card_list")
 	for card_variant: Variant in cards:
 		var card_value = card_variant as FourLimbRewardCard
@@ -8567,13 +8570,16 @@ func _rebuild_reward_cards() -> void:
 		var content = VBoxContainer.new()
 		content.add_theme_constant_override("separation", 5)
 		panel.add_child(content)
-		var pending_card: Dictionary = pending.get(card_value.card_id, {})
+		var pending_card: Dictionary = SafeVariant.dictionary_copy(pending.get(card_value.card_id, {}))
 		var header = HBoxContainer.new()
 		header.add_theme_constant_override("separation", 7)
 		content.add_child(header)
 		var enabled = CheckButton.new()
 		enabled.text = card_value.display_name
-		enabled.button_pressed = bool(pending_card.get("enabled", card_value.enabled))
+		enabled.button_pressed = SafeVariant.bool_or(
+			pending_card.get("enabled", card_value.enabled),
+			card_value.enabled
+		)
 		enabled.tooltip_text = _readable_tooltip(card_value.explanation)
 		enabled.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		header.add_child(enabled)
@@ -8775,16 +8781,21 @@ func _effective_reward_card_configuration(group: Dictionary) -> Dictionary:
 	if not (deck_configuration is Dictionary):
 		return {}
 	var result: Dictionary = (deck_configuration as Dictionary).duplicate(true)
-	var pending: Dictionary = group.get("pending_reward_config", {})
+	var pending: Dictionary = RewardCardDeckSupport.pending_configuration(group)
 	for card_id: String in pending:
-		if not result.has(card_id):
+		if not result.has(card_id) or not (result[card_id] is Dictionary):
+			continue
+		var values: Dictionary = SafeVariant.dictionary_copy(pending.get(card_id, {}))
+		if values.is_empty():
 			continue
 		var current: Dictionary = (result[card_id] as Dictionary).duplicate(true)
-		var values: Dictionary = pending[card_id]
 		if values.has("enabled"):
-			current["enabled"] = bool(values["enabled"])
+			current["enabled"] = SafeVariant.bool_or(values["enabled"], bool(current.get("enabled", true)))
 		if values.has("intensity"):
-			current["intensity"] = float(values["intensity"])
+			current["intensity"] = SafeVariant.finite_float_or(
+				values["intensity"],
+				float(current.get("intensity", 0.0))
+			)
 		result[card_id] = current
 	return result
 
@@ -8807,7 +8818,7 @@ func _save_current_reward_cardset() -> void:
 	if record.is_empty():
 		status_label.text = reward_cardset_library.last_error
 		return
-	if (group.get("pending_reward_config", {}) as Dictionary).is_empty():
+	if RewardCardDeckSupport.pending_configuration(group).is_empty():
 		group["reward_cardset_id"] = str(record.get("id", "custom"))
 		group["reward_cardset_name"] = str(record.get("display_name", preset_name))
 		group.erase("pending_reward_cardset_id")
@@ -8860,7 +8871,7 @@ func _forget_deleted_reward_cardset(body_type: String, cardset_id: String) -> vo
 		))
 		if effective_id != cardset_id:
 			continue
-		if (affected_group.get("pending_reward_config", {}) as Dictionary).is_empty():
+		if RewardCardDeckSupport.pending_configuration(affected_group).is_empty():
 			affected_group["reward_cardset_id"] = "custom"
 			affected_group["reward_cardset_name"] = "Custom"
 			affected_group.erase("pending_reward_cardset_id")
@@ -8938,7 +8949,7 @@ func _ensure_drone_reward_deck(group: Dictionary) -> DroneTrainingRewardDeck:
 	if deck != null:
 		return deck
 	deck = DroneTrainingRewardDeck.new(group.get("reward_components", {}))
-	var stored_configuration: Dictionary = group.get("reward_card_config", {})
+	var stored_configuration: Dictionary = SafeVariant.dictionary_copy(group.get("reward_card_config", {}))
 	if not stored_configuration.is_empty():
 		deck.load_configuration(stored_configuration)
 	group["reward_deck"] = deck
@@ -8953,8 +8964,8 @@ func _queue_reward_card_change(
 	key: String,
 	value: Variant
 ) -> void:
-	var pending: Dictionary = group.get("pending_reward_config", {})
-	var card_pending: Dictionary = pending.get(card_id, {})
+	var pending: Dictionary = RewardCardDeckSupport.pending_configuration(group)
+	var card_pending: Dictionary = SafeVariant.dictionary_copy(pending.get(card_id, {}))
 	card_pending[key] = value
 	pending[card_id] = card_pending
 	group["pending_reward_config"] = pending
@@ -8963,20 +8974,8 @@ func _queue_reward_card_change(
 
 
 func _apply_pending_drone_reward_config(group: Dictionary) -> void:
-	var pending: Dictionary = group.get("pending_reward_config", {})
-	var deck = _ensure_drone_reward_deck(group)
-	if not pending.is_empty():
-		for card_id: String in pending:
-			var card_value = deck.card(card_id)
-			if card_value == null:
-				continue
-			var values: Dictionary = pending[card_id]
-			card_value.load_dictionary(values)
-		group["pending_reward_config"] = {}
-		group["reward_cardset_id"] = str(group.get("pending_reward_cardset_id", "custom"))
-		group["reward_cardset_name"] = str(group.get("pending_reward_cardset_name", "Custom"))
-		group.erase("pending_reward_cardset_id")
-		group.erase("pending_reward_cardset_name")
+	var deck: DroneTrainingRewardDeck = _ensure_drone_reward_deck(group)
+	RewardCardDeckSupport.apply_pending_configuration(group, deck.cards)
 	group["reward_card_config"] = deck.configuration_dictionary()
 	group["reward_components"] = deck.enabled_components_dictionary()
 	for trial in group.get("trials", []):
@@ -9034,7 +9033,7 @@ func _refresh_reward_card_note(group: Dictionary) -> void:
 		reward_card_note.text = "Select a drone, four-limb, or turret worker group. Changes apply at that group's next episode."
 		return
 	var group_name = str(group.get("name", "Selected group"))
-	var pending: Dictionary = group.get("pending_reward_config", {})
+	var pending: Dictionary = RewardCardDeckSupport.pending_configuration(group)
 	var cardset_name = str(group.get(
 		"pending_reward_cardset_name",
 		group.get("reward_cardset_name", "Custom")
@@ -13754,13 +13753,13 @@ func _select_saved_model_for_branch() -> void:
 			branch_algorithm_picker.select(index)
 			break
 	branch_algorithm_picker.disabled = true
-	var saved_environment: Dictionary = inspection.get("training_environment", {})
-	var saved_rewards: Dictionary = saved_environment.get("reward_components", {})
+	var saved_environment: Dictionary = SafeVariant.dictionary_copy(inspection.get("training_environment", {}))
+	var saved_rewards: Dictionary = SafeVariant.dictionary_copy(saved_environment.get("reward_components", {}))
 	if not saved_rewards.is_empty():
 		for reward_key in branch_reward_checks:
 			var check = branch_reward_checks[reward_key] as CheckBox
 			if check != null and saved_rewards.has(reward_key):
-				check.button_pressed = bool(saved_rewards[reward_key])
+				check.button_pressed = SafeVariant.bool_or(saved_rewards[reward_key], check.button_pressed)
 	branch_name_edit.text = _unique_group_name(
 		"%s continuation" % str(version.get("model_name", "Saved model")),
 		-1
@@ -14630,7 +14629,7 @@ func _start_candidate_evaluation(group: Dictionary) -> bool:
 	var subject_candidate: Dictionary = pending_candidate
 	var checkpoint: Dictionary = _candidate_checkpoint_for_group(group)
 	var candidate_contract_hash: String = str(pending_candidate.get("evaluation_contract_hash", ""))
-	var candidate_plan: Dictionary = pending_candidate.get("evaluation_plan", {})
+	var candidate_plan: Dictionary = SafeVariant.dictionary_copy(pending_candidate.get("evaluation_plan", {}))
 	var candidate_suite_hash: String = str(candidate_plan.get("suite_hash", ""))
 	var best_evaluation: Dictionary = (
 		trainer.call("best_evaluation_summary") as Dictionary
@@ -14650,7 +14649,7 @@ func _start_candidate_evaluation(group: Dictionary) -> bool:
 		# contract *and* deterministic benchmark suite. Measure the preserved Best first whenever
 		# either provenance hash changed.
 		checkpoint = _best_checkpoint_for_group(group)
-		var best_network: Dictionary = checkpoint.get("network", {})
+		var best_network: Dictionary = SafeVariant.dictionary_copy(checkpoint.get("network", {}))
 		if checkpoint.is_empty() or best_network.is_empty():
 			_candidate_evaluation_start_failed(
 				group,

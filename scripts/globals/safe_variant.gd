@@ -39,7 +39,7 @@ static func bool_or(value: Variant, fallback: bool) -> bool:
 	if value is int:
 		return int(value) != 0
 	if value is float and is_finite(float(value)):
-		return not is_zero_approx(float(value))
+		return float(value) != 0.0
 	return fallback
 
 
@@ -49,6 +49,16 @@ static func strict_bool_or(value: Variant, fallback: bool) -> bool:
 
 static func dictionary_copy(value: Variant, deep: bool = true) -> Dictionary:
 	return (value as Dictionary).duplicate(deep) if value is Dictionary else {}
+
+
+static func dictionary_array_copy(value: Variant, deep: bool = true) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if not (value is Array):
+		return result
+	for item: Variant in value:
+		if item is Dictionary:
+			result.append((item as Dictionary).duplicate(deep))
+	return result
 
 
 static func vector3_or(value: Variant, fallback: Vector3) -> Vector3:

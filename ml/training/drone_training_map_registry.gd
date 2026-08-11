@@ -27,31 +27,31 @@ func save_map(
 	delivery_destination_group_records: Array[Dictionary] = []
 ) -> Dictionary:
 	last_error = ""
-	var clean_name := map_name.strip_edges()
+	var clean_name = map_name.strip_edges()
 	if clean_name.is_empty():
 		clean_name = "Training Map"
-	var map_key := _map_key(clean_name)
-	var family_path := root_path.path_join(map_key)
-	var version_number := _next_version_number(family_path)
-	var version_name := "v%04d" % version_number
-	var version_path := family_path.path_join(version_name)
-	var manifest_path := version_path.path_join(MANIFEST_FILE_NAME)
+	var map_key = _map_key(clean_name)
+	var family_path = root_path.path_join(map_key)
+	var version_number = _next_version_number(family_path)
+	var version_name = "v%04d" % version_number
+	var version_path = family_path.path_join(version_name)
+	var manifest_path = version_path.path_join(MANIFEST_FILE_NAME)
 	while FileAccess.file_exists(manifest_path):
 		version_number += 1
 		version_name = "v%04d" % version_number
 		version_path = family_path.path_join(version_name)
 		manifest_path = version_path.path_join(MANIFEST_FILE_NAME)
 
-	var directory_error := DirAccess.make_dir_recursive_absolute(
+	var directory_error = DirAccess.make_dir_recursive_absolute(
 		ProjectSettings.globalize_path(version_path)
 	)
 	if directory_error != OK:
 		last_error = "Could not create the map directory (%s)." % error_string(directory_error)
 		return {}
 
-	var now_unix_ms := int(Time.get_unix_time_from_system() * 1000.0)
-	var now_utc := Time.get_datetime_string_from_system(true, false) + "Z"
-	var record := {
+	var now_unix_ms = int(Time.get_unix_time_from_system() * 1000.0)
+	var now_utc = Time.get_datetime_string_from_system(true, false) + "Z"
+	var record = {
 		"schema_version": SCHEMA_VERSION,
 		"map_name": clean_name,
 		"map_key": map_key,
@@ -70,11 +70,17 @@ func save_map(
 		"delivery_destination_groups": delivery_destination_group_records.duplicate(true),
 	}
 	if not _write_json_file(manifest_path, record):
-		var manifest_write_error: String = error_string(FileAccess.get_open_error())
 		TrainingFileIO.remove_directory_recursive_absolute(
 			ProjectSettings.globalize_path(version_path)
 		)
-		last_error = "Could not write the map file (%s)." % manifest_write_error
+		last_error = "Could not write the map file atomically."
+		return {}
+	# Reserve the next immutable identity only after the map itself exists. Failed writes consume
+	# nothing, while a successfully issued map ID cannot be silently reused after external removal.
+	if not _record_next_version_floor(family_path, version_number + 1):
+		TrainingFileIO.remove_directory_recursive_absolute(
+			ProjectSettings.globalize_path(version_path)
+		)
 		return {}
 	record["storage_path"] = version_path
 	return record
@@ -87,21 +93,21 @@ func overwrite_map(
 	delivery_destination_group_records: Array[Dictionary] = []
 ) -> Dictionary:
 	last_error = ""
-	var map_id := (
+	var map_id = (
 		str((map_record_or_id as Dictionary).get("map_id", ""))
 		if map_record_or_id is Dictionary
 		else str(map_record_or_id)
 	)
-	var record := get_map(map_id)
+	var record = get_map(map_id)
 	if record.is_empty():
 		last_error = "The selected map no longer exists."
 		return {}
-	var version_path := str(record.get("storage_path", ""))
+	var version_path = str(record.get("storage_path", ""))
 	if version_path.is_empty():
 		last_error = "The selected map has no storage directory."
 		return {}
-	var now_unix_ms := int(Time.get_unix_time_from_system() * 1000.0)
-	var now_utc := Time.get_datetime_string_from_system(true, false) + "Z"
+	var now_unix_ms = int(Time.get_unix_time_from_system() * 1000.0)
+	var now_utc = Time.get_datetime_string_from_system(true, false) + "Z"
 	record["updated_unix_ms"] = now_unix_ms
 	record["updated_utc"] = now_utc
 	record["obstacle_count"] = obstacle_records.size()
@@ -120,16 +126,11 @@ func overwrite_map(
 func list_maps() -> Array[Dictionary]:
 	last_error = ""
 	var result: Array[Dictionary] = []
-	var root := DirAccess.open(root_path)
-	if root == null:
-		return result
-	root.list_dir_begin()
-	var family_name := root.get_next()
-	while not family_name.is_empty():
-		if root.current_is_dir():
-			_collect_family(root_path.path_join(family_name), result)
-		family_name = root.get_next()
-	root.list_dir_end()
+	for map_id: String in TrainingFileIO.list_version_ids(root_path, "training-map"):
+		var record: Dictionary = _resolve_map(map_id)
+		if not record.is_empty():
+			_apply_usage(record, str(record["storage_path"]))
+			result.append(record)
 	result.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
 		var left_updated = SafeVariant.integral_int_or(
 			left.get("updated_unix_ms", left.get("created_unix_ms", 0)),
@@ -156,17 +157,17 @@ func get_map(map_id: String) -> Dictionary:
 
 func delete_map(map_record_or_id: Variant) -> bool:
 	last_error = ""
-	var map_id := (
+	var map_id = (
 		str((map_record_or_id as Dictionary).get("map_id", ""))
 		if map_record_or_id is Dictionary
 		else str(map_record_or_id)
 	)
-	var record := get_map(map_id)
+	var record = get_map(map_id)
 	if record.is_empty():
 		last_error = "The selected map no longer exists."
 		return false
-	var version_path := str(record.get("storage_path", ""))
-	var family_path := version_path.get_base_dir()
+	var version_path = str(record.get("storage_path", ""))
+	var family_path = version_path.get_base_dir()
 	if not _record_next_version_floor(
 		family_path,
 		maxi(SafeVariant.integral_int_or(record.get("version", 0), 0), 0) + 1
@@ -180,12 +181,12 @@ func delete_map(map_record_or_id: Variant) -> bool:
 
 func mark_used(map_record_or_id: Variant) -> bool:
 	last_error = ""
-	var map_id := (
+	var map_id = (
 		str((map_record_or_id as Dictionary).get("map_id", ""))
 		if map_record_or_id is Dictionary
 		else str(map_record_or_id)
 	)
-	var record := get_map(map_id)
+	var record = get_map(map_id)
 	if record.is_empty():
 		last_error = "The selected map no longer exists."
 		return false
@@ -207,23 +208,6 @@ func globalized_root_path() -> String:
 	return ProjectSettings.globalize_path(root_path)
 
 
-func _collect_family(family_path: String, result: Array[Dictionary]) -> void:
-	var directory: DirAccess = DirAccess.open(family_path)
-	if directory == null:
-		return
-	var map_key: String = family_path.get_file()
-	directory.list_dir_begin()
-	var version_name: String = directory.get_next()
-	while not version_name.is_empty():
-		if directory.current_is_dir():
-			var record: Dictionary = _resolve_map("%s/%s" % [map_key, version_name])
-			if not record.is_empty():
-				_apply_usage(record, str(record["storage_path"]))
-				result.append(record)
-		version_name = directory.get_next()
-	directory.list_dir_end()
-
-
 func _resolve_map(map_record_or_id: Variant) -> Dictionary:
 	var map_id: String = (
 		str((map_record_or_id as Dictionary).get("map_id", ""))
@@ -233,7 +217,7 @@ func _resolve_map(map_record_or_id: Variant) -> Dictionary:
 	# Preserve the registry's historical tolerance for surrounding whitespace/slashes while the
 	# shared resolver still validates the normalized two-segment identity strictly.
 	map_id = map_id.strip_edges().trim_prefix("/").trim_suffix("/")
-	return TrainingFileIO.resolve_version_manifest(
+	var record: Dictionary = TrainingFileIO.resolve_version_manifest(
 		root_path,
 		map_id,
 		"training-map",
@@ -241,6 +225,21 @@ func _resolve_map(map_record_or_id: Variant) -> Dictionary:
 		"map_id",
 		"map_key"
 	)
+	if record.is_empty():
+		return {}
+	# Counts are denormalized display metadata. Re-derive them from readable payload arrays so a
+	# stale/manual manifest edit cannot make the map browser describe different content than load.
+	var obstacles: Variant = record.get("obstacles", [])
+	record["obstacle_count"] = (obstacles as Array).size() if obstacles is Array else 0
+	var items: Variant = record.get("items", [])
+	record["item_count"] = (items as Array).size() if items is Array else 0
+	var delivery_groups: Variant = record.get("delivery_destination_groups", [])
+	record["delivery_destination_group_count"] = (
+		(delivery_groups as Array).size()
+		if delivery_groups is Array
+		else 0
+	)
+	return record
 
 
 func _apply_usage(record: Dictionary, version_path: String) -> void:
