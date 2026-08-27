@@ -1,0 +1,8 @@
+[gd_resource type="ConvexPolygonShape3D" format=3]
+
+[resource]
+resource_name = "prop_generator"
+points = PackedVector3Array(-1.6105937, 0.0070074317, -0.45499998, 1.5590599, 1.7188889, 0.5, 1.5590599, 0.25700316, 0.5, 1.6403137, 1.7620635, -0.5, -1.5590599, 1.7188889, 0.5, -1.6403137, 1.7620635, -0.5, 1.6105937, 0.0070074317, -0.45499998, -1.5231357, 0.0549813, 0.45499998, 1.5231357, 0.0549813, 0.45499998, -1.6403137, 0.22398828, -0.5, 1.6403137, 0.22398828, -0.5, -1.5590599, 0.25700316, 0.5)
+metadata/collision_bake_source = "res://assets/third_party/pizza_doggy/models/bunkers/generator_1.glb"
+metadata/collision_bake_mode = &"convex"
+metadata/collision_bake_manifest_version = 1

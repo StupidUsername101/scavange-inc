@@ -77,6 +77,46 @@ static func set_segment_dimensions(
 	return limb.ml_validation_error()
 
 
+static func set_joint_subtree_pose(
+	part: Resource,
+	limb_index: int,
+	segment_index: int,
+	rest_directions: Array,
+	joint_bases: Array
+) -> String:
+	var limb: GenericLimbDefinition = _limb_at(part, limb_index)
+	if limb == null or segment_index < 0 or segment_index >= limb.segments.size():
+		return "The selected limb joint no longer exists."
+	var subtree_count: int = limb.segments.size() - segment_index
+	if rest_directions.size() != subtree_count or joint_bases.size() != subtree_count:
+		return "The rotated limb subtree no longer matches the saved limb topology."
+	for offset: int in range(subtree_count):
+		var segment: LimbSegmentDefinition = limb.segments[segment_index + offset]
+		if segment == null or segment.joint == null:
+			return "The rotated limb subtree contains a missing segment or joint."
+		var direction_value: Variant = rest_directions[offset]
+		var basis_value: Variant = joint_bases[offset]
+		if not (direction_value is Vector3) or not (basis_value is Basis):
+			return "The limb editor produced an invalid joint pose."
+		var direction: Vector3 = direction_value as Vector3
+		var basis: Basis = basis_value as Basis
+		if (
+			not direction.is_finite()
+			or direction.length_squared() <= 0.000001
+			or not basis.is_finite()
+			or absf(basis.determinant()) <= 0.000001
+		):
+			return "The limb editor produced a degenerate joint pose."
+		segment.rest_direction_local = direction.normalized()
+		segment.joint.joint_basis_local = basis.orthonormalized()
+	# Once a person poses a joint, their authored shape must win over the convenience stance that
+	# configurable creator limbs use before their first edit.
+	if part is DroneLimbAttachmentDefinition:
+		(part as DroneLimbAttachmentDefinition).mount_adaptive_neutral_pose = false
+	limb.sanitize()
+	return limb.ml_validation_error()
+
+
 static func set_end_effector(
 	part: Resource,
 	limb_index: int,

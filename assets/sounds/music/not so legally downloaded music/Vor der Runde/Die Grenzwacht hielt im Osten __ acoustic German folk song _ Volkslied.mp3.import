@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cjiuxds6vugjl"
+path="res://.godot/imported/Die Grenzwacht hielt im Osten __ acoustic German folk song _ Volkslied.mp3-e61b8291876b6a0b414ae5f33ccc3793.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Die Grenzwacht hielt im Osten __ acoustic German folk song _ Volkslied.mp3"
+dest_files=["res://.godot/imported/Die Grenzwacht hielt im Osten __ acoustic German folk song _ Volkslied.mp3-e61b8291876b6a0b414ae5f33ccc3793.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

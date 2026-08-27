@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="ModularStructureDefinition" format=3]
+
+[ext_resource type="Script" path="res://scripts/world/modular_structure_definition.gd" id="1_0yspo"]
+
+[resource]
+script = ExtResource("1_0yspo")
+structure_id = &"bunker_hangar_tunnel"
+visual_scene_path = "res://assets/third_party/pizza_doggy/models/bunkers/tunnel_straight.glb"
+source_bounds = AABB(-1.75, 0, -3, 3.5, 2.7163744, 6)
+module_scale = Vector3(2.1, 1.8, 1)
+module_count = 8
+module_name_prefix = &"BunkerHangarTunnelModule"
+shell_thickness = 0.22

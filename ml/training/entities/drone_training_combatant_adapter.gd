@@ -28,7 +28,7 @@ func aim_point_world() -> Vector3:
 
 
 func orientation_basis_world() -> Basis:
-	return drone.global_basis.orthonormalized() if is_instance_valid(drone) else Basis.IDENTITY
+	return drone.model_orientation_basis_world() if is_instance_valid(drone) else Basis.IDENTITY
 
 
 func linear_velocity_world() -> Vector3:

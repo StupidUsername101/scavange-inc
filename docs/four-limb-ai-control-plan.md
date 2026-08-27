@@ -13,7 +13,7 @@ Add a gameplay-ready, physics-driven body with four independently controlled lim
 3. **No hidden chassis movement.** The body core must move because limb forces act through physics contacts—not because code sets a desired walking velocity.
 4. **The existing drone action contracts remain untouched.** Drone PPO/SAC continue to output raw propeller commands.
 5. **The learned controller must be able to react to damage.** Observations include installed/functional masks and realized actuator response. Commands for a missing limb are safely ignored.
-6. **The procedural gait planner is not part of the learned action path.** It may be used as a baseline/demo controller, but learned models control joints directly.
+6. **The procedural gait planner is not part of the learned action path.** It is retained only by the dormant dev-zoo enemy stack; learned models control joints directly and share only the neutral `LimbKinematics` geometry utility.
 7. **Separate model contracts.** Drone and limb models can never be loaded into one another accidentally.
 
 ## Architecture decision

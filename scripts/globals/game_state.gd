@@ -15,6 +15,16 @@ var drones_by_drone_id: Dictionary[int, DroneState] = {}
 var next_drone_id: int = 0
 var next_player_id: int = 0
 
+
+func reset_session() -> void:
+	player_input_by_player_id.clear()
+	player_id_by_peer_id.clear()
+	peers_by_player_id.clear()
+	drone_id_by_player_id.clear()
+	drones_by_drone_id.clear()
+	next_drone_id = 0
+	next_player_id = 0
+
 func set_player_input_for_player_id(id: int, input: Vector2):
 	player_input_by_player_id[id] = input
 

@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://dseama41ebru7"
+path="res://.godot/imported/Sturmmann - Schwarzer Rabe.mp3-35a369146e7fd7eb75696622b3b79a6a.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vorwärts/Sturmmann - Schwarzer Rabe.mp3"
+dest_files=["res://.godot/imported/Sturmmann - Schwarzer Rabe.mp3-35a369146e7fd7eb75696622b3b79a6a.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

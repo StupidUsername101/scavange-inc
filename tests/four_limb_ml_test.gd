@@ -297,7 +297,7 @@ func _test_stock_foot_pad_is_flat_and_rough_at_rest() -> void:
 			and effector.rough,
 			"stock limb %d has a real flat high-friction plantar contact patch" % limb_index
 		)
-		var points: PackedVector3Array = EnemyGaitPlanner.solve_two_bone(
+		var points: PackedVector3Array = LimbKinematics.solve_two_bone(
 			slot.hip_offset,
 			slot.rest_foot_offset,
 			slot.upper_length,
@@ -342,7 +342,7 @@ func _test_passive_spider_stance_support() -> void:
 	var worst_required_torque = 0.0
 	var worst_locked_axis_share = 0.0
 	for limb: FourLimbSlotDefinition in definition.limbs:
-		var points = EnemyGaitPlanner.solve_two_bone(
+		var points = LimbKinematics.solve_two_bone(
 			limb.hip_offset,
 			limb.rest_foot_offset,
 			limb.upper_length,
@@ -665,7 +665,7 @@ func _test_action_slots_are_direct() -> void:
 func _test_commanded_joints_can_yield_passive_rest_spring() -> void:
 	var definition = MLBodyPresetLibrary.four_limb_walker_definition()
 	var slot: FourLimbSlotDefinition = definition.limbs[0]
-	var points = EnemyGaitPlanner.solve_two_bone(
+	var points = LimbKinematics.solve_two_bone(
 		slot.hip_offset,
 		slot.rest_foot_offset,
 		slot.upper_length,
@@ -714,7 +714,7 @@ func _test_fresh_stock_hips_can_reach_above_core_without_changing_legacy_bodies(
 			and is_equal_approx(slot.hip_elevation_upper_extension_degrees, 40.0),
 			"fresh stock limb %d keeps the established walking span and adds positive-only overhead authority" % limb_index
 		)
-		var points = EnemyGaitPlanner.solve_two_bone(
+		var points = LimbKinematics.solve_two_bone(
 			slot.hip_offset,
 			slot.rest_foot_offset,
 			slot.upper_length,
@@ -751,7 +751,7 @@ func _test_fresh_stock_hips_can_reach_above_core_without_changing_legacy_bodies(
 		and legacy_slot.contract_dictionary().has("hip_elevation_upper_extension_degrees"),
 		"older limb records migrate to the profile-v10 upward recovery workspace"
 	)
-	var legacy_points = EnemyGaitPlanner.solve_two_bone(
+	var legacy_points = LimbKinematics.solve_two_bone(
 		legacy_slot.hip_offset,
 		legacy_slot.rest_foot_offset,
 		legacy_slot.upper_length,
@@ -782,7 +782,7 @@ func _test_controlled_grip_is_policy_reachable() -> void:
 			and is_equal_approx(effector.activation_response_per_second, 18.0),
 			"every fresh stock limb owns a controlled grip that can cross its threshold within one 20 Hz action interval"
 		)
-		var points = EnemyGaitPlanner.solve_two_bone(
+		var points = LimbKinematics.solve_two_bone(
 			slot.hip_offset,
 			slot.rest_foot_offset,
 			slot.upper_length,
@@ -854,7 +854,7 @@ func _test_horizontal_hip_response_is_axis_specific_and_preset_owned() -> void:
 		"the Walker creator preset owns the tuned high-leverage horizontal hip target slew"
 	)
 	var slot: FourLimbSlotDefinition = definition.limbs[0]
-	var points = EnemyGaitPlanner.solve_two_bone(
+	var points = LimbKinematics.solve_two_bone(
 		slot.hip_offset,
 		slot.rest_foot_offset,
 		slot.upper_length,
@@ -1854,7 +1854,7 @@ func _test_unified_spawn_uses_shared_marker() -> void:
 		"the first limb worker uses the shared room spawn marker exactly on X/Z"
 	)
 	_expect(
-		first_spawn.origin.y >= coordinator._minimum_safe_spawn_height(),
+		first_spawn.origin.y >= coordinator._minimum_safe_spawn_height(group),
 		"the limb chassis is raised only enough to prevent its feet spawning inside the floor"
 	)
 	var second_spawn = coordinator._worker_spawn_transform(

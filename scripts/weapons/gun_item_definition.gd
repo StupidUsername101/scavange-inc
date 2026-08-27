@@ -74,9 +74,27 @@ func get_ballistic_profile(state: Dictionary) -> Dictionary:
 	return get_build(normalize_instance_state(state)).get_ballistic_profile()
 
 
+func is_automatic(state: Dictionary) -> bool:
+	var raw_build: Dictionary = state.get("build", {})
+	if raw_build.is_empty():
+		return default_build != null and default_build.is_automatic()
+	var receiver_path := str(raw_build.get("receiver_path", ""))
+	if receiver_path.is_empty():
+		return false
+	var receiver := load(receiver_path) as GunReceiverDefinition
+	return receiver != null and receiver.automatic
+
+
 func consume_round(state: Dictionary) -> Dictionary:
+	return consume_rounds(state, 1)
+
+
+func consume_rounds(state: Dictionary, count: int) -> Dictionary:
 	var result := normalize_instance_state(state)
-	result["rounds"] = maxi(int(result.get("rounds", 0)) - 1, 0)
+	result["rounds"] = maxi(
+		int(result.get("rounds", 0)) - maxi(count, 0),
+		0
+	)
 	return result
 
 

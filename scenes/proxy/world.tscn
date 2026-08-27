@@ -1,49 +1,65 @@
 [gd_scene format=3 uid="uid://mp5bc83tor82"]
 
-[ext_resource type="Texture2D" uid="uid://b3pd4fmrclpn4" path="res://assets/Screenshot from 2025-11-11 19-05-25.png" id="1_vd40i"]
+[ext_resource type="Texture2D" uid="uid://boxsgn34xowyt" path="res://assets/third_party/pizza_doggy/environment/skyboxes/bleak_mountains.png" id="1_sky"]
 [ext_resource type="PackedScene" path="res://scenes/proxy/drone_crafting_station.tscn" id="2_station"]
 [ext_resource type="PackedScene" path="res://scenes/proxy/drone_inspection_station.tscn" id="3_inspection_station"]
 [ext_resource type="PackedScene" path="res://scenes/proxy/dev_warehouse.tscn" id="4_warehouse"]
-[ext_resource type="PackedScene" path="res://scenes/proxy/dev_zoo.tscn" id="5_zoo"]
+[ext_resource type="PackedScene" path="res://scenes/proxy/industrial_acoustic_complex.tscn" id="5_environment"]
 [ext_resource type="PackedScene" path="res://scenes/proxy/body_part_shop_terminal.tscn" id="6_body_part_shop"]
+[ext_resource type="PackedScene" path="res://scenes/proxy/acoustic_test_house.tscn" id="7_acoustic_house"]
+[ext_resource type="Script" path="res://scripts/audio/game_audio_library.gd" id="17_game_audio"]
+[ext_resource type="Script" path="res://scripts/client/world_nature_dressing.gd" id="22_nature"]
+[ext_resource type="PackedScene" path="res://scenes/proxy/weapon_crafting_station.tscn" id="31_weapon_station"]
+[ext_resource type="PackedScene" path="res://scenes/proxy/speaker_cluster_demo.tscn" id="32_speaker_cluster"]
+[ext_resource type="PackedScene" path="res://scenes/proxy/acoustic_maze.tscn" id="33_acoustic_maze"]
 
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sgp6g"]
-sky_horizon_color = Color(0.66224277, 0.6717428, 0.6867428, 1)
-ground_horizon_color = Color(0.66224277, 0.6717428, 0.6867428, 1)
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_sgp6g"]
+panorama = ExtResource("1_sky")
+energy_multiplier = 0.72
 
 [sub_resource type="Sky" id="Sky_o5qli"]
-sky_material = SubResource("ProceduralSkyMaterial_sgp6g")
+sky_material = SubResource("PanoramaSkyMaterial_sgp6g")
 
 [sub_resource type="Environment" id="Environment_0wfyh"]
 background_mode = 2
 sky = SubResource("Sky_o5qli")
+sky_rotation = Vector3(0, 1.1, 0)
 ambient_light_source = 3
+ambient_light_energy = 0.62
 tonemap_mode = 2
 glow_enabled = true
 fog_enabled = true
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_5avjm"]
-albedo_texture = ExtResource("1_vd40i")
+fog_light_color = Color(0.46, 0.5, 0.51, 1)
+fog_light_energy = 0.68
+fog_density = 0.0025
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_sugp2"]
 size = Vector2(1000, 1000)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_jyhfs"]
-albedo_color = Color(0.4506483, 0.4506483, 0.45064825, 1)
+albedo_color = Color(0.165, 0.185, 0.16, 1)
+roughness = 0.96
 
 [node name="Main" type="Node3D" unique_id=922432823]
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=988769248]
 transform = Transform3D(-0.8660254, -0.43301278, 0.25, 0, 0.49999997, 0.86602545, -0.50000006, 0.75, -0.43301266, 0, 133.53036, 0)
+light_color = Color(0.82, 0.88, 0.93, 1)
+light_energy = 1.15
 shadow_enabled = true
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1577167808]
 environment = SubResource("Environment_0wfyh")
 
+[node name="GameAudioLibrary" type="Node" parent="."]
+script = ExtResource("17_game_audio")
+
 [node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=827578911]
-material_override = SubResource("StandardMaterial3D_5avjm")
 mesh = SubResource("PlaneMesh_sugp2")
 surface_material_override/0 = SubResource("StandardMaterial3D_jyhfs")
+
+[node name="WorldNature" type="Node3D" parent="."]
+script = ExtResource("22_nature")
 
 [node name="DroneCraftingStation" parent="." instance=ExtResource("2_station")]
 position = Vector3(6, 0, 2)
@@ -54,8 +70,20 @@ position = Vector3(-5, 0, -2)
 [node name="BodyPartShopTerminal" parent="." instance=ExtResource("6_body_part_shop")]
 position = Vector3(-5, 0, 2)
 
+[node name="WeaponCraftingStation" parent="." instance=ExtResource("31_weapon_station")]
+position = Vector3(7.5, 0, -7.5)
+
 [node name="DevWarehouse" parent="." instance=ExtResource("4_warehouse")]
 position = Vector3(0, 0, -12)
 
-[node name="DevZoo" parent="." instance=ExtResource("5_zoo")]
+[node name="AcousticTestHouse" parent="." instance=ExtResource("7_acoustic_house")]
+position = Vector3(12, 0, -5)
+
+[node name="IndustrialAcousticComplex" parent="." instance=ExtResource("5_environment")]
 position = Vector3(0, 0, 19)
+
+[node name="SpeakerClusterDemo" parent="." instance=ExtResource("32_speaker_cluster")]
+position = Vector3(6, 0, -48)
+
+[node name="AcousticMaze" parent="." instance=ExtResource("33_acoustic_maze")]
+position = Vector3(150, 0.02, -10)

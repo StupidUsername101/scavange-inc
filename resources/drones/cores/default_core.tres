@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="DroneCoreDefinition" format=3 uid="uid://dkeue8iy1buv1"]
+
+[ext_resource type="Script" uid="uid://chda5vgtc3c5n" path="res://scripts/drones/drone_core_definition.gd" id="1_core"]
+
+[resource]
+script = ExtResource("1_core")
+max_power_throughput = 150.0
+ai_max_horizontal_speed = 9.5
+ai_altitude_authority = 0.24
+spool_up_response = 1.8
+drag_area = 0.16
+angular_drag_coefficient = 0.55
+display_name = "Survey Core"
+visual_color = Color(0.09, 0.13, 0.2, 1)
+mass = 0.85

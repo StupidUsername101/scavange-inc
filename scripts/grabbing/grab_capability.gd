@@ -31,17 +31,11 @@ extends Resource
 
 @export_group("Rotation")
 @export_range(0.0001, 0.05, 0.0001, "or_greater") var rotation_radians_per_pixel := 0.004
-@export_range(0.0, 20.0, 0.05, "or_greater") var max_rotation_speed := 1.5
-@export_range(0.0, 100.0, 0.5, "or_greater") var rotation_acceleration := 8.0
-@export_range(0.0, 10000.0, 0.5, "or_greater") var max_rotation_torque := 35.0
-@export_range(0.01, 10000.0, 0.1, "or_greater") var rotation_mass_capacity := 20.0
-@export_range(0.0, 1.0, 0.01) var rotation_anchor_centering := 0.98
-
-@export_group("Rotation Hold")
-@export_range(1.0, 20.0, 0.1, "or_greater") var rotation_hold_spring_multiplier := 3.0
-@export_range(1.0, 20.0, 0.1, "or_greater") var rotation_hold_damping_multiplier := 4.0
-@export_range(0.0, 2.0, 0.01, "or_greater") var rotation_settle_duration := 0.22
-@export_range(0.0, 100.0, 0.5, "or_greater") var rotation_settle_damping := 22.0
+@export_range(0.0, 400.0, 0.5, "or_greater") var rotation_target_stiffness := 36.0
+@export_range(0.0, 100.0, 0.25, "or_greater") var rotation_target_damping := 12.0
+@export_range(0.0, 10000.0, 0.5, "or_greater") var max_rotation_torque := 120.0
+@export_range(0.01, 10000.0, 0.1, "or_greater") var rotation_mass_capacity := 40.0
+@export_range(0.0, 1.0, 0.01) var rotation_anchor_centering := 1.0
 
 
 func get_clamped_min_distance() -> float:

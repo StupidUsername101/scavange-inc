@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://dnxpc8is2flir"
+path="res://.godot/imported/Schwarzbraun ist die haselnuss - german song.mp3-7753abb5c0e61b0e511abd0d261e4d54.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Schwarzbraun ist die haselnuss - german song.mp3"
+dest_files=["res://.godot/imported/Schwarzbraun ist die haselnuss - german song.mp3-7753abb5c0e61b0e511abd0d261e4d54.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

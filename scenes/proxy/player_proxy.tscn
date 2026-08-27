@@ -33,6 +33,9 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55575824, -0.42391348)
 
 [node name="Camera3D" type="Camera3D" parent="HeadPivot" unique_id=786003596]
 
+[node name="AudioListener3D" type="AudioListener3D" parent="."]
+position = Vector3(0, 0.555758, 0)
+
 [node name="BodyVisual" type="Node3D" parent="."]
 
 [node name="Torso" type="MeshInstance3D" parent="BodyVisual"]
@@ -47,9 +50,19 @@ mesh = SubResource("SphereMesh_head")
 position = Vector3(-0.47, 0.16, 0)
 mesh = SubResource("CapsuleMesh_arm")
 
+[node name="WristMount" type="Node3D" parent="BodyVisual/LeftArm"]
+position = Vector3(0, -0.34, -0.11)
+rotation = Vector3(0, 3.14159, 0)
+scale = Vector3(0.82, 0.82, 0.82)
+
 [node name="RightArm" type="MeshInstance3D" parent="BodyVisual"]
 position = Vector3(0.47, 0.16, 0)
 mesh = SubResource("CapsuleMesh_arm")
+
+[node name="WristMount" type="Node3D" parent="BodyVisual/RightArm"]
+position = Vector3(0, -0.34, -0.11)
+rotation = Vector3(0, 3.14159, 0)
+scale = Vector3(0.82, 0.82, 0.82)
 
 [node name="LeftLeg" type="MeshInstance3D" parent="BodyVisual"]
 position = Vector3(-0.2, -0.62, 0)

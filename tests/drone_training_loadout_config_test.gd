@@ -577,8 +577,8 @@ func _init() -> void:
 				"nested creator-edited end-effector properties survive JSON persistence"
 			)
 
-	# Generic loadout copying/serialization must preserve the Core's declared physical slot count even
-	# though the current drone flight room intentionally remains a four-rotor specialized trainer.
+	# Generic loadout copying/serialization and the live runtime preserve the Core's declared
+	# physical slot count instead of treating the stock quad as a topology ceiling.
 	var extended: DroneLoadout = DroneTrainingLoadoutConfig.duplicate_loadout(baseline)
 	extended.core.propeller_slot_count = 6
 	var extra_propeller: DronePropellerDefinition = (
@@ -662,6 +662,60 @@ func _init() -> void:
 		and float(flat_summary.get("initial_propeller_command", 0.0)) > 0.70,
 		"flat/wide heavy-lift creator body keeps upward lift authority and receives a mass-aware PPO startup command"
 	)
+	_expect(
+		DroneTrainingLoadoutConfig.training_readiness_error(
+			flat_lift_loadout,
+			flat_manifest
+		).is_empty(),
+		"a creator flight body with enough nominal upward lift passes training preflight"
+	)
+
+	# Non-upward creator rotors are legitimate controls (for lateral thrust, unusual bodies, or
+	# mixed layouts). Initializing their sigmoid output at physical idle maps them to a very large
+	# negative logit, where the normal PPO exploration noise cannot produce a meaningful command.
+	var lateral_loadout: DroneLoadout = DroneTrainingLoadoutConfig.duplicate_loadout(baseline)
+	var lateral_axes: Array[Vector3] = [
+		Vector3.LEFT,
+		Vector3.RIGHT,
+		Vector3.FORWARD,
+		Vector3.BACK,
+	]
+	for slot_index: int in range(lateral_axes.size()):
+		lateral_loadout.set_propeller_slot_transform(
+			slot_index,
+			Transform3D(
+				_basis_with_y_axis(lateral_axes[slot_index]),
+				lateral_axes[slot_index] * 0.42
+			)
+		)
+	var lateral_manifest: MLBodyInterfaceManifest = DroneMLBodyInterfaceFactory.finalize_loadout(
+		lateral_loadout
+	)
+	var lateral_summary: Dictionary = DroneTrainingLoadoutConfig.physical_summary(lateral_loadout)
+	var lateral_initial_controls: Array = DroneTrainingLoadoutConfig.recommended_initial_control_values(
+		lateral_loadout,
+		lateral_manifest
+	)
+	var lateral_controls_explore: bool = lateral_initial_controls.size() == 4
+	for initial_control: Variant in lateral_initial_controls:
+		lateral_controls_explore = lateral_controls_explore and is_equal_approx(
+			float(initial_control),
+			DroneTrainingLoadoutConfig.INITIAL_NON_LIFT_PROPELLER_COMMAND
+		)
+	_expect(
+		lateral_manifest != null
+		and float(lateral_summary.get("maximum_lift_to_weight", 1.0)) <= 0.000001
+		and is_zero_approx(float(lateral_summary.get("nominal_hover_power_margin", -1.0)))
+		and lateral_controls_explore,
+		"lateral creator rotors retain useful PPO exploration instead of being pinned at idle"
+	)
+	_expect(
+		DroneTrainingLoadoutConfig.training_readiness_error(
+			lateral_loadout,
+			lateral_manifest
+		).contains("0.00x nominal upward lift"),
+		"propeller-only bodies that cannot counter gravity are rejected before spawning idle workers"
+	)
 
 	var drone_scene: PackedScene = load("res://scenes/server/server_drone.tscn") as PackedScene
 	var air_environment: AirEnvironment = AirEnvironment.new()
@@ -712,6 +766,57 @@ func _init() -> void:
 			"heavy-lift creator rotor commands reach the real force path with enough realized upward thrust to exceed body weight"
 		)
 		flat_lift_drone.free()
+	var six_rotor_loadout: DroneLoadout = DroneTrainingLoadoutConfig.duplicate_loadout(baseline)
+	if six_rotor_loadout.core != null:
+		six_rotor_loadout.core.propeller_slot_count = 6
+	for slot_index: int in range(6):
+		if slot_index >= 4:
+			six_rotor_loadout.install_propeller(
+				slot_index,
+				MLBodyPartContract.deep_duplicate_resource(
+					baseline.get_propeller(0)
+				) as DronePropellerDefinition
+			)
+		var angle: float = TAU * float(slot_index) / 6.0
+		six_rotor_loadout.set_propeller_slot_transform(
+			slot_index,
+			Transform3D(
+				Basis.IDENTITY,
+				Vector3(cos(angle) * 0.62, 0.18, sin(angle) * 0.62)
+			)
+		)
+	var six_rotor_drone: ServerDrone = (
+		drone_scene.instantiate() as ServerDrone if drone_scene != null else null
+	)
+	if six_rotor_drone != null:
+		six_rotor_drone.loadout = six_rotor_loadout
+		get_root().add_child(six_rotor_drone)
+		var six_rotor_states: Array[Dictionary] = (
+			DroneMLObservation.capture_ppo_propeller_states(six_rotor_drone)
+		)
+		_expect(
+			six_rotor_drone.propeller_slots.size() == 6
+			and six_rotor_drone.get_node_or_null("Propeller5Collision") is CollisionShape3D
+			and six_rotor_states.size() == 6
+			and DronePPOObservationEncoder.has_valid_propeller_topology({
+				"propellers": six_rotor_states,
+			}),
+			"live ServerDrone materializes all six accepted rotor slots, colliders, and ordered PPO observations"
+		)
+		var proxy_scene: PackedScene = load("res://scenes/proxy/drone_proxy.tscn") as PackedScene
+		var proxy: DroneProxy = proxy_scene.instantiate() as DroneProxy if proxy_scene != null else null
+		if proxy != null:
+			get_root().add_child(proxy)
+			proxy.apply_server_state(six_rotor_drone.to_state_dict())
+			_expect(
+				proxy.propeller_visuals.size() == 6
+				and proxy.propeller_guides.size() == 6
+				and proxy.propeller_slot_transforms.size() == 6
+				and proxy.propeller_visuals[5].visible,
+				"client proxy grows its visual pool so exported six-rotor workers do not lose slots five and six"
+			)
+			proxy.free()
+		six_rotor_drone.free()
 	air_environment.free()
 	var degraded_drone: ServerDrone = null
 	if drone_scene != null:
@@ -872,6 +977,16 @@ func _init() -> void:
 		)
 
 	quit(0 if failure_count == 0 else 1)
+
+
+func _basis_with_y_axis(y_axis_value: Vector3) -> Basis:
+	var y_axis: Vector3 = y_axis_value.normalized()
+	var helper: Vector3 = Vector3.FORWARD
+	if absf(y_axis.dot(helper)) > 0.92:
+		helper = Vector3.RIGHT
+	var x_axis: Vector3 = helper.cross(y_axis).normalized()
+	var z_axis: Vector3 = x_axis.cross(y_axis).normalized()
+	return Basis(x_axis, y_axis, z_axis).orthonormalized()
 
 
 func _expect(condition: bool, message: String) -> void:

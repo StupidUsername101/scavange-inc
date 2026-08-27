@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://cb38jxck3br8r"
+path="res://.godot/imported/HG - Raw - Shoot - Variation 2 - 02.wav-02e51160575ba0efca06b026ceb4cce2.sample"
+
+[deps]
+
+source_file="res://assets/sounds/pistol/HG/HG - Raw - Shoot - Variation 2 - 02.wav"
+dest_files=["res://.godot/imported/HG - Raw - Shoot - Variation 2 - 02.wav-02e51160575ba0efca06b026ceb4cce2.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

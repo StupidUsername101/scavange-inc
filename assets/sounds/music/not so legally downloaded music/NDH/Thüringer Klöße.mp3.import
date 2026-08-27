@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://b86ipv5h6ceke"
+path="res://.godot/imported/Thüringer Klöße.mp3-afa426401b2fea4e5cedf960de96960f.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/NDH/Thüringer Klöße.mp3"
+dest_files=["res://.godot/imported/Thüringer Klöße.mp3-afa426401b2fea4e5cedf960de96960f.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

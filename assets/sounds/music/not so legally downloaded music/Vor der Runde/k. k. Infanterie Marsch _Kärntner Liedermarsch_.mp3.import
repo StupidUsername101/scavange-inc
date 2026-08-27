@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cxt506e7yylkn"
+path="res://.godot/imported/k. k. Infanterie Marsch _Kärntner Liedermarsch_.mp3-f7d344c520f4384dd23c0bd4717290ac.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/k. k. Infanterie Marsch _Kärntner Liedermarsch_.mp3"
+dest_files=["res://.godot/imported/k. k. Infanterie Marsch _Kärntner Liedermarsch_.mp3-f7d344c520f4384dd23c0bd4717290ac.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

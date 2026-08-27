@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://bgx5tr2gy55j3"
+path="res://.godot/imported/Rammstein - Deutschland.mp3-83242b5cdf558cfc4d01119377af295c.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/NDH/Rammstein - Deutschland.mp3"
+dest_files=["res://.godot/imported/Rammstein - Deutschland.mp3-83242b5cdf558cfc4d01119377af295c.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

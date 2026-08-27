@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://c5uv4avrjm8fb"
+path="res://.godot/imported/Regentropfen.mp3-1cbba14746264e4139bdce1743ba0fe8.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Deutsch Swing/Regentropfen.mp3"
+dest_files=["res://.godot/imported/Regentropfen.mp3-1cbba14746264e4139bdce1743ba0fe8.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

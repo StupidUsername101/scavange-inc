@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cfv5xg8avi18t"
+path="res://.godot/imported/POLTERGST - Sonne (Official Audio).mp3-b766440ca8782293578ac909c2a7db02.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vorwärts/POLTERGST - Sonne (Official Audio).mp3"
+dest_files=["res://.godot/imported/POLTERGST - Sonne (Official Audio).mp3-b766440ca8782293578ac909c2a7db02.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

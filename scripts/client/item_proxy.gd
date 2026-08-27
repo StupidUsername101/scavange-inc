@@ -16,9 +16,11 @@ var target_angular_velocity := Vector3.ZERO
 var time_since_last_state := 0.0
 
 var definition_path := ""
+var item_definition: ItemDefinition
 var visual_state_signature := ""
 var visual: Node3D
 var warehouse_label: Label3D
+var fieldlink_status_text := "ONLINE"
 
 
 func _ready() -> void:
@@ -32,6 +34,21 @@ func from_server_state(state: Dictionary) -> void:
 		str(state.get("definition_path", "")),
 		SafeVariant.dictionary_copy(state.get("instance_state", {}))
 	)
+	fieldlink_status_text = "ONLINE"
+	if item_definition is RadioItemDefinition:
+		var radio_powered := SafeVariant.strict_bool_or(
+			state.get("radio_powered", false),
+			false
+		)
+		var radio_paused := SafeVariant.strict_bool_or(
+			state.get("radio_paused", false),
+			false
+		)
+		fieldlink_status_text = (
+			"PAUSED"
+			if radio_powered and radio_paused
+			else ("TRANSMITTING" if radio_powered else "STANDBY")
+		)
 
 	var rigid_state: Dictionary = ClientProxyMotion.decode_rigid_state(
 		state,
@@ -48,6 +65,12 @@ func from_server_state(state: Dictionary) -> void:
 		global_position,
 		0.52
 	)
+	if visual != null:
+		visual.propagate_call(
+			"apply_server_item_state",
+			[state],
+			false
+		)
 
 	time_since_last_state = 0.0
 
@@ -103,12 +126,34 @@ func _apply_definition(
 		return
 
 	definition_path = new_definition_path
+	item_definition = resource as ItemDefinition
 	visual_state_signature = next_signature
 
 	if visual != null:
 		visual.queue_free()
 
-	visual = (
-		resource as ItemDefinition
-	).instantiate_visual_from_state(instance_state)
+	visual = item_definition.instantiate_visual_from_state(instance_state)
 	add_child(visual)
+
+
+func build_fieldlink_contact(
+	origin: Vector3,
+	maximum_distance: float
+) -> Dictionary:
+	if item_definition == null or not item_definition.fieldlink_detectable:
+		return {}
+	var offset := global_position - origin
+	var distance_squared := offset.length_squared()
+	var bounded_range := maxf(maximum_distance, 0.0)
+	if distance_squared > bounded_range * bounded_range:
+		return {}
+	return {
+		"contact_id": StringName("item:%d" % item_id),
+		"display_name": item_definition.display_name,
+		"device_class": item_definition.fieldlink_device_class,
+		"control_type": item_definition.fieldlink_control_type,
+		"status_text": fieldlink_status_text,
+		"world_position": global_position,
+		"distance_meters": sqrt(distance_squared),
+		"signal_strength": item_definition.fieldlink_signal_strength,
+	}

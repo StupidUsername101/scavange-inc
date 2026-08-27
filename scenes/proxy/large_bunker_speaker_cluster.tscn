@@ -1,0 +1,11 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/client/speaker_cluster_demo_proxy.gd" id="1_cluster"]
+[ext_resource type="Resource" path="res://resources/world/large_bunker_pressure_array.tres" id="2_definition"]
+[ext_resource type="PackedScene" path="res://scenes/shared/large_bunker_speaker_array_emitters.tscn" id="3_emitters"]
+
+[node name="LargeBunkerSpeakerArray" type="Node3D"]
+script = ExtResource("1_cluster")
+array_definition = ExtResource("2_definition")
+
+[node name="Emitters" parent="." instance=ExtResource("3_emitters")]

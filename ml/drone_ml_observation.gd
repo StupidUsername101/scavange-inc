@@ -33,7 +33,7 @@ static func capture_ppo(drone, delta: float, step_index: int) -> Dictionary:
 	# PPO consumes only this compact schema. The generic diagnostic snapshot deliberately
 	# remains rich, but constructing all of its static part metadata and secondary encoded
 	# tensor for every decision is wasted work in the training room.
-	var basis: Basis = drone.global_basis
+	var basis: Basis = _model_basis_world(drone)
 	# RigidBody3D transforms are rotations; transpose is the exact inverse and is substantially
 	# cheaper than a general Basis inverse on every PPO observation.
 	var inverse_basis: Basis = basis.transposed()
@@ -138,6 +138,7 @@ static func capture_ppo_propeller_states(drone) -> Array[Dictionary]:
 	if drone == null or drone.propeller_slots.is_empty():
 		return result
 	var maximum_thrusts: Array[float] = drone.get_ml_static_thrust_limits()
+	var core_to_model: Basis = _core_to_model_basis(drone)
 	for array_index: int in range(drone.propeller_slots.size()):
 		var slot = drone.propeller_slots[array_index]
 		var propeller: DronePropellerDefinition = (
@@ -152,8 +153,8 @@ static func capture_ppo_propeller_states(drone) -> Array[Dictionary]:
 		result.append({
 			"slot_index": int(slot.slot_index),
 			"installed": propeller != null and not degraded,
-			"position_local": slot.position,
-			"lift_axis_local": slot.basis.y.normalized(),
+			"position_local": core_to_model * slot.position,
+			"lift_axis_local": (core_to_model * slot.basis.y).normalized(),
 			"spin_direction": int(slot.spin_direction),
 			"realized_thrust_n": _array_value(
 				drone.last_propeller_realized_thrust_n,
@@ -169,14 +170,16 @@ static func capture_ppo_propeller_states(drone) -> Array[Dictionary]:
 
 
 static func _capture_body(drone) -> Dictionary:
+	var basis: Basis = _model_basis_world(drone)
+	var inverse_basis: Basis = basis.transposed()
 	return {
 		"position_world": drone.global_position,
-		"basis_world": drone.global_basis,
+		"basis_world": basis,
 		"linear_velocity_world": drone.linear_velocity,
 		"angular_velocity_world": drone.angular_velocity,
-		"linear_velocity_local": drone.global_basis.inverse() * drone.linear_velocity,
-		"angular_velocity_local": drone.global_basis.inverse() * drone.angular_velocity,
-		"up_world": drone.global_basis.y.normalized(),
+		"linear_velocity_local": inverse_basis * drone.linear_velocity,
+		"angular_velocity_local": inverse_basis * drone.angular_velocity,
+		"up_world": basis.y.normalized(),
 		"mass_kg": drone.mass,
 		"inertia_kg_m2": drone.inertia,
 		"sleeping": drone.sleeping,
@@ -270,6 +273,7 @@ static func _capture_parts(drone) -> Dictionary:
 
 static func _capture_propellers(drone) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
+	var core_to_model: Basis = _core_to_model_basis(drone)
 	for array_index: int in range(drone.propeller_slots.size()):
 		var slot = drone.propeller_slots[array_index]
 		var propeller = (
@@ -282,8 +286,8 @@ static func _capture_propellers(drone) -> Array[Dictionary]:
 			"array_index": array_index,
 			"slot_index": slot.slot_index,
 			"installed": propeller != null,
-			"position_local": slot.position,
-			"lift_axis_local": slot.basis.y.normalized(),
+			"position_local": core_to_model * slot.position,
+			"lift_axis_local": (core_to_model * slot.basis.y).normalized(),
 			"spin_direction": slot.spin_direction,
 			"supplied_voltage_v": drone.current_bus_voltage_v,
 			"commanded_thrust_n": (
@@ -378,3 +382,19 @@ static func _battery_stats(battery: DroneBatteryDefinition) -> Dictionary:
 
 static func _array_value(values: Array[float], index: int) -> float:
 	return values[index] if index >= 0 and index < values.size() else 0.0
+
+
+static func _model_basis_world(drone) -> Basis:
+	return (
+		drone.model_orientation_basis_world()
+		if is_instance_valid(drone)
+		else Basis.IDENTITY
+	)
+
+
+static func _core_to_model_basis(drone) -> Basis:
+	return (
+		drone.model_orientation_basis_local().transposed()
+		if is_instance_valid(drone)
+		else Basis.IDENTITY
+	)

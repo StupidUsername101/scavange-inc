@@ -1,7 +1,9 @@
 extends Control
+class_name LobbyBrowser
 
 const LOBBY_CARD_SCENE := preload("res://scenes/UI/lobby_card.tscn")
-const LOBBY_LIST_TIMEOUT_SECONDS := 8.0
+const LOBBY_LIST_TIMEOUT_SECONDS := 22.0
+const MAX_LOBBY_NAME_LENGTH := 64
 
 #######################################################
 # Implements the lobby browser subsystem and keeps its gameplay data and behavior in one
@@ -25,6 +27,8 @@ const LOBBY_LIST_TIMEOUT_SECONDS := 8.0
 var pending_lobby_ids: Dictionary[int, bool] = {}
 var lobby_cards_by_id: Dictionary[int, LobbyCard] = {}
 var refresh_generation := 0
+var refresh_in_flight := false
+var join_in_flight := false
 
 
 func _ready() -> void:
@@ -54,25 +58,36 @@ func _exit_tree() -> void:
 
 
 func _on_lobby_match_list(lobbies: Array) -> void:
+	if not refresh_in_flight or join_in_flight:
+		return
 	print("CLIENT: Found lobbies: ", lobbies.size())
 	
 	for lobby_value: Variant in lobbies:
 		var lobby_id := int(lobby_value)
-		if lobby_id == Server.lobby_id:
+		if (
+			lobby_id <= 0
+			or lobby_id == Server.lobby_id
+			or pending_lobby_ids.has(lobby_id)
+		):
 			continue
 		pending_lobby_ids[lobby_id] = true
 		if not Steam.requestLobbyData(lobby_id):
 			pending_lobby_ids.erase(lobby_id)
 
 	if pending_lobby_ids.is_empty():
-		refresh_button.disabled = false
+		refresh_in_flight = false
+		refresh_button.disabled = not Server.is_steam_available()
 		_show_empty_state("No open lobbies found.")
 	else:
 		status_label.text = "Loading %d lobby result(s)..." % (
 			pending_lobby_ids.size()
 		)
 
-func _on_lobby_data_update(success: bool, lobby_id: int, _member_id: int) -> void:
+func _on_lobby_data_update(success: bool, lobby_id: int, member_id: int) -> void:
+	# LobbyDataUpdate also reports per-member changes. Only a room-level update can complete a
+	# requestLobbyData batch entry.
+	if member_id != lobby_id or join_in_flight:
+		return
 	var was_pending := pending_lobby_ids.has(lobby_id)
 	var has_existing_card := lobby_cards_by_id.has(lobby_id)
 	if not was_pending and not has_existing_card:
@@ -84,46 +99,25 @@ func _on_lobby_data_update(success: bool, lobby_id: int, _member_id: int) -> voi
 		_remove_lobby_card(lobby_id)
 		if was_pending:
 			_finish_lobby_data_batch()
+		elif lobby_cards_by_id.is_empty():
+			_show_empty_state("No compatible open lobbies found.")
+		else:
+			status_label.text = "%d open lobby(s)" % lobby_cards_by_id.size()
 		return
 		
-	var lobby_name: String = Steam.getLobbyData(
-		lobby_id,
-		LobbyRules.DATA_NAME
-	)
-	if lobby_name.is_empty():
-		lobby_name = "Unnamed lobby"
-
 	var steam_member_count: int = Steam.getNumLobbyMembers(lobby_id)
-	var members: int = LobbyRules.read_non_negative_count(
+	var advertised_member_count := LobbyRules.read_non_negative_count(
 		Steam.getLobbyData(lobby_id, LobbyRules.DATA_PLAYERS),
 		steam_member_count
 	)
-	var capacity: int = Steam.getLobbyMemberLimit(lobby_id)
-	var game_tag: String = Steam.getLobbyData(
-		lobby_id,
-		LobbyRules.DATA_GAME
-	)
-	var protocol: String = Steam.getLobbyData(
-		lobby_id,
-		LobbyRules.DATA_PROTOCOL
-	)
-	var advertised_open: String = Steam.getLobbyData(
-		lobby_id,
-		LobbyRules.DATA_OPEN
-	)
-
-	if (
-		advertised_open != "0"
-		and LobbyRules.is_compatible_lobby(
-			game_tag,
-			protocol,
-			members,
-			capacity
-		)
-	):
-		_add_lobby_card(lobby_id, lobby_name, members, capacity)
-	else:
-		_remove_lobby_card(lobby_id)
+	_apply_lobby_snapshot(lobby_id, {
+		"name": Steam.getLobbyData(lobby_id, LobbyRules.DATA_NAME),
+		"members": maxi(steam_member_count, advertised_member_count),
+		"capacity": Steam.getLobbyMemberLimit(lobby_id),
+		"game_tag": Steam.getLobbyData(lobby_id, LobbyRules.DATA_GAME),
+		"protocol": Steam.getLobbyData(lobby_id, LobbyRules.DATA_PROTOCOL),
+		"open": Steam.getLobbyData(lobby_id, LobbyRules.DATA_OPEN),
+	})
 
 	if was_pending:
 		_finish_lobby_data_batch()
@@ -134,7 +128,10 @@ func _on_lobby_data_update(success: bool, lobby_id: int, _member_id: int) -> voi
 
 
 func refresh_lobbies() -> void:
+	if join_in_flight:
+		return
 	if not Server.is_steam_available():
+		refresh_in_flight = false
 		refresh_button.disabled = true
 		_show_empty_state(
 			"Steam is not running. Start Steam and relaunch the game."
@@ -143,11 +140,14 @@ func refresh_lobbies() -> void:
 
 	print("CLIENT: Refreshing lobbies...")
 	refresh_generation += 1
+	refresh_in_flight = true
 	pending_lobby_ids.clear()
+	for card: LobbyCard in lobby_cards_by_id.values():
+		if is_instance_valid(card):
+			if card.get_parent() != null:
+				card.get_parent().remove_child(card)
+			card.queue_free()
 	lobby_cards_by_id.clear()
-	for child: Node in lobby_card_container.get_children():
-		if child != empty_label:
-			child.queue_free()
 	empty_label.hide()
 	refresh_button.disabled = true
 	status_label.text = "Searching Steam lobbies..."
@@ -176,18 +176,66 @@ func refresh_lobbies() -> void:
 
 	var this_generation: int = refresh_generation
 	get_tree().create_timer(LOBBY_LIST_TIMEOUT_SECONDS).timeout.connect(
-		func() -> void:
-			if (
-				is_inside_tree()
-				and this_generation == refresh_generation
-				and refresh_button.disabled
-			):
-				refresh_button.disabled = false
-				pending_lobby_ids.clear()
-				_show_empty_state(
-					"Steam did not return a lobby list. Try refresh."
-				)
+		_on_refresh_timeout.bind(this_generation)
 	)
+
+
+func _apply_lobby_snapshot(lobby_id: int, snapshot: Dictionary) -> bool:
+	if lobby_id <= 0:
+		return false
+	var lobby_name := (
+		str(snapshot.get("name", ""))
+		.replace("\r", " ")
+		.replace("\n", " ")
+		.strip_edges()
+	)
+	if lobby_name.is_empty():
+		lobby_name = "Unnamed lobby"
+	lobby_name = lobby_name.left(MAX_LOBBY_NAME_LENGTH)
+	var members := maxi(
+		SafeVariant.integral_int_or(snapshot.get("members", 0), 0),
+		0
+	)
+	var capacity := maxi(
+		SafeVariant.integral_int_or(snapshot.get("capacity", 0), 0),
+		0
+	)
+	var is_visible := (
+		str(snapshot.get("open", "0")) == "1"
+		and LobbyRules.is_compatible_lobby(
+			str(snapshot.get("game_tag", "")),
+			str(snapshot.get("protocol", "")),
+			members,
+			capacity
+		)
+	)
+	if is_visible:
+		_add_lobby_card(lobby_id, lobby_name, members, capacity)
+	else:
+		_remove_lobby_card(lobby_id)
+	return is_visible
+
+
+func _on_refresh_timeout(generation: int) -> void:
+	if (
+		not is_inside_tree()
+		or generation != refresh_generation
+		or not refresh_in_flight
+	):
+		return
+	refresh_in_flight = false
+	pending_lobby_ids.clear()
+	refresh_button.disabled = not Server.is_steam_available()
+	if lobby_cards_by_id.is_empty():
+		_show_empty_state(
+			"Steam did not return a lobby list. Try refresh."
+		)
+	else:
+		empty_label.hide()
+		status_label.text = (
+			"%d open lobby(s); some results timed out."
+			% lobby_cards_by_id.size()
+		)
 
 
 func _add_lobby_card(
@@ -220,13 +268,16 @@ func _remove_lobby_card(lobby_id: int) -> void:
 	var card = lobby_cards_by_id[lobby_id]
 	lobby_cards_by_id.erase(lobby_id)
 	if is_instance_valid(card):
+		if card.get_parent() != null:
+			card.get_parent().remove_child(card)
 		card.queue_free()
 
 
 func _finish_lobby_data_batch() -> void:
 	if not pending_lobby_ids.is_empty():
 		return
-	refresh_button.disabled = false
+	refresh_in_flight = false
+	refresh_button.disabled = not Server.is_steam_available()
 	if lobby_cards_by_id.is_empty():
 		_show_empty_state("No compatible open lobbies found.")
 	else:
@@ -241,6 +292,11 @@ func _show_empty_state(message: String) -> void:
 
 
 func _on_join_requested(lobby_id: int) -> void:
+	if join_in_flight or not lobby_cards_by_id.has(lobby_id):
+		return
+	join_in_flight = true
+	refresh_in_flight = false
+	pending_lobby_ids.clear()
 	for card: LobbyCard in lobby_cards_by_id.values():
 		card.set_join_enabled(false)
 	refresh_button.disabled = true
@@ -252,12 +308,17 @@ func _on_join_requested(lobby_id: int) -> void:
 func _on_lobby_status_changed(message: String, is_error: bool) -> void:
 	status_label.text = message
 	if is_error:
-		refresh_button.disabled = false
+		join_in_flight = false
+		refresh_button.disabled = not Server.is_steam_available()
 		back_button.disabled = false
 		for card: LobbyCard in lobby_cards_by_id.values():
-			card.set_join_enabled(true)
+			card.set_join_enabled(Server.is_steam_available())
 
 
 func _on_back_pressed() -> void:
+	refresh_generation += 1
+	refresh_in_flight = false
+	join_in_flight = false
+	pending_lobby_ids.clear()
 	Server.cancel_pending_lobby_join()
 	SceneController.open_main_menu()

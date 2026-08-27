@@ -332,7 +332,7 @@ func _build_skeleton_bone_records(
 		if limb == null:
 			bone_records.append({})
 			continue
-		var rest_points: PackedVector3Array = EnemyGaitPlanner.solve_two_bone(
+		var rest_points: PackedVector3Array = LimbKinematics.solve_two_bone(
 			limb.hip_offset,
 			limb.rest_foot_offset,
 			limb.upper_length,
@@ -398,7 +398,7 @@ func _create_all_physical_segments(
 			PhysicalBone3D.JOINT_TYPE_CONE,
 			Basis.IDENTITY
 		)
-		var rest_points: PackedVector3Array = EnemyGaitPlanner.solve_two_bone(
+		var rest_points: PackedVector3Array = LimbKinematics.solve_two_bone(
 			limb.hip_offset,
 			limb.rest_foot_offset,
 			limb.upper_length,
@@ -832,25 +832,7 @@ static func create_proximal_joint_offset(
 static func create_knee_joint_basis(
 	rest_points: PackedVector3Array
 ) -> Basis:
-	if rest_points.size() != 3:
-		return Basis.IDENTITY
-	var upper_direction := (rest_points[1] - rest_points[0]).normalized()
-	var lower_direction := (rest_points[2] - rest_points[1]).normalized()
-	var hinge_axis := upper_direction.cross(lower_direction)
-	if hinge_axis.length_squared() <= 0.000001:
-		hinge_axis = lower_direction.cross(Vector3.UP)
-	if hinge_axis.length_squared() <= 0.000001:
-		hinge_axis = lower_direction.cross(Vector3.RIGHT)
-	var lower_basis := EnemyPhysicalLimbVisual3D.basis_from_y(lower_direction)
-	var local_hinge_axis := (lower_basis.inverse() * hinge_axis).normalized()
-	var local_segment_axis := Vector3.UP
-	var local_x := local_segment_axis.cross(local_hinge_axis)
-	if local_x.length_squared() <= 0.000001:
-		return Basis.IDENTITY
-	local_x = local_x.normalized()
-	var local_y := local_hinge_axis.cross(local_x).normalized()
-	# Godot's HingeJoint3D rotates around the joint frame's local Z axis.
-	return Basis(local_x, local_y, local_hinge_axis).orthonormalized()
+	return LimbKinematics.create_knee_joint_basis(rest_points)
 
 
 static func get_joint_world_transform(

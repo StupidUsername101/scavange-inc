@@ -1,0 +1,8 @@
+[gd_resource type="ConvexPolygonShape3D" format=3]
+
+[resource]
+resource_name = "prop_wood_pallet"
+points = PackedVector3Array(0.73139054, 0.21764284, 0.66628563, -0.73142856, -0.010928571, -0.6594286, -0.73142856, -0.010928571, 0.66628563, -0.73142856, 0.21764284, -0.6594286, 0.73139054, -0.010928571, -0.6594286, -0.73142856, 0.21764284, 0.66628563, 0.73139054, -0.010928571, 0.66628563, 0.73139054, 0.21764284, -0.6594286)
+metadata/collision_bake_source = "res://assets/third_party/pizza_doggy/models/bunkers/wood_pallet_1.glb"
+metadata/collision_bake_mode = &"convex"
+metadata/collision_bake_manifest_version = 1

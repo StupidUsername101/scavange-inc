@@ -1,6 +1,7 @@
 extends StaticBody3D
 
 const CATALOG := preload("res://scripts/drones/dev_warehouse_catalog.gd")
+const PHYSICAL_SURFACE := preload("res://scripts/audio/physical_surface.gd")
 const REFILL_DELAY_SECONDS := 1.25
 
 #######################################################
@@ -10,9 +11,11 @@ const REFILL_DELAY_SECONDS := 1.25
 
 var slot_descriptors: Array[Dictionary] = []
 var socketed_parts: Dictionary[int, RigidBody3D] = {}
+@export var acoustic_material: AcousticMaterial
 
 
 func _ready() -> void:
+	PHYSICAL_SURFACE.apply_to(self, &"metal")
 	var layout: Dictionary = CATALOG.build_layout()
 	var raw_slots: Array = layout.get("slots", [])
 	for raw_slot: Variant in raw_slots:
@@ -27,6 +30,10 @@ func _exit_tree() -> void:
 		if is_instance_valid(part):
 			part.queue_free()
 	socketed_parts.clear()
+
+
+func get_acoustic_material() -> AcousticMaterial:
+	return acoustic_material
 
 
 func release_socketed_part(part: RigidBody3D) -> bool:

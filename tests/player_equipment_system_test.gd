@@ -16,6 +16,9 @@ const EYE_PATHS: Array[String] = [
 	"res://resources/items/eyes/salvaged_oculars.tres",
 	"res://resources/items/eyes/precision_oculars.tres",
 ]
+const WRIST_DEVICE_PATH := (
+	"res://resources/items/wrist_devices/corporate_field_terminal.tres"
+)
 
 #######################################################
 # Runs headless regression coverage for player equipment system behavior and reports contract
@@ -112,6 +115,20 @@ func _test_definition_contracts() -> void:
 		"the three ocular variants use distinct shaders"
 	)
 
+	var wrist_device := load(WRIST_DEVICE_PATH) as EquippableItemDefinition
+	_expect(wrist_device != null, "the Fieldlink item definition loads")
+	if wrist_device != null:
+		_expect(
+			wrist_device.equipment_slot
+			== PlayerInventoryRules.WRIST_DEVICE_SLOT,
+			"the Fieldlink uses the generic wrist-device slot"
+		)
+		_expect(
+			wrist_device.visual_scene != null
+			and wrist_device.equipped_visual_scene != null,
+			"the Fieldlink is both a physical item and equipped visual"
+		)
+
 	var inspection_interface := load(
 		"res://resources/items/player_equipment_inspection_interface.tres"
 	)
@@ -134,6 +151,31 @@ func _test_inventory_and_equipment_transactions() -> void:
 		"a player without a backpack has one inventory slot"
 	)
 	_expect(player.has_equipped_eyes(), "players begin with factory eyes")
+	_expect(
+		player.has_equipped_wrist_device(),
+		"players begin with an equipped Fieldlink"
+	)
+	player.set_wrist_interface_open(true)
+	player.set_input(Vector2.ONE, 0.5, 0.25, true)
+	player.request_jump()
+	player.set_primary_action_held(true)
+	_expect(
+		player.wrist_interface_open
+		and is_equal_approx(player.move_input.length(), 1.0)
+		and player.wants_run
+		and player.wants_jump
+		and not player.primary_action_held,
+		"an open wrist terminal preserves locomotion while suppressing weapon input"
+	)
+	var removed_wrist := player.try_unequip_to_world(
+		PlayerInventoryRules.WRIST_DEVICE_SLOT
+	)
+	_expect(
+		not removed_wrist.is_empty()
+		and not player.has_equipped_wrist_device()
+		and not player.wrist_interface_open,
+		"losing the wrist item immediately closes its interface"
+	)
 
 	var soda_entry := PlayerInventoryRules.make_entry(
 		SODA,
@@ -305,6 +347,11 @@ func _test_client_draw_order() -> void:
 	_expect(
 		proxy.has_node("OcularPostProcess/VisionEffect"),
 		"player proxy contains the ocular post-process"
+	)
+	_expect(
+		proxy.has_node("BodyVisual/LeftArm/WristMount")
+		and proxy.has_node("BodyVisual/RightArm/WristMount"),
+		"either surviving arm can carry replicated wrist equipment"
 	)
 	var interface_layer := proxy.get_node("PlayerInterface") as CanvasLayer
 	var ocular_layer := proxy.get_node("OcularPostProcess") as CanvasLayer

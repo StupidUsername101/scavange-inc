@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="GunBarrelDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/weapons/gun_barrel_definition.gd" id="1_barrel"]
+
+[sub_resource type="CylinderShape3D" id="Shape"]
+radius = 0.045
+height = 0.72
+
+[resource]
+script = ExtResource("1_barrel")
+display_name = "Automatic Rifle Barrel"
+inventory_code = "ARB"
+mass = 0.68
+shape_rotation_x = 90.0
+collision_shape = SubResource("Shape")
+part_slot = 1
+caliber_id = &"5.56x45"
+component_color = Color(0.19, 0.21, 0.2, 1)
+component_size = Vector3(0.1, 0.1, 0.72)
+barrel_length = 0.72
+velocity_multiplier = 1.0
+damage_multiplier = 1.0
+spread_multiplier = 0.72
+range_multiplier = 1.0

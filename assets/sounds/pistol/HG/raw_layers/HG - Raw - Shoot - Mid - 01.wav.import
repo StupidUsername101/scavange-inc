@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://daaxfmiuphty0"
+path="res://.godot/imported/HG - Raw - Shoot - Mid - 01.wav-e965738a96e5ab54342c97754b187dab.sample"
+
+[deps]
+
+source_file="res://assets/sounds/pistol/HG/HG - Raw - Shoot - Mid - 01.wav"
+dest_files=["res://.godot/imported/HG - Raw - Shoot - Mid - 01.wav-e965738a96e5ab54342c97754b187dab.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

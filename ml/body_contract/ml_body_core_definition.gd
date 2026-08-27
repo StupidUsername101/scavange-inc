@@ -40,19 +40,35 @@ func slot_index(slot_id: StringName) -> int:
 func ml_part_tags() -> Array[StringName]:
 	# Wrapping an existing physical Core must not change its neural contract signature. Core
 	# ownership is already represented by the manifest's `core.` prefix; tags describe capability.
+	if physical_core is MLBodyCoreDefinition:
+		return [&"core"]
 	var result: Array[StringName] = MLBodyPartContract.part_tags(physical_core)
-	return result if not result.is_empty() else [&"core"]
+	if result.is_empty():
+		result.append(&"core")
+	return result
+
+
+func ml_validation_error() -> String:
+	if physical_core is MLBodyCoreDefinition:
+		return "A model Core cannot wrap another model Core wrapper as physical hardware."
+	return ""
 
 
 func ml_control_descriptors() -> Array[Dictionary]:
+	if physical_core is MLBodyCoreDefinition:
+		return []
 	return MLBodyPartContract.control_descriptors(physical_core)
 
 
 func ml_observation_descriptors() -> Array[Dictionary]:
+	if physical_core is MLBodyCoreDefinition:
+		return []
 	return MLBodyPartContract.observation_descriptors(physical_core)
 
 
 func ml_encode_observation(runtime_state: Variant, host_state: Dictionary = {}) -> PackedFloat64Array:
+	if physical_core is MLBodyCoreDefinition:
+		return PackedFloat64Array()
 	return MLBodyPartContract.encode_observation(physical_core, runtime_state, host_state)
 
 
@@ -68,6 +84,10 @@ func contract_dictionary() -> Dictionary:
 	return {
 		"core_id": str(core_id),
 		"display_name": display_name,
-		"physical_core": MLBodyPartContract.contract_fragment(physical_core),
+		"physical_core": (
+			{}
+			if physical_core is MLBodyCoreDefinition
+			else MLBodyPartContract.contract_fragment(physical_core)
+		),
 		"slots": slots,
 	}

@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://rq5rrj1tektu"
+path="res://.godot/imported/Es geht alles vorüber es geht alles vorbei.mp3-724643fc4565e87d5abbea358ecd6c43.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Deutsch Swing/Es geht alles vorüber es geht alles vorbei.mp3"
+dest_files=["res://.godot/imported/Es geht alles vorüber es geht alles vorbei.mp3-724643fc4565e87d5abbea358ecd6c43.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

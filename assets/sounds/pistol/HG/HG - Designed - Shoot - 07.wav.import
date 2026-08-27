@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://dnr13crp8047p"
+path="res://.godot/imported/HG - Designed - Shoot - 07.wav-86856c5808b3c7a1dafa0d16a2612bc8.sample"
+
+[deps]
+
+source_file="res://assets/sounds/pistol/HG/HG - Designed - Shoot - 07.wav"
+dest_files=["res://.godot/imported/HG - Designed - Shoot - 07.wav-86856c5808b3c7a1dafa0d16a2612bc8.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

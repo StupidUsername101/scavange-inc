@@ -13,7 +13,6 @@ signal failed(group_id: int, candidate_id: int, reason: String)
 const DRONE_SCENE = preload("res://scenes/server/server_drone.tscn")
 const LOADOUT_CONFIG = preload("res://ml/training/drone_training_loadout_config.gd")
 const SENSOR_INTERVAL_SECONDS = 0.05
-const MAXIMUM_PROPELLER_COUNT: int = 4
 const TRAINING_CONTACTS_REPORTED = 12
 const EVALUATION_WORLD_COLLISION_LAYER = 1 << 19
 
@@ -176,8 +175,6 @@ func begin() -> bool:
 	drone.visible = false
 	drone.set_ml_training_performance_mode(true)
 	drone.set_ml_episode_unlimited_battery(unlimited_battery)
-	if drone.propeller_slots.size() > MAXIMUM_PROPELLER_COUNT:
-		return _fail_start("candidate evaluator supports at most four propeller slots")
 	if not DroneMLBodyInterfaceFactory.matches_runtime_contract(
 		drone.model_body_interface(),
 		expected_body_runtime_contract

@@ -15,14 +15,43 @@ const NO_LEGS_DEMO_PLAYER_ID := 3
 const DEFAULT_DISTORTION_CENTER := Vector2(0.5, 0.5)
 const DEFAULT_DISTORTION_PULSE_HZ := 7.0
 const MIN_TOTAL_GRAB_FORCE := 0.001
-const MIN_PHYSICS_DELTA := 0.001
 const LOBBY_CREATE_TIMEOUT_SECONDS := 10.0
 const LOBBY_JOIN_TIMEOUT_SECONDS := 10.0
 const HOST_CONNECTION_TIMEOUT_SECONDS := 15.0
+const PRIORITY_INTERACTION_CHECK_DISTANCE_SQUARED := 36.0
+const FIELDLINK_CONTROL_RANGE_METERS := 36.0
+const FIELDLINK_CONTROL_RANGE_TOLERANCE_METERS := 1.5
+const FIELDLINK_COMMAND_COOLDOWN_MILLISECONDS := 40
+# Independent rollback switches; each can be evaluated without removing the others.
+const ENABLE_ACOUSTIC_STATIC_BAKE_CACHE := true
+const ENABLE_ACOUSTIC_CUMULATIVE_TRANSMISSION := true
+# Independent rollback for Valve-style first-order reflection taps. Transmission, propagation,
+# pressure events, and the existing late room return are unchanged when this is false.
+const ENABLE_ACOUSTIC_HYBRID_EARLY_REFLECTIONS := true
+const ACOUSTIC_STATIC_BAKE_CACHE_PATH := (
+	"user://acoustic_bakes/server_world_v1.sacb"
+)
+const STEAM_JOIN_COMMAND := preload(
+	"res://scripts/network/steam_join_command.gd"
+)
+const MULTIPLAYER_CHANNELS := preload(
+	"res://scripts/network/multiplayer_channel_contract.gd"
+)
+const REPLICATION_SCHEDULE := preload(
+	"res://scripts/network/network_replication_schedule.gd"
+)
+const PHYSICAL_IMPACT_RESPONSE := preload(
+	"res://scripts/audio/physical_impact_response.gd"
+)
+const STEAM_PRESENCE_CONNECT := "connect"
+const STEAM_PRESENCE_STATUS := "status"
+const STEAM_PRESENCE_GROUP := "steam_player_group"
+const STEAM_PRESENCE_GROUP_SIZE := "steam_player_group_size"
 
 const SERVER_WORLD_SCENE := preload("res://scenes/server/server_world.tscn")
 const SERVER_PLAYER_SCENE := preload("res://scenes/server/server_player.tscn")
 const SERVER_ITEM_SCENE := preload("res://scenes/server/server_item.tscn")
+const SERVER_RADIO_SCENE := preload("res://scenes/server/server_radio.tscn")
 const SERVER_DRONE_PART_SCENE := preload(
 	"res://scenes/server/server_drone_part.tscn"
 )
@@ -54,12 +83,16 @@ enum LobbyState {
 
 var server_players_by_player_id: Dictionary[int, ServerPlayer] = {}
 var server_items_by_item_id: Dictionary[int, ServerItem] = {}
+var server_radios_by_item_id: Dictionary[int, ServerRadio] = {}
+var server_speaker_clusters: Array[Node3D] = []
+var fieldlink_control_targets_by_contact_id: Dictionary[StringName, Node3D] = {}
 var server_drones_by_drone_id: Dictionary[int, ServerDrone] = {}
 var server_projectiles_by_id: Dictionary[int, ServerProjectile] = {}
 var server_drone_parts_by_id: Dictionary[int, RigidBody3D] = {}
 var server_enemies_by_enemy_id: Dictionary[int, ServerEnemy] = {}
 var inspection_stations_by_id: Dictionary[int, Node3D] = {}
 var body_part_shop_terminals_by_id: Dictionary[int, Node3D] = {}
+var weapon_crafting_stations_by_id: Dictionary[int, Node3D] = {}
 var body_part_delivery_orders: Array[Dictionary] = []
 var server_ropes_by_rope_id: Dictionary[int, ServerRope] = {}
 var rope_ids_by_body_instance_id: Dictionary[int, Array] = {}
@@ -87,22 +120,60 @@ var lobby_state := LobbyState.IDLE
 var steam_available := false
 var steam_peer: SteamMultiplayerPeer
 var lobby_operation_generation := 0
+var session_teardown_active := false
+var acoustic_service: ServerAcousticService
+var next_spatial_sound_sequence := 0
+var network_snapshot_sequence := 0
+var fieldlink_next_command_msec_by_player_id: Dictionary[int, int] = {}
 
 
 func _ready() -> void:
+	# This must happen before a SteamMultiplayerPeer creates any connection. GodotSteam snapshots
+	# the project lane count into each SteamPacketPeer; undersized configurations silently fold
+	# high channels onto lane 0, which lets call_local audio work for the host while remote audio
+	# queues behind unrelated reliable world state.
+	MULTIPLAYER_CHANNELS.ensure_runtime_capacity()
+	# Forty tiny response resources are prepared once. Bullet impacts only perform a cache lookup;
+	# automatic fire never allocates a new material modifier in the physics tick.
+	PHYSICAL_IMPACT_RESPONSE.prewarm()
+	acoustic_service = ServerAcousticService.new()
+	acoustic_service.name = "ServerAcousticService"
+	acoustic_service.configure_bake_cache(
+		ENABLE_ACOUSTIC_STATIC_BAKE_CACHE,
+		ACOUSTIC_STATIC_BAKE_CACHE_PATH
+	)
+	acoustic_service.configure_cumulative_static_transmission(
+		ENABLE_ACOUSTIC_CUMULATIVE_TRANSMISSION
+	)
+	acoustic_service.configure_hybrid_early_reflections(
+		ENABLE_ACOUSTIC_HYBRID_EARLY_REFLECTIONS
+	)
+	add_child(acoustic_service)
+
 	Steam.lobby_created.connect(_on_lobby_created)
 	Steam.lobby_joined.connect(_on_lobby_joined)
 	Steam.lobby_chat_update.connect(_on_lobby_chat_update)
 	Steam.join_requested.connect(
 		_on_join_requested
 	)
+	Steam.join_game_requested.connect(
+		_on_join_game_requested
+	)
 
 	var init: bool = Steam.steamInit(STEAM_APP_ID, true)
 	steam_available = init and Steam.isSteamRunning()
+	if steam_available:
+		_clear_lobby_presence()
+		var launch_lobby_id := _get_launch_lobby_id()
+		if launch_lobby_id > 0:
+			call_deferred(
+				"_request_external_lobby_join",
+				launch_lobby_id
+			)
 
 	print("Steam init: ", init)
 	print("Steam running: ", Steam.isSteamRunning())
-	print("Steam ID: ", Steam.getSteamID())
+	print("Steam ID: ", Steam.getSteamID() if steam_available else 0)
 
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -123,6 +194,8 @@ func _physics_process(delta: float) -> void:
 
 	for player: ServerPlayer in server_players_by_player_id.values():
 		player.server_physics_tick(delta)
+		if player.wants_automatic_fire():
+			try_primary_action(player)
 		_update_player_edit_aim(player)
 
 	for enemy: ServerEnemy in server_enemies_by_enemy_id.values():
@@ -153,93 +226,193 @@ func _physics_process(delta: float) -> void:
 
 
 func publish_states() -> void:
-	var player_result := {}
+	var snapshot_sequence := network_snapshot_sequence
+	network_snapshot_sequence += 1
+	_publish_player_states(snapshot_sequence)
+	_publish_item_states(snapshot_sequence)
+	_publish_drone_states(snapshot_sequence)
+	_publish_projectile_states(snapshot_sequence)
+	_publish_radio_states()
+	if REPLICATION_SCHEDULE.is_due(
+		snapshot_sequence,
+		REPLICATION_SCHEDULE.BULK_PHYSICS_INTERVAL_TICKS
+	):
+		_publish_drone_part_states(snapshot_sequence)
+		_publish_enemy_states(snapshot_sequence)
+		_publish_rope_states(snapshot_sequence)
+	if REPLICATION_SCHEDULE.is_due(
+		snapshot_sequence,
+		REPLICATION_SCHEDULE.STATION_INTERVAL_TICKS
+	):
+		_publish_station_states(snapshot_sequence)
 
-	for player_id in server_players_by_player_id.keys():
-		player_result[player_id] = server_players_by_player_id[player_id].to_state_dict()
 
-	Client.rpc("on_player_states_received", player_result)
+func _publish_player_states(snapshot_sequence: int) -> void:
+	var states: Dictionary = {}
+	for player_id: int in server_players_by_player_id:
+		var player := server_players_by_player_id[player_id]
+		if not is_instance_valid(player):
+			continue
+		states[player_id] = _sequence_state(
+			player.to_state_dict(),
+			snapshot_sequence
+		)
+	Client.rpc("on_player_states_received", states)
 
-	var item_result := {}
 
-	for item_id in server_items_by_item_id.keys():
-		item_result[item_id] = server_items_by_item_id[item_id].to_state_dict()
+func _publish_item_states(snapshot_sequence: int) -> void:
+	var states: Dictionary = {}
+	for item_id: int in server_items_by_item_id:
+		var item := server_items_by_item_id[item_id]
+		if not is_instance_valid(item):
+			continue
+		states[item_id] = _sequence_state(item.to_state_dict(), snapshot_sequence)
+	Client.rpc("on_item_states_received", states)
 
-	Client.rpc("on_item_states_received", item_result)
 
-	var drone_result := {}
-
-	for drone_id in server_drones_by_drone_id.keys():
+func _publish_drone_states(snapshot_sequence: int) -> void:
+	var states: Dictionary = {}
+	for drone_id: int in server_drones_by_drone_id:
 		var drone: ServerDrone = server_drones_by_drone_id[drone_id]
 		if not is_instance_valid(drone) or not drone.network_visible:
 			continue
-		drone_result[drone_id] = drone.to_state_dict()
+		states[drone_id] = _sequence_state(drone.to_state_dict(), snapshot_sequence)
+	Client.rpc("on_drone_states_received", states)
 
-	Client.rpc("on_drone_states_received", drone_result)
 
-	var projectile_result: Dictionary = {}
-	for projectile_id: int in server_projectiles_by_id.keys():
-		var projectile: ServerProjectile = server_projectiles_by_id[
-			projectile_id
-		]
+func _publish_projectile_states(snapshot_sequence: int) -> void:
+	var states: Dictionary = {}
+	for projectile_id: int in server_projectiles_by_id:
+		var projectile: ServerProjectile = server_projectiles_by_id[projectile_id]
 		if is_instance_valid(projectile):
-			projectile_result[projectile_id] = projectile.to_state_dict()
-	Client.rpc("on_projectile_states_received", projectile_result)
+			states[projectile_id] = _sequence_state(
+				projectile.to_state_dict(),
+				snapshot_sequence
+			)
+	Client.rpc("on_projectile_states_received", states)
 
-	var drone_part_result := {}
 
-	for part_id in server_drone_parts_by_id.keys():
-		var part = server_drone_parts_by_id[part_id]
-		drone_part_result[part_id] = part.call("to_state_dict")
+func _publish_drone_part_states(snapshot_sequence: int) -> void:
+	var states: Dictionary = {}
+	for part_id: int in server_drone_parts_by_id:
+		var part := server_drone_parts_by_id[part_id]
+		if is_instance_valid(part):
+			states[part_id] = _sequence_state(
+				part.call("to_state_dict") as Dictionary,
+				snapshot_sequence
+			)
+	Client.rpc("on_drone_part_states_received", states)
 
-	Client.rpc(
-		"on_drone_part_states_received",
-		drone_part_result
-	)
 
-	var enemy_result: Dictionary = {}
-	for enemy_id: int in server_enemies_by_enemy_id.keys():
+func _publish_enemy_states(snapshot_sequence: int) -> void:
+	var states: Dictionary = {}
+	for enemy_id: int in server_enemies_by_enemy_id:
 		var enemy: ServerEnemy = server_enemies_by_enemy_id[enemy_id]
 		if is_instance_valid(enemy):
-			enemy_result[enemy_id] = enemy.to_state_dict()
-	Client.rpc("on_enemy_states_received", enemy_result)
+			states[enemy_id] = _sequence_state(
+				enemy.to_state_dict(),
+				snapshot_sequence
+			)
+	Client.rpc("on_enemy_states_received", states)
 
-	var rope_result: Dictionary = {}
-	for rope_id: int in server_ropes_by_rope_id.keys():
+
+func _publish_rope_states(snapshot_sequence: int) -> void:
+	var states: Dictionary = {}
+	for rope_id: int in server_ropes_by_rope_id:
 		var rope: ServerRope = server_ropes_by_rope_id[rope_id]
 		if is_instance_valid(rope):
-			rope_result[rope_id] = rope.to_state_dict()
-	for player_id: int in rope_placements_by_player_id.keys():
+			states[rope_id] = _sequence_state(
+				rope.to_state_dict(),
+				snapshot_sequence
+			)
+	for player_id: int in rope_placements_by_player_id:
 		var preview_state := _get_rope_placement_state(player_id)
 		if not preview_state.is_empty():
-			rope_result[-player_id - 1] = preview_state
-	Client.rpc("on_rope_states_received", rope_result)
+			states[-player_id - 1] = _sequence_state(
+				preview_state,
+				snapshot_sequence
+			)
+	Client.rpc("on_rope_states_received", states)
 
-	var inspection_station_result: Dictionary = {}
 
-	for station_id: int in inspection_stations_by_id.keys():
+func _publish_station_states(snapshot_sequence: int) -> void:
+	var inspection_states: Dictionary = {}
+	for station_id: int in inspection_stations_by_id:
 		var station: Node3D = inspection_stations_by_id[station_id]
 		if is_instance_valid(station):
-			inspection_station_result[station_id] = station.call(
-				"to_state_dict"
+			inspection_states[station_id] = _sequence_state(
+				station.call("to_state_dict") as Dictionary,
+				snapshot_sequence
 			)
+	Client.rpc("on_inspection_station_states_received", inspection_states)
 
-	Client.rpc(
-		"on_inspection_station_states_received",
-		inspection_station_result
-	)
-
-	var body_part_shop_result: Dictionary = {}
-	for terminal_id: int in body_part_shop_terminals_by_id.keys():
+	var body_shop_states: Dictionary = {}
+	for terminal_id: int in body_part_shop_terminals_by_id:
 		var terminal: Node3D = body_part_shop_terminals_by_id[terminal_id]
 		if is_instance_valid(terminal):
-			body_part_shop_result[terminal_id] = terminal.call(
-				"to_state_dict"
+			body_shop_states[terminal_id] = _sequence_state(
+				terminal.call("to_state_dict") as Dictionary,
+				snapshot_sequence
 			)
-	Client.rpc(
-		"on_body_part_shop_states_received",
-		body_part_shop_result
-	)
+	Client.rpc("on_body_part_shop_states_received", body_shop_states)
+
+	var weapon_states: Dictionary = {}
+	for station_id: int in weapon_crafting_stations_by_id:
+		var weapon_station: Node3D = weapon_crafting_stations_by_id[station_id]
+		if is_instance_valid(weapon_station):
+			weapon_states[station_id] = _sequence_state(
+				weapon_station.call("to_state_dict") as Dictionary,
+				snapshot_sequence
+			)
+	Client.rpc("on_weapon_crafting_station_states_received", weapon_states)
+
+
+static func _sequence_state(state: Dictionary, snapshot_sequence: int) -> Dictionary:
+	state["network_snapshot_sequence"] = snapshot_sequence
+	return state
+
+
+func _publish_radio_states() -> void:
+	for player_id: int in server_players_by_player_id:
+		var listener := server_players_by_player_id[player_id]
+		if not is_instance_valid(listener):
+			continue
+		var player_state := GameState.get_player_state(player_id)
+		if player_state == null or player_state.peer_id <= 0:
+			continue
+		var radio_states: Dictionary = {}
+		var listener_position := listener.get_audio_listener_position()
+		for radio_id: int in server_radios_by_item_id:
+			var radio: ServerRadio = server_radios_by_item_id[radio_id]
+			if not is_instance_valid(radio) or not radio.powered:
+				continue
+			var state := radio.build_listener_state(
+				player_id,
+				listener_position,
+				acoustic_service,
+				listener.get_rid()
+			)
+			if not state.is_empty():
+				radio_states[radio.item_id] = state
+		for cluster: Node3D in server_speaker_clusters:
+			if (
+				not is_instance_valid(cluster)
+				or not cluster.has_method("append_listener_states")
+			):
+				continue
+			cluster.call(
+				"append_listener_states",
+				radio_states,
+				player_id,
+				listener_position,
+				acoustic_service,
+				listener.get_rid()
+			)
+		Client.rpc_id(
+			player_state.peer_id,
+			"on_radio_states_received",
+			radio_states
+		)
 
 
 func spawn_server_world() -> void:
@@ -248,6 +421,7 @@ func spawn_server_world() -> void:
 
 	server_world = SERVER_WORLD_SCENE.instantiate()
 	add_child(server_world)
+	acoustic_service.bind_world(server_world)
 
 	print("spawned server world: ", server_world.get_path())
 
@@ -349,29 +523,169 @@ func spawn_server_player(
 
 func _get_starting_body_loadout(player_id: int) -> CharacterLoadout:
 	match player_id:
-		NO_ARMS_DEMO_PLAYER_ID:
-			return NO_ARMS_LOADOUT
-		NO_LEGS_DEMO_PLAYER_ID:
-			return NO_LEGS_LOADOUT
+		# i disabled this because it makes debugging difficult. 
+		#NO_ARMS_DEMO_PLAYER_ID:
+			#return NO_ARMS_LOADOUT
+		#NO_LEGS_DEMO_PLAYER_ID:
+			#return NO_LEGS_LOADOUT
 		_:
 			return FULL_BODY_LOADOUT
 
 
 func register_item(item_id: int, item: ServerItem) -> void:
 	server_items_by_item_id[item_id] = item
-	
+	if (
+		item.has_method("build_fieldlink_control_snapshot")
+		and item.has_method("apply_fieldlink_command")
+	):
+		register_fieldlink_control_target(
+			StringName("item:%d" % item_id),
+			item
+		)
+	var radio := item as ServerRadio
+	if radio != null:
+		server_radios_by_item_id[item_id] = radio
+
+
 func unregister_item(item_id: int) -> void:
 	var item := get_server_item(item_id)
 	if item != null:
 		_release_grabs_for_body(item)
 		_remove_ropes_for_body(item)
 		_cancel_rope_placements_using_body(item)
+	if acoustic_service != null and server_radios_by_item_id.has(item_id):
+		acoustic_service.forget_continuous_source(item_id)
 
 	server_items_by_item_id.erase(item_id)
+	server_radios_by_item_id.erase(item_id)
+	unregister_fieldlink_control_target(StringName("item:%d" % item_id))
 
 
 func get_server_item(item_id: int) -> ServerItem:
 	return server_items_by_item_id.get(item_id) as ServerItem
+
+
+func _resolve_fieldlink_control_target(contact_id: StringName) -> Node3D:
+	var target := fieldlink_control_targets_by_contact_id.get(contact_id) as Node3D
+	if not is_instance_valid(target):
+		fieldlink_control_targets_by_contact_id.erase(contact_id)
+		return null
+	return target
+
+
+func register_fieldlink_control_target(
+	contact_id: StringName,
+	target: Node3D
+) -> bool:
+	var sanitized_id := FieldlinkDeviceControlPacket.sanitize_contact_id(
+		contact_id
+	)
+	if sanitized_id.is_empty() or not is_instance_valid(target):
+		return false
+	fieldlink_control_targets_by_contact_id[sanitized_id] = target
+	return true
+
+
+func unregister_fieldlink_control_target(contact_id: StringName) -> void:
+	fieldlink_control_targets_by_contact_id.erase(contact_id)
+
+
+func register_speaker_cluster(cluster: Node3D) -> void:
+	if is_instance_valid(cluster) and not server_speaker_clusters.has(cluster):
+		server_speaker_clusters.append(cluster)
+
+
+func unregister_speaker_cluster(cluster: Node3D) -> void:
+	server_speaker_clusters.erase(cluster)
+
+
+func _fieldlink_control_target_world_position(target: Node3D) -> Vector3:
+	if target == null:
+		return Vector3.ZERO
+	if target.has_method("get_fieldlink_control_world_position"):
+		var position_value: Variant = target.call(
+			"get_fieldlink_control_world_position"
+		)
+		if position_value is Vector3:
+			var control_position := position_value as Vector3
+			if control_position.is_finite():
+				return control_position
+	return target.global_position
+
+
+func _validate_fieldlink_control_target(
+	player: ServerPlayer,
+	contact_id: StringName
+) -> Node3D:
+	if (
+		player == null
+		or not player.wrist_interface_open
+		or not player.has_equipped_wrist_device()
+	):
+		return null
+	var target := _resolve_fieldlink_control_target(contact_id)
+	if (
+		not is_instance_valid(target)
+		or not target.has_method("build_fieldlink_control_snapshot")
+		or not target.has_method("apply_fieldlink_command")
+	):
+		return null
+	var maximum_distance := (
+		FIELDLINK_CONTROL_RANGE_METERS
+		+ FIELDLINK_CONTROL_RANGE_TOLERANCE_METERS
+	)
+	if (
+		player.global_position.distance_squared_to(
+			_fieldlink_control_target_world_position(target)
+		)
+		> maximum_distance * maximum_distance
+	):
+		return null
+	return target
+
+
+func _send_fieldlink_control_snapshot(
+	player: ServerPlayer,
+	contact_id: StringName,
+	target: Node3D
+) -> void:
+	var snapshot_value: Variant = target.call(
+		"build_fieldlink_control_snapshot",
+		player
+	)
+	if not snapshot_value is Dictionary:
+		_send_fieldlink_control_error(player, contact_id, "CONTROL LINK UNAVAILABLE")
+		return
+	var snapshot := (snapshot_value as Dictionary).duplicate(true)
+	snapshot["contact_id"] = contact_id
+	snapshot = FieldlinkDeviceControlPacket.sanitize_snapshot(snapshot)
+	if snapshot.is_empty():
+		_send_fieldlink_control_error(player, contact_id, "INVALID DEVICE RESPONSE")
+		return
+	var player_state := GameState.get_player_state(player.player_id)
+	if player_state != null:
+		Client.rpc_id(
+			player_state.peer_id,
+			"on_fieldlink_device_control_received",
+			snapshot
+		)
+
+
+func _send_fieldlink_control_error(
+	player: ServerPlayer,
+	contact_id: StringName,
+	message: String
+) -> void:
+	if player == null:
+		return
+	var player_state := GameState.get_player_state(player.player_id)
+	if player_state != null:
+		Client.rpc_id(
+			player_state.peer_id,
+			"on_fieldlink_device_control_failed",
+			contact_id,
+			message.left(80)
+		)
 
 
 func get_server_player(player_id: int) -> ServerPlayer:
@@ -443,7 +757,8 @@ func spawn_ballistic_projectile(
 		excluded_rids,
 		source_kind,
 		source_id,
-		source_slot
+		source_slot,
+		Callable(self, "despawn_projectile")
 	)
 	server_projectiles_by_id[next_projectile_id] = projectile
 	Client.rpc(
@@ -465,6 +780,159 @@ func get_server_projectile(projectile_id: int) -> ServerProjectile:
 	return server_projectiles_by_id.get(
 		projectile_id
 	) as ServerProjectile
+
+
+func emit_spatial_sound(
+	sound_id: StringName,
+	source_position: Vector3,
+	max_distance := 48.0,
+	base_volume_db := 0.0,
+	source_modifier: AcousticPathModifier = null,
+	priority := 0.5,
+	pressure_strength := -1.0
+) -> int:
+	if (
+		not multiplayer.is_server()
+		or sound_id.is_empty()
+		or not source_position.is_finite()
+	):
+		return -1
+	next_spatial_sound_sequence += 1
+	var sequence := next_spatial_sound_sequence
+	var safe_max_distance := clampf(max_distance, 0.1, 10000.0)
+	var safe_base_volume_db := clampf(base_volume_db, -80.0, 18.0)
+	var level_scaled_max_distance := (
+		AcousticPropagationGraph.level_scaled_hearing_distance(
+			safe_max_distance,
+			safe_base_volume_db
+		)
+	)
+	var safe_priority := clampf(priority, 0.0, 1.0)
+	var safe_pressure_strength := resolve_spatial_pressure_strength(
+		pressure_strength,
+		safe_max_distance,
+		safe_base_volume_db,
+		safe_priority
+	)
+	var prepared_pressure_emission: Dictionary = {}
+	var source_attachment: AcousticSourceAttachment
+	var effective_max_distance := 0.0
+	for player_id: int in server_players_by_player_id.keys():
+		var listener := server_players_by_player_id[player_id]
+		if not is_instance_valid(listener):
+			continue
+		var listener_position := listener.get_audio_listener_position()
+		if source_attachment == null:
+			source_attachment = acoustic_service.create_source_attachment(
+				source_position
+			)
+			effective_max_distance = (
+				acoustic_service.source_hearing_distance_upper_bound(
+				level_scaled_max_distance,
+				source_position,
+				0,
+				[],
+				source_attachment
+				)
+			)
+		if listener_position.distance_squared_to(source_position) > (
+			effective_max_distance * effective_max_distance
+		):
+			continue
+		# Bake/snapshot the source side only when at least one listener can hear the event, then
+		# reuse the same dictionary for every listener. No source response means no extra work.
+		if (
+			safe_pressure_strength > 0.0001
+			and prepared_pressure_emission.is_empty()
+		):
+			prepared_pressure_emission = acoustic_service.create_pressure_emission(
+				source_position,
+				safe_pressure_strength,
+				[],
+				source_attachment
+			)
+		var listener_exclusions: Array[RID] = [listener.get_rid()]
+		var result := acoustic_service.calculate_listener_result(
+			player_id,
+			listener_position,
+			source_position,
+			level_scaled_max_distance,
+			source_modifier,
+			AcousticPropagationGraph.DEFAULT_REFERENCE_DISTANCE,
+			false,
+			listener_exclusions,
+			0,
+			safe_pressure_strength,
+			prepared_pressure_emission,
+			source_attachment
+		)
+		if not bool(result.get("audible", false)):
+			continue
+		var player_state := GameState.get_player_state(player_id)
+		if player_state == null or player_state.peer_id <= 0:
+			continue
+		result.erase("audible")
+		result["version"] = AcousticEventPacket.VERSION
+		result["sequence"] = sequence
+		result["sound_id"] = sound_id
+		result["volume_db"] = (
+			float(result.get("volume_db", 0.0))
+			+ safe_base_volume_db
+		)
+		var pressure_arrivals: Array = result.get("pressure_arrivals", [])
+		for arrival_index: int in range(pressure_arrivals.size()):
+			var arrival: Dictionary = pressure_arrivals[arrival_index]
+			arrival["volume_db"] = clampf(
+				SafeVariant.finite_float_or(arrival.get("volume_db"), 0.0)
+				+ safe_base_volume_db,
+				AcousticPathModifier.MIN_VOLUME_DB,
+				AcousticPathModifier.MAX_VOLUME_DB
+			)
+			pressure_arrivals[arrival_index] = arrival
+		if not pressure_arrivals.is_empty():
+			result["pressure_arrivals"] = pressure_arrivals
+		result["priority"] = safe_priority
+		Client.rpc_id(
+			player_state.peer_id,
+			"on_spatial_sound_received",
+			result
+		)
+	return sequence
+
+
+static func resolve_spatial_pressure_strength(
+	requested_strength: float,
+	max_distance: float,
+	base_volume_db: float,
+	priority: float
+) -> float:
+	if requested_strength >= 0.0:
+		return clampf(requested_strength, 0.0, 1.0)
+	# Reach is the best semantic loudness hint available to every sound registration. The square
+	# root keeps small physical sounds present without letting footsteps behave like detonations.
+	var reach := clampf(inverse_lerp(10.0, 140.0, max_distance), 0.0, 1.0)
+	var level := clampf(inverse_lerp(-18.0, 6.0, base_volume_db), 0.0, 1.0)
+	return clampf(
+		0.10
+		+ sqrt(reach) * 0.25
+		+ level * 0.12
+		+ clampf(priority, 0.0, 1.0) * 0.10,
+		0.10,
+		0.62
+	)
+
+
+func rebuild_server_acoustics() -> void:
+	if acoustic_service != null:
+		acoustic_service.request_rebuild()
+
+
+func get_acoustic_debug_state() -> Dictionary:
+	return (
+		acoustic_service.get_debug_state()
+		if acoustic_service != null
+		else {}
+	)
 
 
 func register_enemy(enemy: ServerEnemy) -> int:
@@ -545,7 +1013,12 @@ func spawn_item(
 		return null
 	if server_world == null:
 		spawn_server_world()
-	var item := SERVER_ITEM_SCENE.instantiate() as ServerItem
+	var item_scene := (
+		SERVER_RADIO_SCENE
+		if definition is RadioItemDefinition
+		else SERVER_ITEM_SCENE
+	)
+	var item := item_scene.instantiate() as ServerItem
 	item.definition = definition
 	server_world.add_child(item)
 	item.global_transform = item_transform
@@ -598,6 +1071,23 @@ func unregister_body_part_shop_terminal(
 ) -> void:
 	if body_part_shop_terminals_by_id.get(terminal_id) == terminal:
 		body_part_shop_terminals_by_id.erase(terminal_id)
+
+
+func register_weapon_crafting_station(
+	station_id: int,
+	station: Node3D
+) -> void:
+	if station_id < 0 or station == null:
+		return
+	weapon_crafting_stations_by_id[station_id] = station
+
+
+func unregister_weapon_crafting_station(
+	station_id: int,
+	station: Node3D
+) -> void:
+	if weapon_crafting_stations_by_id.get(station_id) == station:
+		weapon_crafting_stations_by_id.erase(station_id)
 
 
 func get_active_player_ids() -> Array[int]:
@@ -1380,6 +1870,7 @@ func _try_store_context_item(
 	if not player.try_store_inventory_entry(entry):
 		return true
 	_consume_world_item(item)
+	emit_spatial_sound(&"item_pickup", player.global_position, 22.0, 0.0, null, 0.35)
 	return true
 
 
@@ -1389,6 +1880,15 @@ func try_store_item_or_use(player: ServerPlayer) -> void:
 	if _try_cancel_rope_placement(player):
 		return
 	var hit := _raycast_player_aim(player)
+	var aimed_collider := hit.get("collider") as Node
+	if (
+		aimed_collider != null
+		and aimed_collider.has_method("server_use")
+		and aimed_collider.has_method("prefers_server_use")
+		and bool(aimed_collider.call("prefers_server_use"))
+	):
+		aimed_collider.call("server_use", player, hit)
+		return
 	if _try_store_context_item(player, hit):
 		return
 	_try_use_hit(player, hit)
@@ -1414,6 +1914,7 @@ func try_equip_item(player: ServerPlayer) -> void:
 		var displaced: Dictionary = result.get("displaced", {})
 		if not displaced.is_empty():
 			_drop_entry_for_player(player, displaced)
+		emit_spatial_sound(&"item_equip", player.global_position, 22.0, 0.0, null, 0.35)
 		return
 
 	# An aimed world interaction always wins over equipping the selected
@@ -1421,7 +1922,9 @@ func try_equip_item(player: ServerPlayer) -> void:
 	# from being shadowed by the generic hold action.
 	if hit.get("collider") != null:
 		return
-	player.try_equip_inventory_entry(player.selected_inventory_slot)
+	var result := player.try_equip_inventory_entry(player.selected_inventory_slot)
+	if bool(result.get("success", false)):
+		emit_spatial_sound(&"item_equip", player.global_position, 22.0, 0.0, null, 0.35)
 
 
 func try_drop_inventory_item(player: ServerPlayer) -> void:
@@ -1444,6 +1947,7 @@ func try_drop_equipment(
 	if (
 		equipment_slot != PlayerInventoryRules.EYES_SLOT
 		and equipment_slot != PlayerInventoryRules.BACKPACK_SLOT
+		and equipment_slot != PlayerInventoryRules.WRIST_DEVICE_SLOT
 	):
 		return
 	var entry := player.try_unequip_to_world(equipment_slot)
@@ -1523,6 +2027,8 @@ func _get_player_interaction_hint(
 ) -> String:
 	var item := _get_context_item(player, hit)
 	if item != null:
+		if item.has_method("get_server_interaction_hint"):
+			return str(item.call("get_server_interaction_hint", player, hit))
 		var can_store := (
 			player.inventory_entries.size()
 			< player.get_inventory_capacity()
@@ -1536,6 +2042,8 @@ func _get_player_interaction_hint(
 		return "F // STORE" if can_store else "INVENTORY FULL"
 
 	var collider := hit.get("collider") as Node
+	if collider != null and collider.has_method("get_server_interaction_hint"):
+		return str(collider.call("get_server_interaction_hint", player, hit))
 	if (
 		collider != null
 		and (
@@ -1580,29 +2088,59 @@ func _get_player_edit_aim_color(player_id: int) -> Color:
 func try_primary_action(player: ServerPlayer) -> void:
 	if player == null:
 		return
+	# Close world-space controls must remain usable while a firearm occupies the
+	# selected inventory slot. Only colliders that explicitly opt in receive this
+	# priority, so ordinary targets still get the weapon action.
+	var priority_hit := (
+		_raycast_player_aim(player)
+		if _is_near_priority_primary_interaction(player)
+		else {}
+	)
+	var priority_collider := priority_hit.get("collider") as Node
+	if (
+		priority_collider != null
+		and priority_collider.has_method("prefers_primary_action_over_weapon")
+		and bool(priority_collider.call("prefers_primary_action_over_weapon"))
+		and (
+			not priority_collider.has_method("should_prioritize_primary_action")
+			or bool(priority_collider.call(
+				"should_prioritize_primary_action",
+				player,
+				priority_hit
+			))
+		)
+		and priority_collider.has_method("server_primary_action")
+	):
+		priority_collider.call("server_primary_action", player, priority_hit)
+		return
 	var gun_result := player.try_fire_selected_gun()
 	if bool(gun_result.get("handled", false)):
 		if bool(gun_result.get("fired", false)):
-			_spawn_player_gun_projectile(
+			_spawn_player_gun_projectiles(
 				player,
-				gun_result.get("profile", {}),
-				float(gun_result.get("spread_degrees", 0.0))
+				gun_result.get("profiles", []),
+				int(gun_result.get("installed_barrel_count", 1)),
+				gun_result.get("fire_sound", {})
 			)
 		return
 
 	var held_body := get_grabbed_body(player.grabber) as RigidBody3D
-	var origin := player.grabber.get_grab_origin()
-	var direction := player.grabber.get_grab_direction()
-	var query := PhysicsRayQueryParameters3D.create(
-		origin,
-		origin + direction * 4.0
-	)
-	query.exclude = [player.get_rid()]
-	if held_body != null:
-		query.exclude.append(held_body.get_rid())
-	query.collide_with_areas = false
-
-	var hit := player.get_world_3d().direct_space_state.intersect_ray(query)
+	if held_body != null and held_body.has_method("server_held_primary_action"):
+		held_body.call("server_held_primary_action", player)
+		return
+	var hit := priority_hit
+	if hit.is_empty():
+		var origin := player.grabber.get_grab_origin()
+		var direction := player.grabber.get_grab_direction()
+		var query := PhysicsRayQueryParameters3D.create(
+			origin,
+			origin + direction * 4.0
+		)
+		query.exclude = [player.get_rid()]
+		if held_body != null:
+			query.exclude.append(held_body.get_rid())
+		query.collide_with_areas = false
+		hit = player.get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
 		return
 
@@ -1635,57 +2173,128 @@ func try_primary_action(player: ServerPlayer) -> void:
 	)
 
 
-func _spawn_player_gun_projectile(
+func _is_near_priority_primary_interaction(player: ServerPlayer) -> bool:
+	for station: Node3D in weapon_crafting_stations_by_id.values():
+		if (
+			is_instance_valid(station)
+			and station.global_position.distance_squared_to(player.global_position)
+			<= PRIORITY_INTERACTION_CHECK_DISTANCE_SQUARED
+		):
+			return true
+	return false
+
+
+func _spawn_player_gun_projectiles(
 	player: ServerPlayer,
-	profile: Dictionary,
-	spread_degrees: float
+	profiles_value: Variant,
+	installed_barrel_count: int,
+	fire_sound: Dictionary = {}
 ) -> void:
-	var direction := player.apply_weapon_spread(
-		player.grabber.get_grab_direction(),
-		spread_degrees
+	var profiles: Array = (
+		profiles_value as Array
+		if profiles_value is Array
+		else []
 	)
-	var right := direction.cross(Vector3.UP)
+	if profiles.is_empty():
+		return
+	var layout_barrel_count := maxi(installed_barrel_count, profiles.size())
+	var aim_direction := player.grabber.get_grab_direction().normalized()
+	var right := aim_direction.cross(Vector3.UP)
 	if right.length_squared() <= 0.0001:
 		right = Vector3.RIGHT
 	else:
 		right = right.normalized()
-	var desired_origin := (
-		player.grabber.get_grab_origin()
-		+ direction * 0.92
-		+ right * 0.2
-		+ Vector3.DOWN * 0.18
-	)
+	var up := right.cross(aim_direction).normalized()
 	var exclusions: Array = [player.get_rid()]
 	var held_body := get_grabbed_body(player.grabber)
 	if held_body != null:
 		exclusions.append(held_body.get_rid())
-	var origin := desired_origin
-	var muzzle_query := PhysicsRayQueryParameters3D.create(
-		player.grabber.get_grab_origin(),
-		desired_origin
-	)
-	muzzle_query.exclude = exclusions
-	muzzle_query.collide_with_areas = false
-	var muzzle_hit := (
-		player.get_world_3d().direct_space_state.intersect_ray(
-			muzzle_query
+	var sound_origin := player.grabber.get_grab_origin()
+	for profile_index: int in range(profiles.size()):
+		var profile: Dictionary = SafeVariant.dictionary_copy(
+			profiles[profile_index]
 		)
-	)
-	if not muzzle_hit.is_empty():
-		origin = (
-			muzzle_hit.get("position", desired_origin)
-			- direction * 0.035
+		if profile.is_empty():
+			continue
+		var direction := player.apply_weapon_spread(
+			aim_direction,
+			SafeVariant.finite_float_or(
+				profile.get("spread_degrees"),
+				0.0
+			)
 		)
-	spawn_ballistic_projectile(
-		profile,
-		origin,
-		direction,
-		player.velocity,
-		exclusions,
-		&"player",
-		player.player_id,
-		player
-	)
+		var barrel_offset := GunGeometry.get_barrel_layout_offset(
+			profile_index,
+			layout_barrel_count,
+			0.115
+		)
+		var desired_origin := (
+			player.grabber.get_grab_origin()
+			+ direction * 0.92
+			+ right * (0.2 + barrel_offset.x)
+			+ Vector3.DOWN * 0.18
+			+ up * barrel_offset.y
+		)
+		var origin := desired_origin
+		var muzzle_query := PhysicsRayQueryParameters3D.create(
+			player.grabber.get_grab_origin(),
+			desired_origin
+		)
+		muzzle_query.exclude = exclusions
+		muzzle_query.collide_with_areas = false
+		var muzzle_hit := (
+			player.get_world_3d().direct_space_state.intersect_ray(
+				muzzle_query
+			)
+		)
+		if not muzzle_hit.is_empty():
+			origin = (
+				muzzle_hit.get("position", desired_origin)
+				- direction * 0.035
+			)
+		spawn_ballistic_projectile(
+			profile,
+			origin,
+			direction,
+			player.velocity,
+			exclusions,
+			&"player",
+			player.player_id,
+			player,
+			profile_index
+		)
+		if profile_index == 0:
+			sound_origin = origin
+	var sound_id := StringName(str(fire_sound.get("sound_id", "")).strip_edges())
+	if not sound_id.is_empty():
+		emit_spatial_sound(
+			sound_id,
+			sound_origin,
+			clampf(
+				SafeVariant.finite_float_or(fire_sound.get("max_distance"), 80.0),
+				0.1,
+				10000.0
+			),
+			clampf(
+				SafeVariant.finite_float_or(fire_sound.get("volume_db"), 0.0),
+				-60.0,
+				18.0
+			),
+			null,
+			clampf(
+				SafeVariant.finite_float_or(fire_sound.get("priority"), 0.9),
+				0.0,
+				1.0
+			),
+			clampf(
+				SafeVariant.finite_float_or(
+					fire_sound.get("pressure_strength"),
+					-1.0
+				),
+				-1.0,
+				1.0
+			)
+		)
 
 
 func set_player_grab_capability(
@@ -1792,13 +2401,35 @@ func _begin_grab_body(
 		capability.max_distance
 	)
 
-	grab_states_by_grabber_id[grabber.get_instance_id()] = GrabState.new(
+	var state := GrabState.new(
 		grabber,
 		body,
 		body.to_local(hit_position),
 		grab_distance,
-		capability.lift_offset
+		capability.lift_offset,
+		_get_initial_grab_basis(grabber, body)
 	)
+	grab_states_by_grabber_id[grabber.get_instance_id()] = state
+	_center_grab_rotation_anchor(state)
+
+
+func _get_initial_grab_basis(
+	grabber: GrabberComponent,
+	body: PhysicsBody3D
+) -> Basis:
+	if body.has_method("get_default_grab_basis"):
+		var authored_value: Variant = body.call("get_default_grab_basis")
+		if typeof(authored_value) == TYPE_BASIS:
+			var authored_basis: Basis = authored_value
+			if authored_basis.is_finite():
+				return authored_basis.orthonormalized()
+
+	# Physics bodies without an authored item pose keep the orientation they had
+	# when grabbed. This avoids surprising snaps for drones and loose body parts.
+	return (
+		grabber.global_basis.orthonormalized().transposed()
+		* body.global_basis.orthonormalized()
+	).orthonormalized()
 
 
 func grab_body_directly(
@@ -1836,7 +2467,8 @@ func end_grab(grabber: GrabberComponent) -> void:
 
 func set_grabber_rotation_active(
 	grabber: GrabberComponent,
-	active: bool
+	active: bool,
+	session_id := 0
 ) -> void:
 	if grabber == null:
 		return
@@ -1845,16 +2477,17 @@ func set_grabber_rotation_active(
 		grabber.get_instance_id()
 	) as GrabState
 	if state != null:
-		state.set_rotation_active(active)
+		state.set_rotation_active(active, session_id)
 		if active:
 			_center_grab_rotation_anchor(state)
 
 
-func add_grab_rotation_input(
+func set_grab_rotation_input_target(
 	grabber: GrabberComponent,
-	input: Vector2
+	input_target: Vector2,
+	session_id := 0
 ) -> void:
-	if grabber == null or not input.is_finite():
+	if grabber == null or not input_target.is_finite():
 		return
 
 	var state := grab_states_by_grabber_id.get(
@@ -1862,7 +2495,7 @@ func add_grab_rotation_input(
 	) as GrabState
 	if state != null and state.rotation_active:
 		_center_grab_rotation_anchor(state)
-		state.add_rotation_input(input)
+		state.set_rotation_input_target(input_target, session_id)
 
 
 func _center_grab_rotation_anchor(state: GrabState) -> void:
@@ -1874,24 +2507,54 @@ func _center_grab_rotation_anchor(state: GrabState) -> void:
 	if rigid_body == null or capability == null:
 		return
 
+	var previous_grab_point := rigid_body.to_global(state.local_grab_point)
+	var previous_target := state.grabber.get_grab_target(
+		state.grab_distance,
+		state.lift_offset,
+		state.side_offset
+	)
 	state.center_rotation_anchor(
-		rigid_body.center_of_mass,
+		_get_rigid_body_center_of_mass_local(rigid_body),
 		capability.rotation_anchor_centering
 	)
 
-	# Keep the newly centered anchor at its current depth so entering rotation
-	# mode does not pull the object toward or away from the camera.
+	# Moving the force anchor to the center of mass removes rotational resistance. Shift its hold
+	# target by the same world-space amount so the object does not jump or get pulled sideways.
 	var origin := state.grabber.get_grab_origin()
 	var direction := state.grabber.get_grab_direction()
 	var up_direction := state.grabber.global_basis.y.normalized()
+	var side_direction := state.grabber.global_basis.x.normalized()
 	var centered_point := rigid_body.to_global(state.local_grab_point)
-	var centered_offset := centered_point - origin
+	var centered_target := previous_target + centered_point - previous_grab_point
+	var centered_offset := centered_target - origin
 	state.grab_distance = clampf(
 		centered_offset.dot(direction),
 		capability.get_clamped_min_distance(),
 		capability.max_distance
 	)
 	state.lift_offset = centered_offset.dot(up_direction)
+	state.side_offset = centered_offset.dot(side_direction)
+
+
+static func _get_rigid_body_center_of_mass_local(
+	rigid_body: RigidBody3D
+) -> Vector3:
+	if rigid_body == null:
+		return Vector3.ZERO
+	if (
+		rigid_body.center_of_mass_mode
+		== RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
+	):
+		return rigid_body.center_of_mass
+
+	# In automatic mode RigidBody3D.center_of_mass remains the authored default;
+	# only the direct physics state exposes the value computed from offset shapes.
+	var direct_state := PhysicsServer3D.body_get_direct_state(
+		rigid_body.get_rid()
+	)
+	if direct_state != null and direct_state.center_of_mass_local.is_finite():
+		return direct_state.center_of_mass_local
+	return rigid_body.center_of_mass
 
 
 func _end_grab_by_id(grabber_id: int) -> void:
@@ -2043,7 +2706,8 @@ func _calculate_grab_force(
 ) -> Dictionary:
 	var target := state.grabber.get_grab_target(
 		state.grab_distance,
-		state.lift_offset
+		state.lift_offset,
+		state.side_offset
 	)
 	var body_offset := grab_point - rigid_body.global_position
 	var point_velocity := (
@@ -2053,27 +2717,15 @@ func _calculate_grab_force(
 	var relative_velocity := (
 		state.grabber.get_carrier_velocity() - point_velocity
 	)
-	var spring_multiplier = (
-		capability.rotation_hold_spring_multiplier
-		if state.rotation_active
-		else 1.0
-	)
-	var damping_multiplier = (
-		capability.rotation_hold_damping_multiplier
-		if state.rotation_active
-		else 1.0
-	)
 	var spring_force = (
 		rigid_body.mass
 		* (target - grab_point)
 		* capability.spring_acceleration
-		* spring_multiplier
 	)
 	var damping_force = (
 		rigid_body.mass
 		* relative_velocity
 		* capability.damping_acceleration
-		* damping_multiplier
 	)
 	var force_share := _get_force_share(state)
 	return {
@@ -2103,56 +2755,34 @@ func _calculate_required_tether_force(
 func _apply_grab_rotation(
 	state: GrabState,
 	rigid_body: RigidBody3D,
-	delta: float
+	_delta: float
 ) -> void:
-	if not state.rotation_active:
-		return
-
 	var grabber := state.grabber
 	var capability := grabber.capability
 	if capability == null:
 		return
 
-	var input := state.consume_rotation_input()
-	if input.is_zero_approx():
-		if state.rotation_settle_time_remaining > 0.0:
-			var settle_weight := exp(
-				-capability.rotation_settle_damping * delta
-			)
-			rigid_body.angular_velocity *= settle_weight
-			state.rotation_settle_time_remaining = maxf(
-				state.rotation_settle_time_remaining - delta,
-				0.0
-			)
-		return
+	if state.rotation_active:
+		state.advance_rotation_target(capability.rotation_radians_per_pixel)
 
-	var authority := grabber.get_rotation_authority()
 	var max_torque := grabber.get_effective_max_rotation_torque()
-	if authority <= 0.0 or max_torque <= 0.0:
+	if max_torque <= 0.0:
 		return
 
-	var rotation_command = (
-		-grabber.global_basis.y.normalized() * input.x
-		-grabber.global_basis.x.normalized() * input.y
+	var rotation_error := GrabState.rotation_error_vector(
+		rigid_body.global_basis,
+		state.get_target_world_basis()
 	)
-	var rotation_axis = rotation_command.normalized()
-	var target_angular_speed := minf(
-		rotation_command.length()
-		* capability.rotation_radians_per_pixel
-		/ maxf(delta, MIN_PHYSICS_DELTA),
-		capability.max_rotation_speed * authority
+	var desired_angular_acceleration := (
+		rotation_error * capability.rotation_target_stiffness
+		- rigid_body.angular_velocity * capability.rotation_target_damping
 	)
-	var current_angular_speed := rigid_body.angular_velocity.dot(rotation_axis)
-
-	var desired_angular_acceleration = (
-		rotation_axis
-		* (target_angular_speed - current_angular_speed)
-		* capability.rotation_acceleration
-	)
+	if desired_angular_acceleration.is_zero_approx():
+		return
 	var inertia_tensor := rigid_body.get_inverse_inertia_tensor().inverse()
-	var desired_torque = inertia_tensor * desired_angular_acceleration
-	if desired_torque.length() > max_torque:
-		desired_torque = desired_torque.normalized() * max_torque
+	var desired_torque := (
+		inertia_tensor * desired_angular_acceleration
+	).limit_length(max_torque)
 
 	rigid_body.apply_torque(desired_torque)
 	grabber.apply_reaction_torque(-desired_torque)
@@ -2472,12 +3102,16 @@ func _reject_connected_peer(peer_id: int, reason: String) -> void:
 
 
 func _on_peer_disconnected(peer_id: int) -> void:
+	if session_teardown_active:
+		return
 	if not multiplayer.is_server():
 		return
 
 	var player_id := GameState.get_player_id(peer_id)
 	if player_id == -1:
 		return
+	if acoustic_service != null:
+		acoustic_service.forget_listener(player_id)
 
 	var player := get_server_player(player_id)
 	if player != null:
@@ -2506,6 +3140,7 @@ func _on_connected_to_server() -> void:
 	if lobby_state != LobbyState.CONNECTING:
 		return
 	lobby_state = LobbyState.CONNECTED
+	_refresh_lobby_presence_from_membership()
 	_emit_lobby_status("Connected to lobby host.", false)
 	SceneController.enter_game()
 
@@ -2536,18 +3171,168 @@ func _on_lobby_chat_update(
 	_making_change_user_id: int,
 	_chat_state: int
 ) -> void:
-	if changed_lobby_id == lobby_id and lobby_state == LobbyState.HOSTING:
+	if changed_lobby_id != lobby_id:
+		return
+	if lobby_state == LobbyState.HOSTING:
 		_sync_lobby_availability()
+	elif lobby_state == LobbyState.CONNECTED:
+		_refresh_lobby_presence_from_membership()
 
 
 func _on_join_requested(
 	requested_lobby_id: int,
 	_friend_id: int
 ) -> void:
+	_request_external_lobby_join(requested_lobby_id)
+
+
+func _on_join_game_requested(
+	_friend_id: int,
+	connect_string: String
+) -> void:
+	var requested_lobby_id: int = STEAM_JOIN_COMMAND.parse_command_line(
+		connect_string
+	)
+	if requested_lobby_id <= 0:
+		_emit_lobby_status(
+			"Steam sent an invalid Join Game request.",
+			true
+		)
+		return
+	_request_external_lobby_join(requested_lobby_id)
+
+
+func _request_external_lobby_join(requested_lobby_id: int) -> void:
+	if requested_lobby_id <= 0:
+		_emit_lobby_status("Steam sent an invalid lobby ID.", true)
+		return
+	if (
+		requested_lobby_id == lobby_id
+		or requested_lobby_id == pending_lobby_id
+	):
+		return
 	if lobby_state != LobbyState.IDLE:
+		_emit_lobby_status(
+			"Leave the current lobby before joining another friend.",
+			true
+		)
 		return
 	SceneController.open_lobby_browser()
 	join_steam_lobby(requested_lobby_id)
+
+
+func _get_launch_lobby_id() -> int:
+	var requested_lobby_id: int = STEAM_JOIN_COMMAND.parse_command_line(
+		Steam.getLaunchCommandLine()
+	)
+	if requested_lobby_id > 0:
+		return requested_lobby_id
+	return STEAM_JOIN_COMMAND.parse_arguments(OS.get_cmdline_args())
+
+
+func can_invite_to_current_lobby() -> bool:
+	if (
+		not is_steam_available()
+		or not Steam.isOverlayEnabled()
+		or lobby_id <= 0
+		or (
+			lobby_state != LobbyState.HOSTING
+			and lobby_state != LobbyState.CONNECTED
+		)
+	):
+		return false
+	var member_count := Steam.getNumLobbyMembers(lobby_id)
+	return (
+		LobbyRules.can_register_player(member_count)
+		and Steam.getLobbyData(lobby_id, LobbyRules.DATA_OPEN) != "0"
+	)
+
+
+func is_lobby_idle() -> bool:
+	return lobby_state == LobbyState.IDLE
+
+
+func get_lobby_session_label() -> String:
+	if lobby_id <= 0 or not is_steam_available():
+		return "OFFLINE"
+	var role := "HOST" if lobby_state == LobbyState.HOSTING else "CREW"
+	return "%s  /  %d OF %d" % [
+		role,
+		clampi(
+			Steam.getNumLobbyMembers(lobby_id),
+			1,
+			LobbyRules.MAX_PLAYERS
+		),
+		LobbyRules.MAX_PLAYERS,
+	]
+
+
+func open_steam_invite_overlay() -> bool:
+	if not can_invite_to_current_lobby():
+		_emit_lobby_status(
+			"Steam invites need an open lobby and Steam overlay.",
+			true
+		)
+		return false
+	Steam.activateGameOverlayInviteDialog(lobby_id)
+	_emit_lobby_status("Steam invite overlay opened.", false)
+	return true
+
+
+func leave_steam_session() -> void:
+	if session_teardown_active:
+		return
+	session_teardown_active = true
+	var previous_lobby_id := lobby_id
+	if previous_lobby_id > 0 and is_steam_available():
+		Steam.leaveLobby(previous_lobby_id)
+	_reset_lobby_identity()
+	_set_offline_multiplayer_peer()
+	_clear_runtime_session()
+	Client.reset_session()
+	session_teardown_active = false
+	_emit_lobby_status("Left the Steam session.", false)
+	SceneController.open_main_menu()
+
+
+func _clear_runtime_session() -> void:
+	if is_instance_valid(server_world):
+		server_world.queue_free()
+	server_world = null
+	if acoustic_service != null:
+		acoustic_service.bind_world(null)
+
+	server_players_by_player_id.clear()
+	server_items_by_item_id.clear()
+	server_radios_by_item_id.clear()
+	server_speaker_clusters.clear()
+	fieldlink_control_targets_by_contact_id.clear()
+	server_drones_by_drone_id.clear()
+	server_projectiles_by_id.clear()
+	server_drone_parts_by_id.clear()
+	server_enemies_by_enemy_id.clear()
+	inspection_stations_by_id.clear()
+	body_part_shop_terminals_by_id.clear()
+	weapon_crafting_stations_by_id.clear()
+	body_part_delivery_orders.clear()
+	server_ropes_by_rope_id.clear()
+	rope_ids_by_body_instance_id.clear()
+	rope_placements_by_player_id.clear()
+	grab_states_by_grabber_id.clear()
+	spatial_interest_by_drone_id.clear()
+	fieldlink_next_command_msec_by_player_id.clear()
+	spatial_hash = ServerSpatialHash3D.new(SPATIAL_CELL_SIZE)
+	sync_timer = 0.0
+	next_drone_id = 0
+	next_projectile_id = 0
+	next_drone_part_id = 0
+	next_drone_part_token_id = 0
+	next_rope_id = 0
+	next_enemy_id = 0
+	next_body_part_order_id = 0
+	next_spatial_sound_sequence = 0
+	network_snapshot_sequence = 0
+	GameState.reset_session()
 
 
 func _sync_lobby_availability() -> void:
@@ -2583,6 +3368,61 @@ func _sync_lobby_availability() -> void:
 		"1" if has_open_slot else "0"
 	)
 	Steam.setLobbyJoinable(lobby_id, has_open_slot)
+	_publish_lobby_presence(
+		has_open_slot,
+		advertised_player_count
+	)
+
+
+func _refresh_lobby_presence_from_membership() -> void:
+	if lobby_id <= 0 or not is_steam_available():
+		return
+	var member_count: int = Steam.getNumLobbyMembers(lobby_id)
+	var advertised_open: String = Steam.getLobbyData(
+		lobby_id,
+		LobbyRules.DATA_OPEN
+	)
+	_publish_lobby_presence(
+		advertised_open != "0"
+		and LobbyRules.can_register_player(member_count),
+		member_count
+	)
+
+
+func _publish_lobby_presence(
+	has_open_slot: bool,
+	member_count: int
+) -> void:
+	if lobby_id <= 0 or not is_steam_available():
+		return
+	var safe_member_count := clampi(
+		member_count,
+		1,
+		LobbyRules.MAX_PLAYERS
+	)
+	var status := "In game (%d/%d)" % [
+		safe_member_count,
+		LobbyRules.MAX_PLAYERS,
+	]
+	Steam.setRichPresence(STEAM_PRESENCE_STATUS, status)
+	Steam.setRichPresence(STEAM_PRESENCE_GROUP, str(lobby_id))
+	Steam.setRichPresence(
+		STEAM_PRESENCE_GROUP_SIZE,
+		str(safe_member_count)
+	)
+	Steam.setRichPresence(
+		STEAM_PRESENCE_CONNECT,
+		STEAM_JOIN_COMMAND.build(lobby_id) if has_open_slot else ""
+	)
+
+
+func _clear_lobby_presence() -> void:
+	if not is_steam_available():
+		return
+	Steam.setRichPresence(STEAM_PRESENCE_CONNECT, "")
+	Steam.setRichPresence(STEAM_PRESENCE_STATUS, "")
+	Steam.setRichPresence(STEAM_PRESENCE_GROUP, "")
+	Steam.setRichPresence(STEAM_PRESENCE_GROUP_SIZE, "")
 
 
 func _fail_lobby_operation(message: String) -> void:
@@ -2595,6 +3435,7 @@ func _fail_lobby_operation(message: String) -> void:
 
 
 func _reset_lobby_identity() -> void:
+	_clear_lobby_presence()
 	lobby_operation_generation += 1
 	lobby_id = 0
 	pending_lobby_id = 0
@@ -2723,6 +3564,103 @@ func drop_equipment(equipment_slot: String) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
+func set_wrist_interface_open(value: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	var player := get_sending_player()
+	if player != null:
+		player.set_wrist_interface_open(value)
+		Client.rpc(
+			"on_player_wrist_state_received",
+			player.player_id,
+			player.wrist_interface_open,
+			player.wrist_display_page
+		)
+
+
+@rpc("any_peer", "call_local", "reliable", 3)
+func set_wrist_display_page(page_value: Variant) -> void:
+	if not multiplayer.is_server():
+		return
+	var player := get_sending_player()
+	if player == null or not player.set_wrist_display_page(page_value):
+		return
+	Client.rpc(
+		"on_player_wrist_state_received",
+		player.player_id,
+		player.wrist_interface_open,
+		player.wrist_display_page
+	)
+
+
+@rpc("any_peer", "call_local", "reliable", 3)
+func request_wrist_device_sound(sound_id: StringName) -> void:
+	if not multiplayer.is_server():
+		return
+	var player := get_sending_player()
+	if player != null:
+		player.request_wrist_device_sound(sound_id)
+
+
+@rpc("any_peer", "call_local", "reliable", 3)
+func request_fieldlink_device_control(contact_value: StringName) -> void:
+	if not multiplayer.is_server():
+		return
+	var player := get_sending_player()
+	var contact_id := FieldlinkDeviceControlPacket.sanitize_contact_id(
+		contact_value
+	)
+	if player == null or contact_id.is_empty():
+		return
+	var target := _validate_fieldlink_control_target(player, contact_id)
+	if target == null:
+		_send_fieldlink_control_error(player, contact_id, "DEVICE OUT OF RANGE OR OFFLINE")
+		return
+	_send_fieldlink_control_snapshot(player, contact_id, target)
+
+
+@rpc("any_peer", "call_local", "reliable", 3)
+func send_fieldlink_device_command(
+	contact_value: StringName,
+	action_value: StringName,
+	payload_value: Dictionary
+) -> void:
+	if not multiplayer.is_server():
+		return
+	var player := get_sending_player()
+	if player == null:
+		return
+	var command := FieldlinkDeviceControlPacket.sanitize_command(
+		contact_value,
+		action_value,
+		payload_value
+	)
+	if command.is_empty():
+		return
+	var now_msec := Time.get_ticks_msec()
+	if (
+		now_msec
+		< fieldlink_next_command_msec_by_player_id.get(player.player_id, 0)
+	):
+		return
+	fieldlink_next_command_msec_by_player_id[player.player_id] = (
+		now_msec + FIELDLINK_COMMAND_COOLDOWN_MILLISECONDS
+	)
+	var contact_id: StringName = command["contact_id"]
+	var target := _validate_fieldlink_control_target(player, contact_id)
+	if target == null:
+		_send_fieldlink_control_error(player, contact_id, "DEVICE OUT OF RANGE OR OFFLINE")
+		return
+	target.call(
+		"apply_fieldlink_command",
+		player,
+		command["action"],
+		command["payload"]
+	)
+	_send_fieldlink_control_snapshot(player, contact_id, target)
+
+
+@rpc("any_peer", "call_local", "reliable", 3)
 func reload_selected_weapon() -> void:
 	if not multiplayer.is_server():
 		return
@@ -2742,6 +3680,23 @@ func primary_action(yaw: float, pitch: float) -> void:
 
 	player.set_look_direction(yaw, pitch)
 	try_primary_action(player)
+
+
+@rpc("any_peer", "call_local", "reliable", 3)
+func set_primary_action_held(
+	held: bool,
+	yaw: float,
+	pitch: float
+) -> void:
+	if not multiplayer.is_server():
+		return
+
+	var player := get_sending_player()
+	if player == null:
+		return
+
+	player.set_look_direction(yaw, pitch)
+	player.set_primary_action_held(held)
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
@@ -2770,7 +3725,7 @@ func release_grab() -> void:
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
-func set_grab_rotation_active(active: bool) -> void:
+func set_grab_rotation_active(active: bool, session_id: int) -> void:
 	if not multiplayer.is_server():
 		return
 
@@ -2778,11 +3733,14 @@ func set_grab_rotation_active(active: bool) -> void:
 	if player == null:
 		return
 
-	set_grabber_rotation_active(player.grabber, active)
+	set_grabber_rotation_active(player.grabber, active, session_id)
 
 
-@rpc("any_peer", "call_local", "unreliable")
-func receive_grab_rotation_input(input: Vector2) -> void:
+@rpc("any_peer", "call_local", "unreliable_ordered", 3)
+func receive_grab_rotation_input(
+	session_id: int,
+	input_target: Vector2
+) -> void:
 	if not multiplayer.is_server():
 		return
 
@@ -2790,7 +3748,7 @@ func receive_grab_rotation_input(input: Vector2) -> void:
 	if player == null:
 		return
 
-	add_grab_rotation_input(player.grabber, input)
+	set_grab_rotation_input_target(player.grabber, input_target, session_id)
 
 @rpc("any_peer", "call_local", "unreliable")
 func receive_player_input(

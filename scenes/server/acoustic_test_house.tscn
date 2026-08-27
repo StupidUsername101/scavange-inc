@@ -1,0 +1,131 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/server/acoustic_test_house.gd" id="1_house"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_probe_3d.gd" id="2_probe"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_portal_3d.gd" id="3_portal"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_material.gd" id="4_material"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_path_modifier.gd" id="5_modifier"]
+
+[sub_resource type="Resource" id="AcousticMaterial_house_wall"]
+script = ExtResource("4_material")
+material_id = &"test_house_wall"
+transmission_gain = Vector3(0.48, 0.13, 0.025)
+absorption = Vector3(0.14, 0.34, 0.62)
+scattering = 0.24
+transmission_volume_db = -6.0
+transmission_lowpass_hz = 2200.0
+resonance = 0.18
+reverb_send = 0.28
+
+[sub_resource type="Resource" id="AcousticModifier_open_door"]
+script = ExtResource("5_modifier")
+modifier_id = &"test_house_open_door"
+reverb_send = 0.12
+
+[sub_resource type="Resource" id="AcousticMaterial_thin_panel"]
+script = ExtResource("4_material")
+material_id = &"test_house_thin_panel"
+transmission_gain = Vector3(0.92, 0.78, 0.55)
+absorption = Vector3(0.1, 0.18, 0.3)
+scattering = 0.35
+transmission_volume_db = -1.0
+transmission_lowpass_hz = 9000.0
+resonance = 0.08
+reverb_send = 0.2
+
+[node name="AcousticTestHouse" type="StaticBody3D"]
+script = ExtResource("1_house")
+acoustic_material = SubResource("AcousticMaterial_house_wall")
+interior_panel_acoustic_material = SubResource("AcousticMaterial_thin_panel")
+
+[node name="InteriorProbe" type="Marker3D" parent="."]
+position = Vector3(0, 1.45, 0.35)
+script = ExtResource("2_probe")
+probe_id = &"test_house_interior"
+auto_connect_radius = 7.0
+
+[node name="SmallWallFrontProbe" type="Marker3D" parent="."]
+position = Vector3(-0.9, 1.45, 1.25)
+script = ExtResource("2_probe")
+probe_id = &"test_house_small_wall_front"
+auto_connect_radius = 4.0
+
+[node name="SmallWallBackProbe" type="Marker3D" parent="."]
+position = Vector3(-0.9, 1.45, -0.65)
+script = ExtResource("2_probe")
+probe_id = &"test_house_small_wall_back"
+auto_connect_radius = 4.0
+
+[node name="DoorInsideProbe" type="Marker3D" parent="."]
+position = Vector3(0, 1.45, 2.5)
+script = ExtResource("2_probe")
+probe_id = &"test_house_door_inside"
+auto_connect_radius = 6.0
+
+[node name="DoorOutsideProbe" type="Marker3D" parent="."]
+position = Vector3(0, 1.45, 3.6)
+script = ExtResource("2_probe")
+probe_id = &"test_house_door_outside"
+auto_connect_radius = 10.0
+
+[node name="FrontLeftInsideProbe" type="Marker3D" parent="."]
+position = Vector3(-1.7, 1.45, 2.4)
+script = ExtResource("2_probe")
+probe_id = &"test_house_front_left_inside"
+auto_connect_radius = 5.0
+
+[node name="FrontRightInsideProbe" type="Marker3D" parent="."]
+position = Vector3(1.7, 1.45, 2.4)
+script = ExtResource("2_probe")
+probe_id = &"test_house_front_right_inside"
+auto_connect_radius = 5.0
+
+[node name="FrontLeftOutsideProbe" type="Marker3D" parent="."]
+position = Vector3(-1.7, 1.45, 3.5)
+script = ExtResource("2_probe")
+probe_id = &"test_house_front_left_outside"
+auto_connect_radius = 6.0
+
+[node name="FrontRightOutsideProbe" type="Marker3D" parent="."]
+position = Vector3(1.7, 1.45, 3.5)
+script = ExtResource("2_probe")
+probe_id = &"test_house_front_right_outside"
+auto_connect_radius = 6.0
+
+[node name="LeftExteriorProbe" type="Marker3D" parent="."]
+position = Vector3(-4.5, 1.45, 3.2)
+script = ExtResource("2_probe")
+probe_id = &"test_house_exterior_left"
+auto_connect_radius = 10.0
+
+[node name="RightExteriorProbe" type="Marker3D" parent="."]
+position = Vector3(4.5, 1.45, 3.2)
+script = ExtResource("2_probe")
+probe_id = &"test_house_exterior_right"
+auto_connect_radius = 10.0
+
+[node name="RearExteriorProbe" type="Marker3D" parent="."]
+position = Vector3(0, 1.45, -4.5)
+script = ExtResource("2_probe")
+probe_id = &"test_house_exterior_rear"
+auto_connect_radius = 10.0
+
+[node name="RearLeftExteriorProbe" type="Marker3D" parent="."]
+position = Vector3(-4.5, 1.45, -3.2)
+script = ExtResource("2_probe")
+probe_id = &"test_house_exterior_rear_left"
+auto_connect_radius = 8.0
+sample_reflections = false
+
+[node name="RearRightExteriorProbe" type="Marker3D" parent="."]
+position = Vector3(4.5, 1.45, -3.2)
+script = ExtResource("2_probe")
+probe_id = &"test_house_exterior_rear_right"
+auto_connect_radius = 8.0
+sample_reflections = false
+
+[node name="OpenDoorAcousticPath" type="Node3D" parent="."]
+script = ExtResource("3_portal")
+probe_a_path = NodePath("../DoorInsideProbe")
+probe_b_path = NodePath("../DoorOutsideProbe")
+modifier = SubResource("AcousticModifier_open_door")

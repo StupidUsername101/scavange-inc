@@ -1,0 +1,74 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="PackedScene" path="res://assets/third_party/pizza_doggy/models/tech/screen_etx_1_partial.glb" id="1_screen_asset"]
+
+[sub_resource type="StandardMaterial3D" id="Material_backplate"]
+albedo_color = Color(0.025, 0.035, 0.035, 1)
+metallic = 0.72
+roughness = 0.38
+
+[sub_resource type="StandardMaterial3D" id="Material_strap"]
+albedo_color = Color(0.055, 0.045, 0.035, 1)
+metallic = 0.12
+roughness = 0.86
+
+[sub_resource type="StandardMaterial3D" id="Material_trim"]
+albedo_color = Color(0.48, 0.31, 0.075, 1)
+metallic = 0.58
+roughness = 0.32
+
+[sub_resource type="StandardMaterial3D" id="Material_status"]
+shading_mode = 0
+albedo_color = Color(0.96, 0.55, 0.08, 1)
+emission_enabled = true
+emission = Color(0.86, 0.24, 0.015, 1)
+emission_energy_multiplier = 2.0
+
+[sub_resource type="BoxMesh" id="Mesh_backplate"]
+material = SubResource("Material_backplate")
+size = Vector3(0.296, 0.218, 0.035)
+
+[sub_resource type="BoxMesh" id="Mesh_strap"]
+material = SubResource("Material_strap")
+size = Vector3(0.052, 0.36, 0.026)
+
+[sub_resource type="BoxMesh" id="Mesh_trim"]
+material = SubResource("Material_trim")
+size = Vector3(0.018, 0.17, 0.018)
+
+[sub_resource type="SphereMesh" id="Mesh_status"]
+material = SubResource("Material_status")
+radius = 0.009
+height = 0.018
+radial_segments = 10
+rings = 5
+
+[node name="CorporateFieldTerminalVisual" type="Node3D"]
+
+[node name="Backplate" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0, -0.025)
+mesh = SubResource("Mesh_backplate")
+
+[node name="LeftStrap" type="MeshInstance3D" parent="."]
+position = Vector3(-0.092, 0, -0.052)
+mesh = SubResource("Mesh_strap")
+
+[node name="RightStrap" type="MeshInstance3D" parent="."]
+position = Vector3(0.092, 0, -0.052)
+mesh = SubResource("Mesh_strap")
+
+[node name="TechScreenHousing" parent="." instance=ExtResource("1_screen_asset")]
+scale = Vector3(0.76, 0.76, 0.76)
+
+[node name="LeftTrim" type="MeshInstance3D" parent="."]
+position = Vector3(-0.132, 0, 0.101)
+mesh = SubResource("Mesh_trim")
+
+[node name="RightTrim" type="MeshInstance3D" parent="."]
+position = Vector3(0.132, 0, 0.101)
+mesh = SubResource("Mesh_trim")
+
+[node name="StatusLight" type="MeshInstance3D" parent="."]
+position = Vector3(0.126, 0.083, 0.111)
+cast_shadow = 0
+mesh = SubResource("Mesh_status")

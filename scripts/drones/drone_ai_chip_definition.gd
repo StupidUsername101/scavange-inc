@@ -14,6 +14,13 @@ extends DronePartDefinition
 @export var behavior_parameters: Dictionary = {}
 @export_range(-100, 100, 1) var processing_priority := 0
 
+@export_group("Finalized ML Model")
+@export var finalized_model_id: String = ""
+@export_file("*.json") var finalized_model_path: String = ""
+@export_file("*.json") var finalized_manifest_path: String = ""
+@export var finalized_body_signature: String = ""
+@export var finalized_algorithm_id: String = ""
+
 @export_group("Processing")
 @export_range(0.01, 30.0, 0.01, "or_greater") var response_time := 0.25
 @export_range(0.01, 1.0, 0.01) var processing_efficiency := 0.75
@@ -39,9 +46,29 @@ extends DronePartDefinition
 
 func has_behavior_contract() -> bool:
 	return (
-		not behavior_id.is_empty()
-		and behavior_id != &"unassigned"
-		and behavior_script != null
+		has_finalized_model_identity()
+		or (
+			not behavior_id.is_empty()
+			and behavior_id != &"unassigned"
+			and behavior_script != null
+		)
+	)
+
+
+func has_finalized_model_identity() -> bool:
+	return (
+		behavior_id == &"trained_ml_policy"
+		and not finalized_model_id.strip_edges().is_empty()
+		and not finalized_body_signature.strip_edges().is_empty()
+		and not finalized_algorithm_id.strip_edges().is_empty()
+	)
+
+
+func has_finalized_model_contract() -> bool:
+	return (
+		has_finalized_model_identity()
+		and not finalized_model_path.strip_edges().is_empty()
+		and not finalized_manifest_path.strip_edges().is_empty()
 	)
 
 

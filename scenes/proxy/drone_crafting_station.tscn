@@ -1,4 +1,6 @@
-[gd_scene format=3]
+[gd_scene load_steps=17 format=3]
+
+[ext_resource type="Script" path="res://scripts/client/fieldlink_device_beacon.gd" id="1_beacon"]
 
 [sub_resource type="StandardMaterial3D" id="Material_base"]
 albedo_color = Color(0.065, 0.078, 0.09, 1)
@@ -85,6 +87,14 @@ size = Vector3(3, 0.16, 0.58)
 size = Vector3(0.34, 0.07, 0.22)
 
 [node name="DroneCraftingStation" type="Node3D"]
+
+[node name="FieldlinkBeacon" type="Node3D" parent="."]
+position = Vector3(0, 1.2, 0)
+script = ExtResource("1_beacon")
+contact_id = &"station:drone_assembly"
+display_name = "DRONE ASSEMBLY CRADLE"
+device_class = &"FABRICATOR"
+status_text = "READY"
 
 [node name="Base" type="MeshInstance3D" parent="."]
 position = Vector3(0, 0.22, 0)

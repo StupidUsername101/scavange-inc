@@ -23,7 +23,7 @@ static func create_limb_definition(
 ) -> GenericLimbDefinition:
 	if body_definition == null or slot == null or not slot.installed:
 		return null
-	var points: PackedVector3Array = EnemyGaitPlanner.solve_two_bone(
+	var points: PackedVector3Array = LimbKinematics.solve_two_bone(
 		slot.hip_offset,
 		slot.rest_foot_offset,
 		slot.upper_length,
@@ -64,7 +64,7 @@ static func create_limb_definition_from_points(
 	var upper_direction: Vector3 = (points[1] - points[0]).normalized()
 	var lower_direction: Vector3 = (points[2] - points[1]).normalized()
 	var lower_basis: Basis = GenericLimb3D.basis_from_y(lower_direction)
-	var local_knee_basis: Basis = EnemyPhysicalLimbRig3D.create_knee_joint_basis(points)
+	var local_knee_basis: Basis = LimbKinematics.create_knee_joint_basis(points)
 	var knee_basis_core: Basis = (lower_basis * local_knee_basis).orthonormalized()
 
 	var upper_segment: LimbSegmentDefinition = result.segments[0]

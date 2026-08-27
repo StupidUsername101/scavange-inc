@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="GunItemDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/weapons/gun_item_definition.gd" id="1_gun"]
+[ext_resource type="Resource" path="res://resources/guns/builds/warehouse_automatic_rifle.tres" id="2_build"]
+
+[sub_resource type="BoxShape3D" id="Shape"]
+size = Vector3(0.3, 0.48, 1.84)
+
+[resource]
+script = ExtResource("1_gun")
+display_name = "Warehouse Automatic Rifle"
+inventory_code = "AR"
+overall_size = 1.0
+mass = 3.01
+default_grab_rotation_degrees = Vector3(0, 0, 0)
+collision_shape = SubResource("Shape")
+shape_position = Vector3(0, -0.05, -0.16)
+default_build = ExtResource("2_build")

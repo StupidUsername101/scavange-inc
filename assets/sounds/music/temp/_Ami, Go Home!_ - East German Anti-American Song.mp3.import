@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://hscogpet6wrs"
+path="res://.godot/imported/_Ami, Go Home!_ - East German Anti-American Song.mp3-149dac5f9b0cf696a99e3db815bda5e8.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/temp/_Ami, Go Home!_ - East German Anti-American Song.mp3"
+dest_files=["res://.godot/imported/_Ami, Go Home!_ - East German Anti-American Song.mp3-149dac5f9b0cf696a99e3db815bda5e8.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

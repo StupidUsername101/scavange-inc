@@ -1,0 +1,146 @@
+[gd_scene load_steps=16 format=3]
+
+[ext_resource type="Script" path="res://scripts/items/radio_visual.gd" id="1_visual"]
+
+[sub_resource type="StandardMaterial3D" id="BodyMaterial"]
+albedo_color = Color(0.055, 0.075, 0.085, 1)
+metallic = 0.35
+roughness = 0.42
+
+[sub_resource type="StandardMaterial3D" id="PanelMaterial"]
+albedo_color = Color(0.12, 0.15, 0.16, 1)
+metallic = 0.15
+roughness = 0.55
+
+[sub_resource type="StandardMaterial3D" id="SpeakerMaterial"]
+albedo_color = Color(0.012, 0.014, 0.015, 1)
+roughness = 0.78
+
+[sub_resource type="StandardMaterial3D" id="TrimMaterial"]
+albedo_color = Color(0.52, 0.55, 0.52, 1)
+metallic = 0.72
+roughness = 0.25
+
+[sub_resource type="StandardMaterial3D" id="DisplayMaterial"]
+albedo_color = Color(0.045, 0.16, 0.14, 1)
+emission_enabled = true
+emission = Color(0.04, 0.42, 0.31, 1)
+emission_energy_multiplier = 0.55
+
+[sub_resource type="StandardMaterial3D" id="PowerMaterial"]
+albedo_color = Color(0.8, 0.09, 0.035, 1)
+emission_enabled = true
+emission = Color(1, 0.035, 0.008, 1)
+emission_energy_multiplier = 3.2
+
+[sub_resource type="BoxMesh" id="BodyMesh"]
+material = SubResource("BodyMaterial")
+size = Vector3(0.78, 0.46, 0.29)
+
+[sub_resource type="BoxMesh" id="PanelMesh"]
+material = SubResource("PanelMaterial")
+size = Vector3(0.71, 0.36, 0.035)
+
+[sub_resource type="CylinderMesh" id="SpeakerOuterMesh"]
+material = SubResource("TrimMaterial")
+top_radius = 0.156
+bottom_radius = 0.156
+height = 0.024
+radial_segments = 28
+rings = 1
+
+[sub_resource type="CylinderMesh" id="SpeakerInnerMesh"]
+material = SubResource("SpeakerMaterial")
+top_radius = 0.13
+bottom_radius = 0.13
+height = 0.029
+radial_segments = 24
+rings = 1
+
+[sub_resource type="BoxMesh" id="DisplayMesh"]
+material = SubResource("DisplayMaterial")
+size = Vector3(0.225, 0.09, 0.026)
+
+[sub_resource type="CylinderMesh" id="KnobMesh"]
+material = SubResource("TrimMaterial")
+top_radius = 0.052
+bottom_radius = 0.052
+height = 0.035
+radial_segments = 18
+rings = 1
+
+[sub_resource type="CylinderMesh" id="MetalRodMesh"]
+material = SubResource("TrimMaterial")
+top_radius = 0.012
+bottom_radius = 0.012
+height = 0.5
+radial_segments = 10
+rings = 1
+
+[sub_resource type="SphereMesh" id="PowerMesh"]
+material = SubResource("PowerMaterial")
+radius = 0.018
+height = 0.036
+radial_segments = 12
+rings = 6
+
+[node name="PortableRadioVisual" type="Node3D"]
+script = ExtResource("1_visual")
+
+[node name="Body" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.24, 0)
+mesh = SubResource("BodyMesh")
+
+[node name="FrontPanel" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.24, 0.163)
+mesh = SubResource("PanelMesh")
+
+[node name="SpeakerTrim" type="MeshInstance3D" parent="."]
+position = Vector3(-0.17, 0.24, 0.194)
+rotation = Vector3(1.5708, 0, 0)
+mesh = SubResource("SpeakerOuterMesh")
+
+[node name="SpeakerCone" type="MeshInstance3D" parent="."]
+position = Vector3(-0.17, 0.24, 0.211)
+rotation = Vector3(1.5708, 0, 0)
+mesh = SubResource("SpeakerInnerMesh")
+
+[node name="TunerDisplay" type="MeshInstance3D" parent="."]
+position = Vector3(0.185, 0.325, 0.196)
+mesh = SubResource("DisplayMesh")
+
+[node name="TuningKnob" type="MeshInstance3D" parent="."]
+position = Vector3(0.13, 0.19, 0.202)
+rotation = Vector3(1.5708, 0, 0)
+mesh = SubResource("KnobMesh")
+
+[node name="VolumeKnob" type="MeshInstance3D" parent="."]
+position = Vector3(0.265, 0.19, 0.202)
+rotation = Vector3(1.5708, 0, 0)
+mesh = SubResource("KnobMesh")
+
+[node name="Antenna" type="MeshInstance3D" parent="."]
+position = Vector3(0.29, 0.69, 0.005)
+rotation = Vector3(0, 0, -0.13)
+mesh = SubResource("MetalRodMesh")
+
+[node name="HandleLeft" type="MeshInstance3D" parent="."]
+position = Vector3(-0.25, 0.53, 0)
+scale = Vector3(1, 0.48, 1)
+mesh = SubResource("MetalRodMesh")
+
+[node name="HandleRight" type="MeshInstance3D" parent="."]
+position = Vector3(0.14, 0.53, 0)
+scale = Vector3(1, 0.48, 1)
+mesh = SubResource("MetalRodMesh")
+
+[node name="HandleTop" type="MeshInstance3D" parent="."]
+position = Vector3(-0.055, 0.65, 0)
+rotation = Vector3(0, 0, 1.5708)
+scale = Vector3(1, 0.78, 1)
+mesh = SubResource("MetalRodMesh")
+
+[node name="PowerLight" type="MeshInstance3D" parent="."]
+visible = false
+position = Vector3(0.31, 0.36, 0.203)
+mesh = SubResource("PowerMesh")

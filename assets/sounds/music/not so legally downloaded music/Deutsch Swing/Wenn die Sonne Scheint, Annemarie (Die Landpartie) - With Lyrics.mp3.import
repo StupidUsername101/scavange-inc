@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://crshkg8dg5igu"
+path="res://.godot/imported/Wenn die Sonne Scheint, Annemarie (Die Landpartie) - With Lyrics.mp3-e03223bca32c13bd350e9aa3bfbed24b.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Deutsch Swing/Wenn die Sonne Scheint, Annemarie (Die Landpartie) - With Lyrics.mp3"
+dest_files=["res://.godot/imported/Wenn die Sonne Scheint, Annemarie (Die Landpartie) - With Lyrics.mp3-e03223bca32c13bd350e9aa3bfbed24b.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

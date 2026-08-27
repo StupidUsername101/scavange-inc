@@ -318,6 +318,7 @@ var episode_status_label: Label
 var group_list: VBoxContainer
 var all_groups_pause_button: Button
 var model_body_creator: MLBodyCreatorPanel
+var model_body_preset_picker: MLBodyPresetPicker
 var worker_camera_split: VSplitContainer
 var evaluator_list: VBoxContainer
 var evaluator_summary_label: Label
@@ -368,6 +369,7 @@ var selected_group_branch_button: Button
 var selected_group_distribute_button: Button
 var model_save_best_button: Button
 var model_save_current_button: Button
+var model_finalize_button: Button
 var model_library_button: Button
 var drone_loadout_body: VBoxContainer
 var limb_body_tuning_body: VBoxContainer
@@ -3154,7 +3156,7 @@ func _build_worker_panel(layer: CanvasLayer) -> void:
 	var create_button = _button("+", true)
 	create_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	create_button.custom_minimum_size.y = 32.0
-	create_button.tooltip_text = "Create a model body\n\nOpen the model-body creator, choose a body/Core and compatible serialized parts, then create a fresh worker group from that hardware."
+	create_button.tooltip_text = "New worker group\n\nChoose one of four complete editable worker presets, or start with a fresh custom body in the 3D creator."
 	create_button.pressed.connect(_open_model_body_creator)
 	group_toolbar.add_child(create_button)
 	all_groups_pause_button = _button("Ⅱ")
@@ -3257,8 +3259,16 @@ func _build_training_setup_panel(layer: CanvasLayer) -> void:
 	content.add_child(status_label)
 	var back_button = _button("BACK TO MAIN MENU")
 	back_button.tooltip_text = "Return to the main menu\n\nSaved models stay in the Model Library.\nUnsaved live training progress is lost."
-	back_button.pressed.connect(SceneController.leave_ml_training_room)
+	back_button.pressed.connect(_leave_training_room)
 	panel_body.add_child(back_button)
+
+
+func _leave_training_room() -> void:
+	var scene_controller := get_node_or_null("/root/SceneController")
+	if scene_controller == null:
+		push_error("DroneTrainingRoom requires the SceneController autoload")
+		return
+	scene_controller.call("leave_ml_training_room")
 
 
 func _build_right_panel(layer: CanvasLayer) -> void:
@@ -4385,7 +4395,7 @@ func _build_training_item_controls(content: VBoxContainer) -> void:
 		" kg",
 		"Physical rigid-body mass. A gripper still obeys its own maximum held mass, so very heavy items can intentionally be impossible for a weak worker to carry.",
 		func(value: float) -> void:
-			training_item_mass_kg = maxf(value, 0.01)
+		training_item_mass_kg = maxf(value, 0.01)
 		)
 	_configure_unbounded_spinbox(training_item_mass_input, false)
 	training_item_reward_input = _add_number_input(
@@ -4398,7 +4408,7 @@ func _build_training_item_controls(content: VBoxContainer) -> void:
 		"",
 		"Intrinsic task value of this item. The limb pickup reward scales by this value; future delivery/task systems can reuse the same field instead of inventing another item score.",
 		func(value: float) -> void:
-			training_item_reward_value = maxf(value, 0.0)
+		training_item_reward_value = maxf(value, 0.0)
 		)
 	_configure_unbounded_spinbox(training_item_reward_input, false)
 
@@ -8035,6 +8045,10 @@ func _build_model_controls(content: VBoxContainer) -> void:
 	model_save_current_button.tooltip_text = "Save current live model\n\nWrites the weights controlling the selected group right now."
 	model_save_current_button.pressed.connect(_save_selected_model_current)
 	save_row.add_child(model_save_current_button)
+	model_finalize_button = _button("FINALIZE FOR GAME")
+	model_finalize_button.tooltip_text = "Finalize evaluated Best policy\n\nExports a versioned, integrity-checked gameplay AI chip. The server loads its weights; clients receive only its public chip identity and visuals."
+	model_finalize_button.pressed.connect(_finalize_selected_model_for_game)
+	save_row.add_child(model_finalize_button)
 	model_library_button = _button("MODEL LIBRARY")
 	model_library_button.tooltip_text = "Open the selected body's model library. Drone, four-limb, and turret checkpoints remain completely separate."
 	model_library_button.pressed.connect(_open_selected_model_library)
@@ -8065,6 +8079,69 @@ func _save_selected_model_current() -> void:
 	_save_selected_group_current()
 
 
+func _finalize_selected_model_for_game() -> void:
+	var group: Dictionary = _selected_group()
+	if group.is_empty():
+		status_label.text = "Gameplay AI-chip export currently requires a selected drone worker group."
+		return
+	var trainer: DroneTrainingAlgorithm = group.get("trainer") as DroneTrainingAlgorithm
+	if trainer == null or not trainer.has_best_checkpoint():
+		status_label.text = "No evaluated Best policy exists yet. Let the candidate suite promote one before finalizing it for gameplay."
+		return
+	var checkpoint: Dictionary = trainer.to_best_checkpoint()
+	if checkpoint.is_empty():
+		status_label.text = "The selected group's evaluated Best policy could not be captured."
+		return
+	var loadout: DroneLoadout = group.get("drone_loadout") as DroneLoadout
+	var body_manifest: MLBodyInterfaceManifest = (
+		DroneMLBodyInterfaceFactory.finalize_loadout(loadout)
+	)
+	if body_manifest == null:
+		status_label.text = "The selected group's current drone body could not be finalized for gameplay."
+		return
+	var checkpoint_body: Dictionary = SafeVariant.dictionary_copy(
+		checkpoint.get("body_interface", {})
+	)
+	var checkpoint_body_signature: String = str(
+		checkpoint_body.get("contract_signature", "")
+	).strip_edges()
+	if (
+		not checkpoint_body_signature.is_empty()
+		and checkpoint_body_signature != body_manifest.contract_signature
+	):
+		status_label.text = "The evaluated Best policy belongs to an older drone body. Evaluate the current body before finalizing it for gameplay."
+		return
+	# PPO stores its generic body contract in the checkpoint. SAC-HER is intentionally tied to the
+	# stock quad and historically did not; bind that selected, verified body here so every gameplay
+	# artifact has the same explicit server-side compatibility contract.
+	checkpoint["body_interface"] = body_manifest.to_dictionary()
+	checkpoint["checkpoint_scope"] = "evaluated_best_game_export"
+	var best_summary: Dictionary = trainer.best_selection_summary()
+	var artifact_store: MLGameModelArtifact = MLGameModelArtifact.new()
+	var record: Dictionary = artifact_store.finalize_drone_model(
+		str(group.get("name", "Drone model")),
+		checkpoint,
+		{
+			"group_id": int(group.get("group_id", -1)),
+			"group_name": str(group.get("name", "Drone model")),
+			"policy_scope": "evaluated_best",
+			"policy_update": int(best_summary.get(
+				"policy_update",
+				trainer.update_count_value()
+			)),
+			"selection_score": float(best_summary.get("selection_score", 0.0)),
+		}
+	)
+	if record.is_empty():
+		status_label.text = "Could not finalize gameplay model: %s" % artifact_store.last_error
+		return
+	status_label.text = "Finalized %s as gameplay AI chip %s. It will appear in the dev warehouse on the next server-world start." % [
+		str(group.get("name", "Drone model")),
+		str(record.get("artifact_id", "")),
+	]
+	status_label.tooltip_text = "Export folder: %s" % str(record.get("storage_path", ""))
+
+
 func _open_selected_model_library() -> void:
 	if not _selected_turret_group().is_empty():
 		turret_ui.open_model_browser()
@@ -8092,6 +8169,24 @@ func _refresh_model_workspace_for_selection(
 		model_save_best_button.text = "SAVE BEST"
 	if model_save_current_button != null:
 		model_save_current_button.visible = has_any_group
+	if model_finalize_button != null:
+		model_finalize_button.visible = has_any_group
+		model_finalize_button.disabled = true
+		if has_drone_group:
+			var selected_drone_group: Dictionary = _selected_group()
+			var selected_trainer: DroneTrainingAlgorithm = (
+				selected_drone_group.get("trainer") as DroneTrainingAlgorithm
+			)
+			model_finalize_button.disabled = (
+				selected_trainer == null or not selected_trainer.has_best_checkpoint()
+			)
+			model_finalize_button.tooltip_text = (
+				"Finalize evaluated Best policy\n\nExports a versioned, integrity-checked gameplay AI chip. The server loads its weights; clients receive only its public chip identity and visuals."
+				if not model_finalize_button.disabled
+				else "Finalize evaluated Best policy\n\nNo candidate has passed the deterministic evaluation suite yet."
+			)
+		else:
+			model_finalize_button.tooltip_text = "Gameplay AI chips currently target ServerDrone bodies. Limb and turret gameplay sockets do not exist yet."
 	if model_library_button != null:
 		model_library_button.visible = has_any_group
 		model_library_button.text = (
@@ -11047,11 +11142,18 @@ func _create_worker_group(
 	if accepted_body == null:
 		status_label.text = "Could not finalize the drone body interface."
 		return {}
-	if group_loadout.core == null or group_loadout.core.propeller_slot_count > QUAD_PROPELLER_COUNT:
-		status_label.text = "The current flight runtime supports at most four propeller slots."
+	if group_loadout.core == null or group_loadout.core.propeller_slot_count < 0:
+		status_label.text = "The created worker has an invalid propeller-slot count."
 		return {}
 	if str(algorithm_id) == "ppo_clip" and accepted_body.control_count() <= 0:
 		status_label.text = "The created body has no model-controlled hardware. Add a propeller or controlled articulated attachment."
+		return {}
+	var readiness_error: String = LOADOUT_CONFIG.training_readiness_error(
+		group_loadout,
+		accepted_body
+	)
+	if not readiness_error.is_empty():
+		status_label.text = readiness_error
 		return {}
 	if str(algorithm_id) != "ppo_clip" and not _manifest_is_legacy_four_propeller_body(accepted_body):
 		status_label.text = "%s currently supports only a plain four-propeller body; use PPO for custom rotor counts or controlled attachments." % str(algorithm_id)
@@ -12236,6 +12338,12 @@ func _unique_group_name_for_kind(
 
 
 func _build_model_body_creator() -> void:
+	model_body_preset_picker = MLBodyPresetPicker.new()
+	model_body_preset_picker.visible = false
+	model_body_preset_picker.custom_requested.connect(_open_custom_model_body_creator)
+	model_body_preset_picker.preset_requested.connect(_open_model_body_preset)
+	add_child(model_body_preset_picker)
+
 	model_body_creator = MLBodyCreatorPanel.new()
 	# Dynamically-created Window nodes default to visible. Hide before entering the scene tree so
 	# the creator only appears after the Worker Groups + button is pressed.
@@ -12245,10 +12353,32 @@ func _build_model_body_creator() -> void:
 
 
 func _open_model_body_creator() -> void:
+	if (
+		model_body_preset_picker == null
+		or not is_instance_valid(model_body_preset_picker)
+	):
+		return
+	model_body_preset_picker.open_picker()
+	status_label.text = "Choose a complete worker preset or start a fresh custom body."
+
+
+func _open_custom_model_body_creator() -> void:
 	if model_body_creator == null or not is_instance_valid(model_body_creator):
 		return
-	model_body_creator.open_creator()
-	status_label.text = "Model Body Creator opened. Choose a Core, lay out its mounts, then equip the authored slots."
+	model_body_creator.open_custom_creator()
+	status_label.text = "Custom worker creator opened. Choose a Core, lay out its mounts, then equip the authored slots."
+
+
+func _open_model_body_preset(preset_id: StringName) -> void:
+	if model_body_creator == null or not is_instance_valid(model_body_creator):
+		return
+	if model_body_creator.open_preset(preset_id):
+		var preset: MLBodyPreset = MLBodyPresetLibrary.preset_by_id(preset_id)
+		status_label.text = "%s preset opened as an editable worker definition." % (
+			preset.display_name if preset != null else "Worker"
+		)
+	else:
+		status_label.text = "The selected worker preset could not be opened."
 
 
 func _on_model_body_creator_requested(request: Dictionary) -> void:

@@ -1,0 +1,2 @@
+# The raw environment bundle is a local source vault. Runtime-ready selections live under
+# res://assets/third_party/pizza_doggy instead, so Godot does not import several duplicate formats.

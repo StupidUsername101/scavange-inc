@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://7y1spf3rqx6v"
+path="res://.godot/imported/Gothic 3 Soundtrack - End Titles.mp3-68337af34850063e88e741328dc68a59.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/gothic/Gothic 3 Soundtrack - End Titles.mp3"
+dest_files=["res://.godot/imported/Gothic 3 Soundtrack - End Titles.mp3-68337af34850063e88e741328dc68a59.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

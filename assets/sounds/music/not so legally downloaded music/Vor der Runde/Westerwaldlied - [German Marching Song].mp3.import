@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://djdbt1kmmx6js"
+path="res://.godot/imported/Westerwaldlied - [German Marching Song].mp3-94ada0e3d8c67290b1a40fd9f15f1a68.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Westerwaldlied - [German Marching Song].mp3"
+dest_files=["res://.godot/imported/Westerwaldlied - [German Marching Song].mp3-94ada0e3d8c67290b1a40fd9f15f1a68.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

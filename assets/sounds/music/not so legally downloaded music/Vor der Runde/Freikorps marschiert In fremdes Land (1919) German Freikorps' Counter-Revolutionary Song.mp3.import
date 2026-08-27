@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://nmmdpqtxqyhd"
+path="res://.godot/imported/Freikorps marschiert In fremdes Land (1919) German Freikorps' Counter-Revolutionary Song.mp3-48d85070620acbc1513e1d1291a9fab7.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Freikorps marschiert In fremdes Land (1919) German Freikorps' Counter-Revolutionary Song.mp3"
+dest_files=["res://.godot/imported/Freikorps marschiert In fremdes Land (1919) German Freikorps' Counter-Revolutionary Song.mp3-48d85070620acbc1513e1d1291a9fab7.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

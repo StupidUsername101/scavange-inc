@@ -510,7 +510,7 @@ func _test_training_room_pause_configuration_boundaries_contract() -> void:
 func _test_deterministic_training_power_fast_path() -> void:
 	var drone := ServerDrone.new()
 	var source := load(
-		"res://resources/ml_body_presets/drone_quad.tres"
+		"res://resources/drones/loadouts/perfect_combat_follow_quad.tres"
 	) as DroneLoadout
 	drone.loadout = MLBodyPartContract.deep_duplicate_resource(source) as DroneLoadout
 	drone.remaining_battery_energy_wh = drone.loadout.battery.energy_capacity_wh

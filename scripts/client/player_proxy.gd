@@ -3,25 +3,44 @@ class_name PlayerProxy
 
 const INTERP_SPEED := 12.0
 const MAX_EXTRAPOLATION_TIME := 0.25
-const WALK_BOB_FREQUENCY := 10.0
-const RUN_BOB_FREQUENCY := 15.0
-const IDLE_BOB_FREQUENCY := 1.5
 
-const WALK_BOB_VERTICAL := 0.045
-const WALK_BOB_HORIZONTAL := 0.025
+const WALK_BOB_VERTICAL := 0.04
+const WALK_BOB_HORIZONTAL := 0.022
 
-const RUN_BOB_VERTICAL := 0.075
-const RUN_BOB_HORIZONTAL := 0.045
+const RUN_BOB_VERTICAL := 0.04
+const RUN_BOB_HORIZONTAL := 0.026
 
-const HEADBOB_BLEND_SPEED := 10.0
-const RUN_SPEED_THRESHOLD := 12.0
+const HEADBOB_BLEND_SPEED := 8.0
+const HEADBOB_RUN_BLEND_SPEED := 5.0
+const HEADBOB_PHASE_SYNC_SPEED := 10.0
+const HEADBOB_PHASE_SNAP_CYCLES := 0.75
 const EDIT_AIM_MARKER_COLOR := Color(0.16, 0.86, 0.7, 0.2)
 const MAX_LOOK_PITCH_DEGREES := 85.0
-const MOVEMENT_SPEED_THRESHOLD := 0.2
-const IDLE_HEADBOB_WEIGHT := 0.5
 const HELD_ITEM_SIDE_OFFSET := 0.43
 const HELD_ITEM_ROLL := 0.08
 const FIRST_PERSON_ITEM_SIDE_OFFSET := 0.22
+const WRIST_LOOK_PITCH := deg_to_rad(-24.0)
+const WRIST_POSE_BLEND_SPEED := 7.5
+const WRIST_REQUEST_GRACE_SECONDS := 0.5
+const WRIST_SCANNER_RANGE_METERS := 36.0
+const WRIST_SCANNER_REFRESH_SECONDS := 0.2
+const WRIST_CONTROL_REFRESH_SECONDS := 0.5
+const MOUSE_CAPTURE_TRANSITION_DISCARD_EVENTS := 2
+const LEFT_ARM_REST_POSITION := Vector3(-0.47, 0.16, 0.0)
+const RIGHT_ARM_REST_POSITION := Vector3(0.47, 0.16, 0.0)
+const LEFT_SHOULDER_POSITION := Vector3(-0.47, 0.57, 0.0)
+const RIGHT_SHOULDER_POSITION := Vector3(0.47, 0.57, 0.0)
+const LEFT_WRIST_POSE_ROTATION := Vector3(0.9, 0.0, 0.86)
+const RIGHT_WRIST_POSE_ROTATION := Vector3(0.9, 0.0, -0.86)
+const WRIST_PRESENTATION_SCENE := preload(
+	"res://scenes/proxy/wrist_terminal_presentation.tscn"
+)
+const REMOTE_WRIST_DISPLAY := preload(
+	"res://scripts/client/wrist_terminal_remote_display.gd"
+)
+const FIELDLINK_DISPLAY_STATE := preload(
+	"res://scripts/network/fieldlink_display_state.gd"
+)
 
 #######################################################
 # Presents replicated player movement, body parts, equipment, held items, HUD, camera motion,
@@ -30,8 +49,11 @@ const FIRST_PERSON_ITEM_SIDE_OFFSET := 0.22
 
 @onready var camera_pivot: Node3D = $HeadPivot
 @onready var camera: Camera3D = $HeadPivot/Camera3D
+@onready var audio_listener: AudioListener3D = $AudioListener3D
 @onready var left_arm_visual: MeshInstance3D = $BodyVisual/LeftArm
 @onready var right_arm_visual: MeshInstance3D = $BodyVisual/RightArm
+@onready var left_wrist_mount: Node3D = $BodyVisual/LeftArm/WristMount
+@onready var right_wrist_mount: Node3D = $BodyVisual/RightArm/WristMount
 @onready var left_leg_visual: MeshInstance3D = $BodyVisual/LeftLeg
 @onready var right_leg_visual: MeshInstance3D = $BodyVisual/RightLeg
 @onready var edit_aim_hit: MeshInstance3D = $EditAimHit
@@ -50,9 +72,15 @@ const FIRST_PERSON_ITEM_SIDE_OFFSET := 0.22
 	$OcularPostProcess/VisionEffect
 )
 
-var headbob_time := 0.0
 var headbob_weight := 0.0
+var headbob_run_weight := 0.0
 var camera_pivot_rest_position: Vector3
+var target_gait_cycle := 0.5
+var visual_gait_cycle := 0.5
+var target_gait_stride_distance := PlayerGait.WALK_STEP_DISTANCE
+var target_gait_active := false
+var gait_initialized := false
+var target_stamina_ratio := 1.0
 
 var target_on_floor := false
 
@@ -81,6 +109,19 @@ var held_item_state: Dictionary = {}
 var held_item_signature := ""
 var has_left_arm := true
 var has_right_arm := true
+var target_wrist_interface_open := false
+var target_wrist_display_page: StringName = FIELDLINK_DISPLAY_STATE.PAGE_HOME
+var local_wrist_interface_open := false
+var wrist_pose_weight := 0.0
+var wrist_presentation: WristTerminalPresentation
+var remote_wrist_display: Node
+var wrist_session_refresh_remaining := 0.0
+var wrist_scanner_refresh_remaining := 0.0
+var wrist_control_refresh_remaining := 0.0
+var wrist_request_grace_remaining := 0.0
+var wrist_mouse_look_active := false
+var wrist_mouse_look_owns_pitch := false
+var captured_mouse_motion_discard_remaining := 0
 
 func _ready() -> void:
 	target_position = global_position
@@ -96,9 +137,37 @@ func _input(event: InputEvent) -> void:
 	if not is_local_player:
 		return
 
-	if event.is_action_pressed("ui_cancel"):
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if event.is_action_pressed("toggle_fieldlink"):
+		toggle_wrist_interface()
 		grab_rotation_input = Vector2.ZERO
+		get_viewport().set_input_as_handled()
+		return
+	if event.is_action_pressed("ui_cancel"):
+		if local_wrist_interface_open:
+			close_wrist_interface()
+			get_viewport().set_input_as_handled()
+		else:
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		grab_rotation_input = Vector2.ZERO
+		return
+
+	if local_wrist_interface_open:
+		if (
+			event is InputEventMouseButton
+			and event.button_index == MOUSE_BUTTON_RIGHT
+		):
+			_set_wrist_mouse_look_active(event.pressed)
+			get_viewport().set_input_as_handled()
+			return
+		if wrist_mouse_look_active:
+			if event is InputEventMouseMotion:
+				if not _consume_capture_transition_motion():
+					_apply_mouse_look(event.relative)
+			get_viewport().set_input_as_handled()
+			return
+		if wrist_presentation != null:
+			wrist_presentation.forward_pointer_input(event)
+		get_viewport().set_input_as_handled()
 		return
 
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
@@ -107,10 +176,14 @@ func _input(event: InputEvent) -> void:
 			and event.pressed
 			and event.button_index == MOUSE_BUTTON_LEFT
 		):
+			_arm_capture_transition_guard()
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-		return
+			return
 
 	if event is InputEventMouseMotion:
+		if _consume_capture_transition_motion():
+			get_viewport().set_input_as_handled()
+			return
 		if (
 			Input.is_action_pressed("grab")
 			and Input.is_action_pressed("rotate_grabbed")
@@ -118,13 +191,45 @@ func _input(event: InputEvent) -> void:
 			grab_rotation_input += event.relative
 			return
 
-		look_yaw -= event.relative.x * mouse_sensitivity
-		look_pitch -= event.relative.y * mouse_sensitivity
-		look_pitch = clamp(
-			look_pitch,
-			deg_to_rad(-MAX_LOOK_PITCH_DEGREES),
-			deg_to_rad(MAX_LOOK_PITCH_DEGREES)
-		)
+		_apply_mouse_look(event.relative)
+
+
+func _apply_mouse_look(relative_motion: Vector2) -> void:
+	look_yaw -= relative_motion.x * mouse_sensitivity
+	look_pitch -= relative_motion.y * mouse_sensitivity
+	look_pitch = clampf(
+		look_pitch,
+		deg_to_rad(-MAX_LOOK_PITCH_DEGREES),
+		deg_to_rad(MAX_LOOK_PITCH_DEGREES)
+	)
+
+
+func _consume_capture_transition_motion() -> bool:
+	if captured_mouse_motion_discard_remaining <= 0:
+		return false
+	captured_mouse_motion_discard_remaining -= 1
+	return true
+
+
+func _arm_capture_transition_guard() -> void:
+	captured_mouse_motion_discard_remaining = (
+		MOUSE_CAPTURE_TRANSITION_DISCARD_EVENTS
+	)
+
+
+func _set_wrist_mouse_look_active(value: bool) -> void:
+	var next_value := value and local_wrist_interface_open
+	if next_value == wrist_mouse_look_active:
+		return
+	wrist_mouse_look_active = next_value
+	if wrist_mouse_look_active:
+		# Until RMB is held, the presentation pose aims the camera down at the
+		# device. Hand control to ordinary mouse look from the pitch currently
+		# on screen so vertical input is visible immediately instead of being
+		# hidden by the pose and appearing as a jump when the device closes.
+		look_pitch = camera_pivot.rotation.x
+		wrist_mouse_look_owns_pitch = true
+		return
 
 
 func consume_grab_rotation_input() -> Vector2:
@@ -134,12 +239,14 @@ func consume_grab_rotation_input() -> Vector2:
 
 func apply_server_state(state: Dictionary) -> void:
 	player_id = SafeVariant.integral_int_or(state.get("player_id", -1), -1)
+	var current_position := global_position if is_inside_tree() else position
+	var current_rotation := global_rotation if is_inside_tree() else rotation
 
 	target_position = SafeVariant.vector3_strict_or(
-		state.get("pos", global_position), global_position
+		state.get("pos", current_position), current_position
 	)
 	target_rotation = SafeVariant.vector3_strict_or(
-		state.get("rot", global_rotation), global_rotation
+		state.get("rot", current_rotation), current_rotation
 	)
 	target_velocity = SafeVariant.vector3_strict_or(
 		state.get("vel", Vector3.ZERO), Vector3.ZERO
@@ -147,6 +254,28 @@ func apply_server_state(state: Dictionary) -> void:
 	time_since_last_state = 0.0
 	
 	target_on_floor = SafeVariant.strict_bool_or(state.get("on_floor", false), false)
+	var next_gait_cycle := maxf(
+		SafeVariant.finite_float_or(
+			state.get("gait_cycle"),
+			target_gait_cycle
+		),
+		0.0
+	)
+	target_gait_stride_distance = maxf(
+		SafeVariant.finite_float_or(
+			state.get("gait_stride_distance"),
+			PlayerGait.WALK_STEP_DISTANCE
+		),
+		PlayerGait.MINIMUM_STRIDE_DISTANCE
+	)
+	target_gait_active = SafeVariant.strict_bool_or(
+		state.get("gait_active", false),
+		false
+	)
+	if not gait_initialized:
+		visual_gait_cycle = next_gait_cycle
+		gait_initialized = true
+	target_gait_cycle = next_gait_cycle
 	target_edit_aim_active = SafeVariant.strict_bool_or(
 		state.get("edit_aim_active", false),
 		false
@@ -168,6 +297,24 @@ func apply_server_state(state: Dictionary) -> void:
 
 
 func _apply_player_system_state(state: Dictionary) -> void:
+	# Scene inspection and tests can apply a snapshot before _ready initializes
+	# @onready references. The children already exist on an instantiated scene.
+	if inventory_hud == null:
+		inventory_hud = get_node_or_null(
+			"PlayerInterface/PlayerHud"
+		) as PlayerInventoryHud
+	if vision_effect == null:
+		vision_effect = get_node_or_null(
+			"OcularPostProcess/VisionEffect"
+		) as OcularVisionController
+	target_stamina_ratio = clampf(
+		SafeVariant.finite_float_or(
+			state.get("stamina_ratio"),
+			target_stamina_ratio
+		),
+		0.0,
+		1.0
+	)
 	target_player_state = state.duplicate(true)
 	var inventory: Dictionary = PlayerInventoryRules.sanitize_public_inventory(
 		state.get("inventory", {})
@@ -175,6 +322,26 @@ func _apply_player_system_state(state: Dictionary) -> void:
 	var equipment: Dictionary = inventory["equipment"]
 	_apply_equipment_state(equipment)
 	_apply_held_item_state(inventory)
+	var server_wrist_open := SafeVariant.strict_bool_or(
+		state.get("wrist_interface_open", false),
+		false
+	)
+	var server_wrist_page := FIELDLINK_DISPLAY_STATE.sanitize_page(
+		state.get("wrist_display_page", FIELDLINK_DISPLAY_STATE.PAGE_HOME)
+	)
+	target_wrist_interface_open = server_wrist_open
+	target_wrist_display_page = server_wrist_page
+	if is_local_player:
+		if not _can_use_wrist_device():
+			_set_wrist_interface_open(false, false)
+		elif server_wrist_open == local_wrist_interface_open:
+			wrist_request_grace_remaining = 0.0
+		elif wrist_request_grace_remaining <= 0.0:
+			_set_wrist_interface_open(server_wrist_open, false)
+		if wrist_presentation != null and wrist_request_grace_remaining <= 0.0:
+			wrist_presentation.apply_replicated_page(server_wrist_page)
+	else:
+		_sync_remote_wrist_display()
 
 	if inventory_hud != null:
 		inventory_hud.apply_player_state(state)
@@ -236,6 +403,7 @@ func _apply_equipment_state(equipment: Dictionary) -> void:
 		equipment_definition_paths[slot] = definition_path
 
 	_update_local_equipment_visibility()
+	_sync_remote_wrist_display()
 
 
 func _get_equipment_mount(slot: String) -> Node3D:
@@ -244,6 +412,11 @@ func _get_equipment_mount(slot: String) -> Node3D:
 			return backpack_mount
 		PlayerInventoryRules.EYES_SLOT:
 			return eyes_mount
+		PlayerInventoryRules.WRIST_DEVICE_SLOT:
+			if has_left_arm:
+				return left_wrist_mount
+			if has_right_arm:
+				return right_wrist_mount
 	return null
 
 
@@ -253,6 +426,44 @@ func _update_local_equipment_visibility() -> void:
 	) as Node3D
 	if is_instance_valid(eye_visual):
 		eye_visual.visible = not is_local_player
+	var wrist_visual := equipment_visuals.get(
+		PlayerInventoryRules.WRIST_DEVICE_SLOT
+	) as Node3D
+	if is_instance_valid(wrist_visual):
+		wrist_visual.visible = not is_local_player
+
+
+func _ensure_remote_wrist_display() -> Node:
+	if is_local_player:
+		return null
+	if remote_wrist_display == null:
+		remote_wrist_display = REMOTE_WRIST_DISPLAY.new()
+		remote_wrist_display.name = "RemoteFieldlinkDisplay"
+		add_child(remote_wrist_display)
+	var wrist_visual := equipment_visuals.get(
+		PlayerInventoryRules.WRIST_DEVICE_SLOT
+	) as Node3D
+	remote_wrist_display.bind_equipped_visual(
+		wrist_visual if is_instance_valid(wrist_visual) else null
+	)
+	return remote_wrist_display
+
+
+func _sync_remote_wrist_display() -> void:
+	if is_local_player:
+		if remote_wrist_display != null:
+			remote_wrist_display.set_open(false)
+		return
+	var display := _ensure_remote_wrist_display()
+	if display == null:
+		return
+	display.set_page(target_wrist_display_page)
+	display.set_open(
+		target_wrist_interface_open and has_equipped_wrist_device()
+	)
+	var server := get_node_or_null("/root/Server")
+	if server != null and server.has_method("get_lobby_session_label"):
+		display.set_session_info(str(server.call("get_lobby_session_label")))
 
 
 func _apply_held_item_state(inventory: Dictionary) -> void:
@@ -318,6 +529,9 @@ func _apply_limb_state(limbs: Dictionary) -> void:
 	left_leg_visual.visible = limbs.get("left_leg", true)
 	right_leg_visual.visible = limbs.get("right_leg", true)
 	_update_held_item_mount()
+	_reparent_wrist_visual()
+	if wrist_presentation != null:
+		wrist_presentation.set_wrist_side(has_left_arm)
 
 
 func _update_held_item_mount() -> void:
@@ -338,57 +552,428 @@ func _update_held_item_mount() -> void:
 		else -FIRST_PERSON_ITEM_SIDE_OFFSET
 	)
 	if is_instance_valid(held_item_visual):
-		held_item_visual.visible = has_left_arm or has_right_arm
-	
+		held_item_visual.visible = (
+			(has_left_arm or has_right_arm)
+			and not (
+				local_wrist_interface_open
+				or target_wrist_interface_open
+			)
+		)
+
+
+func _reparent_wrist_visual() -> void:
+	var wrist_visual := equipment_visuals.get(
+		PlayerInventoryRules.WRIST_DEVICE_SLOT
+	) as Node3D
+	if not is_instance_valid(wrist_visual):
+		return
+	var next_mount := _get_equipment_mount(
+		PlayerInventoryRules.WRIST_DEVICE_SLOT
+	)
+	if next_mount == null or wrist_visual.get_parent() == next_mount:
+		return
+	wrist_visual.reparent(next_mount, false)
+
+
+func has_equipped_wrist_device() -> bool:
+	return equipment_definition_paths.has(
+		PlayerInventoryRules.WRIST_DEVICE_SLOT
+	)
+
+
+func is_wrist_interface_open() -> bool:
+	return local_wrist_interface_open
+
+
+# Shared entry point for the keyboard and technical-object interfaces. Server-
+# driven devices can open the same view through the replicated wrist state.
+func open_wrist_interface() -> bool:
+	if not _can_use_wrist_device():
+		return false
+	_set_wrist_interface_open(true)
+	return local_wrist_interface_open
+
+
+func close_wrist_interface() -> void:
+	_set_wrist_interface_open(false)
+
+
+func toggle_wrist_interface() -> bool:
+	if local_wrist_interface_open:
+		close_wrist_interface()
+		return false
+	return open_wrist_interface()
+
+
+func _can_use_wrist_device() -> bool:
+	return (
+		has_equipped_wrist_device()
+		and (has_left_arm or has_right_arm)
+	)
+
+
+func _set_wrist_interface_open(
+	value: bool,
+	notify_server := true
+) -> void:
+	var next_value := value and _can_use_wrist_device()
+	if next_value == local_wrist_interface_open:
+		return
+	if next_value:
+		wrist_mouse_look_owns_pitch = false
+	wrist_mouse_look_active = false
+	local_wrist_interface_open = next_value
+	target_wrist_interface_open = next_value
+	if notify_server:
+		wrist_request_grace_remaining = WRIST_REQUEST_GRACE_SECONDS
+	_ensure_wrist_presentation()
+	if wrist_presentation != null:
+		wrist_presentation.set_wrist_side(has_left_arm)
+		wrist_presentation.set_scanner_heading(look_yaw)
+		_refresh_wrist_session_info()
+		wrist_presentation.set_open(local_wrist_interface_open)
+		wrist_session_refresh_remaining = 0.0
+		wrist_scanner_refresh_remaining = 0.0
+		wrist_control_refresh_remaining = 0.0
+	# Fieldlink owns a bounded in-screen cursor. Keep raw mouse motion captured
+	# for both pointer control and the RMB look clutch so no desktop cursor can
+	# escape the physical display or accumulate a transition delta.
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	grab_rotation_input = Vector2.ZERO
+	_update_held_item_mount()
+	var client := get_node_or_null("/root/Client")
+	if notify_server and client != null:
+		client.call(
+			"set_wrist_interface_open",
+			local_wrist_interface_open
+		)
+
+
+func _ensure_wrist_presentation() -> void:
+	if wrist_presentation != null or not is_local_player:
+		return
+	wrist_presentation = (
+		WRIST_PRESENTATION_SCENE.instantiate()
+		as WristTerminalPresentation
+	)
+	if wrist_presentation == null:
+		return
+	camera.add_child(wrist_presentation)
+	var client := get_node_or_null("/root/Client")
+	if client != null and client.has_method("get_listener_acoustic_intensity"):
+		wrist_presentation.set_acoustic_intensity_provider(
+			Callable(client, "get_listener_acoustic_intensity")
+		)
+	wrist_presentation.set_wrist_side(has_left_arm)
+	wrist_presentation.set_scanner_heading(look_yaw)
+	wrist_presentation.invite_friend_requested.connect(
+		_on_invite_friend_requested
+	)
+	wrist_presentation.return_to_menu_requested.connect(
+		_on_return_to_menu_requested
+	)
+	wrist_presentation.device_sound_requested.connect(
+		_on_wrist_device_sound_requested
+	)
+	wrist_presentation.device_control_requested.connect(
+		_on_wrist_device_control_requested
+	)
+	wrist_presentation.device_command_requested.connect(
+		_on_wrist_device_command_requested
+	)
+	wrist_presentation.display_page_changed.connect(
+		_on_wrist_display_page_changed
+	)
+	wrist_presentation.apply_replicated_page(target_wrist_display_page)
+
+
+func _refresh_wrist_session_info() -> void:
+	if wrist_presentation == null:
+		return
+	var server := get_node_or_null("/root/Server")
+	wrist_presentation.set_session_info(
+		str(server.call("get_lobby_session_label"))
+		if server != null
+		else "OFFLINE",
+		bool(server.call("can_invite_to_current_lobby"))
+		if server != null
+		else false
+	)
+
+
+func _refresh_wrist_scanner_contacts() -> void:
+	if wrist_presentation == null:
+		return
+	wrist_presentation.set_scanner_contacts(
+		_collect_wrist_scanner_contacts(
+			global_position + Vector3.UP * 0.56,
+			look_yaw
+		),
+		WRIST_SCANNER_RANGE_METERS
+	)
+
+
+func _collect_wrist_scanner_contacts(
+	origin: Vector3,
+	yaw: float
+) -> Array[Dictionary]:
+	var client := get_node_or_null("/root/Client")
+	if client == null or not client.has_method("collect_nearby_fieldlink_devices"):
+		return []
+	var contacts_value: Variant = client.call(
+		"collect_nearby_fieldlink_devices",
+		origin,
+		yaw,
+		WRIST_SCANNER_RANGE_METERS
+	)
+	var contacts: Array[Dictionary] = []
+	if contacts_value is Array:
+		for contact_value: Variant in contacts_value:
+			if contact_value is Dictionary:
+				contacts.append((contact_value as Dictionary).duplicate(false))
+	return contacts
+
+
+func _on_invite_friend_requested() -> void:
+	if wrist_presentation == null:
+		return
+	var server := get_node_or_null("/root/Server")
+	var opened := (
+		bool(server.call("open_steam_invite_overlay"))
+		if server != null
+		else false
+	)
+	wrist_presentation.set_feedback(
+		"STEAM INVITE OVERLAY OPENED"
+		if opened
+		else "INVITES ARE NOT AVAILABLE",
+		not opened
+	)
+
+
+func _on_return_to_menu_requested() -> void:
+	if not local_wrist_interface_open:
+		return
+	_set_wrist_interface_open(false)
+	var server := get_node_or_null("/root/Server")
+	if server != null:
+		server.call("leave_steam_session")
+
+
+func _on_wrist_device_sound_requested(sound_id: StringName) -> void:
+	if not local_wrist_interface_open:
+		return
+	var client := get_node_or_null("/root/Client")
+	if client != null:
+		client.call("request_wrist_device_sound", sound_id)
+
+
+func _on_wrist_device_control_requested(contact_id: StringName) -> void:
+	if not local_wrist_interface_open:
+		return
+	wrist_control_refresh_remaining = WRIST_CONTROL_REFRESH_SECONDS
+	var client := get_node_or_null("/root/Client")
+	if client != null:
+		client.call("request_fieldlink_device_control", contact_id)
+
+
+func _on_wrist_device_command_requested(
+	contact_id: StringName,
+	action: StringName,
+	payload: Dictionary
+) -> void:
+	if not local_wrist_interface_open:
+		return
+	wrist_control_refresh_remaining = WRIST_CONTROL_REFRESH_SECONDS
+	var client := get_node_or_null("/root/Client")
+	if client != null:
+		client.call(
+			"send_fieldlink_device_command",
+			contact_id,
+			action,
+			payload
+		)
+
+
+func _on_wrist_display_page_changed(page_value: StringName) -> void:
+	if not is_local_player:
+		return
+	target_wrist_display_page = FIELDLINK_DISPLAY_STATE.sanitize_page(page_value)
+	var client := get_node_or_null("/root/Client")
+	if client != null:
+		client.call("set_wrist_display_page", target_wrist_display_page)
+
+
+func apply_replicated_wrist_state(
+	open_value: bool,
+	page_value: Variant
+) -> void:
+	target_wrist_interface_open = open_value
+	target_wrist_display_page = FIELDLINK_DISPLAY_STATE.sanitize_page(page_value)
+	if is_local_player:
+		if wrist_request_grace_remaining <= 0.0:
+			_set_wrist_interface_open(open_value, false)
+			if wrist_presentation != null:
+				wrist_presentation.apply_replicated_page(
+					target_wrist_display_page
+				)
+		return
+	_sync_remote_wrist_display()
+
+
+func apply_fieldlink_device_control_snapshot(snapshot: Dictionary) -> void:
+	if local_wrist_interface_open and wrist_presentation != null:
+		wrist_presentation.apply_device_control_snapshot(snapshot)
+
+
+func apply_fieldlink_device_control_error(
+	contact_id: StringName,
+	message: String
+) -> void:
+	if local_wrist_interface_open and wrist_presentation != null:
+		wrist_presentation.apply_device_control_error(contact_id, message)
+
+
+func _update_wrist_pose(delta: float) -> void:
+	var pose_active := (
+		local_wrist_interface_open
+		if is_local_player
+		else target_wrist_interface_open
+	)
+	wrist_pose_weight = move_toward(
+		wrist_pose_weight,
+		1.0 if pose_active else 0.0,
+		WRIST_POSE_BLEND_SPEED * maxf(delta, 0.0)
+	)
+	if not pose_active and is_zero_approx(wrist_pose_weight):
+		wrist_mouse_look_owns_pitch = false
+	var eased_weight := smoothstep(0.0, 1.0, wrist_pose_weight)
+	# The owner has a camera-mounted arm rig with geometry authored around the
+	# Fieldlink. Rotating the replicated body arm as well pushes it through the
+	# camera and screen; only other players need this world-space pose.
+	var world_arm_weight := 0.0 if is_local_player else eased_weight
+	# Rotate the capsule and its wrist mount around the anatomical shoulder,
+	# rather than around the capsule's center. Positive X brings the wrist
+	# toward world-forward (-Z); the old negative, center-pivoted pose folded
+	# the device backward through the torso.
+	_apply_remote_arm_pose(
+		left_arm_visual,
+		LEFT_ARM_REST_POSITION,
+		LEFT_SHOULDER_POSITION,
+		LEFT_WRIST_POSE_ROTATION,
+		world_arm_weight if has_left_arm else 0.0
+	)
+	_apply_remote_arm_pose(
+		right_arm_visual,
+		RIGHT_ARM_REST_POSITION,
+		RIGHT_SHOULDER_POSITION,
+		RIGHT_WRIST_POSE_ROTATION,
+		world_arm_weight if not has_left_arm else 0.0
+	)
+	_update_held_item_mount()
+
+
+static func _apply_remote_arm_pose(
+	arm: MeshInstance3D,
+	rest_position: Vector3,
+	shoulder_position: Vector3,
+	pose_rotation: Vector3,
+	weight: float
+) -> void:
+	var bounded_weight := clampf(weight, 0.0, 1.0)
+	var next_rotation := pose_rotation * bounded_weight
+	arm.rotation = next_rotation
+	arm.position = (
+		shoulder_position
+		+ Basis.from_euler(next_rotation) * (
+			rest_position - shoulder_position
+		)
+	)
+
 func update_headbob(delta: float) -> void:
 	var horizontal_speed := Vector2(
 		target_velocity.x,
 		target_velocity.z
 	).length()
-
-	var is_moving := (
-		horizontal_speed > MOVEMENT_SPEED_THRESHOLD
-		and target_on_floor
-	)
-	var is_running := horizontal_speed >= RUN_SPEED_THRESHOLD
-
-	var target_weight := 1.0 if is_moving else IDLE_HEADBOB_WEIGHT
-
+	var is_moving := target_gait_active and target_on_floor
 	headbob_weight = move_toward(
 		headbob_weight,
-		target_weight,
+		1.0 if is_moving else 0.0,
 		HEADBOB_BLEND_SPEED * delta
 	)
-
-	var frequency := IDLE_BOB_FREQUENCY
-	if is_moving and is_running:
-		frequency = RUN_BOB_FREQUENCY
-	elif is_moving:
-		frequency = WALK_BOB_FREQUENCY
-	
-	headbob_time += delta * frequency
-
-	var vertical_amount := (
-		RUN_BOB_VERTICAL
-		if is_running
-		else WALK_BOB_VERTICAL
+	var run_target := clampf(
+		inverse_lerp(
+			PlayerGait.WALK_STEP_DISTANCE,
+			PlayerGait.RUN_STEP_DISTANCE,
+			target_gait_stride_distance
+		),
+		0.0,
+		1.0
+	)
+	headbob_run_weight = move_toward(
+		headbob_run_weight,
+		run_target,
+		HEADBOB_RUN_BLEND_SPEED * delta
 	)
 
-	var horizontal_amount := (
+	if not gait_initialized:
+		camera_pivot.position = camera_pivot_rest_position
+		if wrist_presentation != null:
+			wrist_presentation.set_motion_input(
+				Vector3.ZERO,
+				0.0,
+				1.0 - target_stamina_ratio,
+				visual_gait_cycle,
+				0.0
+			)
+		return
+	var stride_distance := maxf(
+		target_gait_stride_distance,
+		PlayerGait.MINIMUM_STRIDE_DISTANCE
+	)
+	var cycles_per_second := (
+		horizontal_speed / stride_distance
+		if is_moving
+		else 0.0
+	)
+	visual_gait_cycle += cycles_per_second * maxf(delta, 0.0)
+	var predicted_cycle := (
+		target_gait_cycle
+		+ cycles_per_second * time_since_last_state
+	)
+	var cycle_error := predicted_cycle - visual_gait_cycle
+	if absf(cycle_error) >= HEADBOB_PHASE_SNAP_CYCLES:
+		visual_gait_cycle = predicted_cycle
+	else:
+		visual_gait_cycle += cycle_error * clampf(
+			HEADBOB_PHASE_SYNC_SPEED * delta,
+			0.0,
+			1.0
+		)
+
+	var walk_bob_offset := PlayerGait.calculate_bob_offset(
+		visual_gait_cycle,
+		WALK_BOB_VERTICAL,
+		WALK_BOB_HORIZONTAL
+	)
+	var run_bob_offset := PlayerGait.calculate_run_bob_offset(
+		visual_gait_cycle,
+		RUN_BOB_VERTICAL,
 		RUN_BOB_HORIZONTAL
-		if is_running
-		else WALK_BOB_HORIZONTAL
 	)
-
-	var bob_offset := Vector3(
-		cos(headbob_time * 0.5) * horizontal_amount,
-		sin(headbob_time) * vertical_amount,
-		0.0
+	var bob_offset := walk_bob_offset.lerp(
+		run_bob_offset,
+		headbob_run_weight
 	)
-
-	camera_pivot.position = camera_pivot_rest_position + (
-		bob_offset * headbob_weight
-	)
+	camera_pivot.position = camera_pivot_rest_position + bob_offset * headbob_weight
+	if wrist_presentation != null:
+		wrist_presentation.set_motion_input(
+			bob_offset * headbob_weight,
+			headbob_weight,
+			1.0 - target_stamina_ratio,
+			visual_gait_cycle,
+			headbob_run_weight
+		)
 	
 func set_local_player(value: bool) -> void:
 	is_local_player = value
@@ -397,25 +982,114 @@ func set_local_player(value: bool) -> void:
 		return
 
 	camera.current = is_local_player
+	if is_local_player:
+		audio_listener.make_current()
+	elif audio_listener.is_current():
+		audio_listener.clear_current()
 	interface_layer.visible = is_local_player
 	vision_layer.visible = is_local_player
 
 	if is_local_player:
+		_arm_capture_transition_guard()
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		if not target_player_state.is_empty():
 			_apply_player_system_state(target_player_state)
+	else:
+		local_wrist_interface_open = false
+		wrist_mouse_look_active = false
+		wrist_mouse_look_owns_pitch = false
+		wrist_request_grace_remaining = 0.0
+		if wrist_presentation != null:
+			wrist_presentation.set_open(false)
 	_update_local_equipment_visibility()
 	held_item_signature = ""
 	_rebuild_held_item_visual()
 
+
+func _resolved_camera_pitch() -> float:
+	if wrist_mouse_look_owns_pitch:
+		return look_pitch
+	return lerp_angle(
+		look_pitch,
+		WRIST_LOOK_PITCH,
+		wrist_pose_weight
+	)
+
+
 func _process(delta: float) -> void:
+	_update_wrist_pose(delta)
+	if (
+		is_local_player
+		and local_wrist_interface_open
+		and wrist_presentation != null
+	):
+		wrist_presentation.set_scanner_heading(look_yaw)
+	elif (
+		not is_local_player
+		and target_wrist_interface_open
+		and remote_wrist_display != null
+	):
+		remote_wrist_display.set_scanner_heading(rotation.y)
+	if is_local_player:
+		wrist_request_grace_remaining = maxf(
+			wrist_request_grace_remaining - maxf(delta, 0.0),
+			0.0
+		)
+	if is_local_player and local_wrist_interface_open:
+		wrist_session_refresh_remaining -= delta
+		if wrist_session_refresh_remaining <= 0.0:
+			wrist_session_refresh_remaining = 1.0
+			_refresh_wrist_session_info()
+		if (
+			wrist_presentation != null
+		):
+			wrist_scanner_refresh_remaining -= delta
+			if wrist_scanner_refresh_remaining <= 0.0:
+				wrist_scanner_refresh_remaining = WRIST_SCANNER_REFRESH_SECONDS
+				_refresh_wrist_scanner_contacts()
+			if not wrist_presentation.is_scanner_page_active():
+				wrist_control_refresh_remaining = 0.0
+			else:
+				var selected_contact_id := wrist_presentation.get_selected_contact_id()
+				if (
+					selected_contact_id.is_empty()
+					or wrist_presentation.get_selected_control_type().is_empty()
+				):
+					wrist_control_refresh_remaining = 0.0
+				else:
+					wrist_control_refresh_remaining -= delta
+					if wrist_control_refresh_remaining <= 0.0:
+						wrist_control_refresh_remaining = WRIST_CONTROL_REFRESH_SECONDS
+						_on_wrist_device_control_requested(selected_contact_id)
+		else:
+			wrist_scanner_refresh_remaining = 0.0
+			wrist_control_refresh_remaining = 0.0
+	elif not is_local_player and target_wrist_interface_open:
+		wrist_scanner_refresh_remaining -= delta
+		if wrist_scanner_refresh_remaining <= 0.0:
+			wrist_scanner_refresh_remaining = WRIST_SCANNER_REFRESH_SECONDS
+			var display := _ensure_remote_wrist_display()
+			if display != null:
+				display.set_scanner_heading(rotation.y)
+				display.set_scanner_contacts(
+					_collect_wrist_scanner_contacts(
+						global_position + Vector3.UP * 0.56,
+						rotation.y
+					),
+					WRIST_SCANNER_RANGE_METERS
+				)
 	if is_local_player and vision_effect != null:
 		vision_effect.update_view(look_yaw, look_pitch, delta)
 
 	# The host can follow its authoritative CharacterBody3D without any
 	# snapshot delay. Joining clients use the extrapolated snapshot below.
 	if multiplayer.is_server():
-		var server_player := Server.get_server_player(player_id)
+		var server := get_node_or_null("/root/Server")
+		var server_player: ServerPlayer = (
+			server.call("get_server_player", player_id) as ServerPlayer
+			if server != null
+			else null
+		)
 
 		if is_instance_valid(server_player):
 			global_position = server_player.global_position
@@ -425,11 +1099,20 @@ func _process(delta: float) -> void:
 			target_edit_aim_origin = server_player.edit_aim_origin
 			target_edit_aim_hit = server_player.edit_aim_hit
 			target_edit_aim_color = server_player.edit_aim_color
+			target_gait_cycle = server_player.gait.get_cycle()
+			target_gait_stride_distance = server_player.gait.stride_distance
+			target_gait_active = server_player.gait.active
+			target_stamina_ratio = clampf(
+				server_player.stamina / maxf(ServerPlayer.MAX_STAMINA, 0.001),
+				0.0,
+				1.0
+			)
+			gait_initialized = true
 			_update_edit_aim_visual()
 
 			if is_local_player:
 				rotation.y = look_yaw
-				camera_pivot.rotation.x = look_pitch
+				camera_pivot.rotation.x = _resolved_camera_pitch()
 				update_headbob(delta)
 			else:
 				rotation.y = server_player.rotation.y
@@ -455,7 +1138,7 @@ func _process(delta: float) -> void:
 
 	if is_local_player:
 		rotation.y = look_yaw
-		camera_pivot.rotation.x = look_pitch
+		camera_pivot.rotation.x = _resolved_camera_pitch()
 		update_headbob(delta)
 	else:
 		rotation.y = lerp_angle(

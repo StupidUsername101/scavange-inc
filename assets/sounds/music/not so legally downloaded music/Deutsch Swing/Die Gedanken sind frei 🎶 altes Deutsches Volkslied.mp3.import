@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://pc3pv2hx4xc1"
+path="res://.godot/imported/Die Gedanken sind frei 🎶 altes Deutsches Volkslied.mp3-62b2da9e9f0340bfde470d63c5f1dbf2.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Deutsch Swing/Die Gedanken sind frei 🎶 altes Deutsches Volkslied.mp3"
+dest_files=["res://.godot/imported/Die Gedanken sind frei 🎶 altes Deutsches Volkslied.mp3-62b2da9e9f0340bfde470d63c5f1dbf2.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

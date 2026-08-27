@@ -52,6 +52,16 @@ custom_minimum_size = Vector2(320, 64)
 layout_mode = 2
 text = "ML Training Room"
 
+[node name="LevelEditorButton" type="Button" parent="MarginContainer/MarginContainer/VSplitContainer"]
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+text = "Level Editor"
+
+[node name="ExitButton" type="Button" parent="MarginContainer/MarginContainer/VSplitContainer"]
+custom_minimum_size = Vector2(320, 64)
+layout_mode = 2
+text = "Exit"
+
 [node name="StatusLabel" type="Label" parent="MarginContainer/MarginContainer/VSplitContainer" unique_id=190432282]
 custom_minimum_size = Vector2(320, 48)
 layout_mode = 2

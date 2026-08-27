@@ -1,6 +1,9 @@
 class_name EnemyGaitPlanner
 extends RefCounted
 
+## Dormant dev-zoo controller retained only so the old showcase assets remain recoverable.
+## Learned workers never instantiate this class. Shared pose math belongs in LimbKinematics.
+
 const EPSILON := 0.000001
 const STOP_SPEED := 0.05
 const VELOCITY_SMOOTHING := 12.0
@@ -484,7 +487,7 @@ func get_desired_limb_points(
 	var fallback_direction = body_transform.basis * (
 		limb.rest_foot_offset - limb.hip_offset
 	)
-	var solution := _solve_two_bone_internal(
+	var solution := LimbKinematics.solve_two_bone_continuous(
 		hip,
 		foot,
 		limb.upper_length,
@@ -519,105 +522,6 @@ func get_active_gait_group() -> int:
 
 func is_in_support_transfer() -> bool:
 	return active_gait_group < 0 and support_transfer_remaining > 0.0
-
-
-static func solve_two_bone(
-	hip: Vector3,
-	requested_foot: Vector3,
-	upper_length: float,
-	lower_length: float,
-	bend_hint: Vector3
-) -> PackedVector3Array:
-	var solution := _solve_two_bone_internal(
-		hip,
-		requested_foot,
-		upper_length,
-		lower_length,
-		bend_hint,
-		Vector3.ZERO,
-		requested_foot - hip
-	)
-	return solution.get("points", PackedVector3Array())
-
-
-static func _solve_two_bone_internal(
-	hip: Vector3,
-	requested_foot: Vector3,
-	upper_length: float,
-	lower_length: float,
-	bend_hint: Vector3,
-	previous_bend: Vector3,
-	fallback_direction: Vector3
-) -> Dictionary:
-	var upper := maxf(upper_length, 0.001)
-	var lower := maxf(lower_length, 0.001)
-	var offset := requested_foot - hip
-	var raw_distance := offset.length()
-	var direction := offset.normalized() if raw_distance > 0.0001 else Vector3.ZERO
-	if direction.length_squared() <= EPSILON:
-		direction = fallback_direction.normalized()
-	if direction.length_squared() <= EPSILON:
-		direction = Vector3.DOWN
-
-	var maximum_reach := maxf(upper + lower - REACH_MARGIN, 0.001)
-	var minimum_reach := minf(
-		absf(upper - lower) + REACH_MARGIN,
-		maximum_reach
-	)
-	var distance := clampf(raw_distance, minimum_reach, maximum_reach)
-	var foot := hip + direction * distance
-	var along := (
-		upper * upper - lower * lower + distance * distance
-	) / maxf(2.0 * distance, 0.001)
-	var perpendicular_height := sqrt(
-		maxf(upper * upper - along * along, 0.0)
-	)
-
-	var authored_perpendicular := _project_perpendicular(
-		bend_hint,
-		direction
-	)
-	var previous_perpendicular := _project_perpendicular(
-		previous_bend,
-		direction
-	)
-	var perpendicular := Vector3.ZERO
-
-	if previous_perpendicular.length_squared() > EPSILON:
-		previous_perpendicular = previous_perpendicular.normalized()
-		if authored_perpendicular.length_squared() > EPSILON:
-			authored_perpendicular = authored_perpendicular.normalized()
-			if authored_perpendicular.dot(previous_perpendicular) < 0.0:
-				authored_perpendicular = -authored_perpendicular
-			perpendicular = (
-				previous_perpendicular * 0.85
-				+ authored_perpendicular * 0.15
-			).normalized()
-		else:
-			perpendicular = previous_perpendicular
-	elif authored_perpendicular.length_squared() > EPSILON:
-		perpendicular = authored_perpendicular.normalized()
-	else:
-		perpendicular = _project_perpendicular(
-			fallback_direction,
-			direction
-		)
-		if perpendicular.length_squared() <= EPSILON:
-			perpendicular = _get_least_parallel_axis(direction)
-		perpendicular = _project_perpendicular(
-			perpendicular,
-			direction
-		).normalized()
-
-	var knee := (
-		hip
-		+ direction * along
-		+ perpendicular * perpendicular_height
-	)
-	return {
-		"points": PackedVector3Array([hip, knee, foot]),
-		"bend_direction": perpendicular,
-	}
 
 
 func _calculate_limb_target(
@@ -938,21 +842,3 @@ func _sample_ground_result(
 		"position": hit.get("position", desired),
 		"normal": normal,
 	}
-
-
-static func _project_perpendicular(
-	vector: Vector3,
-	direction: Vector3
-) -> Vector3:
-	return vector - direction * vector.dot(direction)
-
-
-static func _get_least_parallel_axis(direction: Vector3) -> Vector3:
-	var x_alignment := absf(direction.dot(Vector3.RIGHT))
-	var y_alignment := absf(direction.dot(Vector3.UP))
-	var z_alignment := absf(direction.dot(Vector3.FORWARD))
-	if x_alignment <= y_alignment and x_alignment <= z_alignment:
-		return Vector3.RIGHT
-	if y_alignment <= z_alignment:
-		return Vector3.UP
-	return Vector3.FORWARD

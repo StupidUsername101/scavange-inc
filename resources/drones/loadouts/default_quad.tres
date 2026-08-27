@@ -1,0 +1,18 @@
+[gd_resource type="Resource" script_class="DroneLoadout" format=3 uid="uid://o6r6123e3hna"]
+
+[ext_resource type="Script" uid="uid://cagmkiap3x2p3" path="res://scripts/drones/drone_loadout.gd" id="1_loadout"]
+[ext_resource type="Script" uid="uid://dd4ovcax8ndar" path="res://scripts/drones/drone_propeller_definition.gd" id="2_propeller_type"]
+[ext_resource type="Resource" uid="uid://dkeue8iy1buv1" path="res://resources/drones/cores/default_core.tres" id="3_core"]
+[ext_resource type="Script" uid="uid://b2fq5jmol72px" path="res://scripts/drones/drone_attachment_definition.gd" id="4_b6rlj"]
+[ext_resource type="Resource" uid="uid://cd12pqwk7j3hq" path="res://resources/drones/propellers/default_propeller.tres" id="4_propeller"]
+[ext_resource type="Resource" uid="uid://b53muwhx707k8" path="res://resources/drones/batteries/default_battery.tres" id="5_battery"]
+[ext_resource type="Script" uid="uid://mirhdrf5wrip" path="res://scripts/drones/drone_ai_chip_definition.gd" id="6_chip_type"]
+[ext_resource type="Resource" uid="uid://c8dgenj6t2ma" path="res://resources/drones/ai_chips/shepherd_follow_chip.tres" id="7_follow_chip"]
+[ext_resource type="Resource" uid="uid://cx60svbqdj0fp" path="res://resources/drones/ai_chips/orca_flight_coordinator_chip.tres" id="8_avoidance_chip"]
+
+[resource]
+script = ExtResource("1_loadout")
+core = ExtResource("3_core")
+battery = ExtResource("5_battery")
+propellers = Array[ExtResource("2_propeller_type")]([ExtResource("4_propeller"), ExtResource("4_propeller"), ExtResource("4_propeller"), ExtResource("4_propeller")])
+ai_chips = Array[ExtResource("6_chip_type")]([ExtResource("7_follow_chip"), ExtResource("8_avoidance_chip")])

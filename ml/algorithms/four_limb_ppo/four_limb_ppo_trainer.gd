@@ -387,25 +387,37 @@ func update_if_ready(force_partial: bool = false) -> Dictionary:
 			+ "(maximum log-probability error %.12f)."
 		) % [rollout_policy_revision, initial_log_probability_error_max]
 		return {"error": last_error}
-	var advantages_and_returns = _calculate_advantages_and_returns()
+	var advantages_and_returns = RLTrainingMath.generalized_advantage_estimates(
+		rollout,
+		float(config["gamma"]),
+		float(config["gae_lambda"]),
+		float(config.get("discount_reference_interval_seconds", 0.05)),
+		float(config.get("control_interval_seconds", 0.05)),
+		"value"
+	)
 	if advantages_and_returns.is_empty():
 		last_error = "The four-limb rollout could not be converted into learning targets."
 		return {"error": last_error}
 	var advantages: PackedFloat64Array = advantages_and_returns["advantages"]
 	var returns: PackedFloat64Array = advantages_and_returns["returns"]
 	var value_predictions: PackedFloat64Array = advantages_and_returns["value_predictions"]
-	var reward_statistics = _rollout_reward_statistics()
+	var reward_statistics = RLTrainingMath.finite_transition_statistics(
+		rollout,
+		"reward",
+		0.0
+	)
 	var return_statistics = RLTrainingMath.finite_statistics(returns)
 	var value_prediction_statistics = RLTrainingMath.finite_statistics(value_predictions)
 	var explained_variance = RLTrainingMath.explained_variance(returns, value_predictions)
-	var advantage_statistics = _packed_statistics(advantages)
+	var advantage_statistics: Dictionary = RLTrainingMath.finite_statistics(advantages)
 	var feature_audit = _feature_audit_for_rollout(rollout)
 	var actor_parameters_before = actor_critic.actor.parameters.duplicate()
 	var log_standard_deviation_before = actor_critic.log_standard_deviation.duplicate()
-	_normalize(advantages)
+	RLTrainingMath.normalize_in_place(advantages)
 	var indices: Array[int] = []
-	for index in range(rollout.size()):
-		indices.append(index)
+	indices.resize(rollout.size())
+	for index: int in range(indices.size()):
+		indices[index] = index
 	var actor_loss_total = 0.0
 	var value_loss_total = 0.0
 	var entropy_total = 0.0
@@ -420,7 +432,7 @@ func update_if_ready(force_partial: bool = false) -> Dictionary:
 	var early_stopped = false
 	var early_stop_reason = ""
 	for _epoch in range(int(config["epochs"])):
-		_shuffle_indices(indices)
+		RLTrainingMath.shuffle_indices_in_place(indices, shuffle_rng)
 		var epoch_kl_total = 0.0
 		var epoch_sample_total = 0
 		var batch_start = 0
@@ -528,9 +540,11 @@ func update_if_ready(force_partial: bool = false) -> Dictionary:
 		"return_statistics": return_statistics,
 		"value_prediction_statistics": value_prediction_statistics,
 		"explained_variance": explained_variance,
-		"policy_parameter_delta_rms": _policy_parameter_delta_rms(
+		"policy_parameter_delta_rms": PPOTrainingDiagnostics.parameter_delta_rms(
 			actor_parameters_before,
-			log_standard_deviation_before
+			actor_critic.actor.parameters,
+			log_standard_deviation_before,
+			actor_critic.log_standard_deviation
 		),
 		"feature_audit": feature_audit,
 		"effective_gamma": RLTrainingMath.discount_for_delta(
@@ -1283,123 +1297,6 @@ func _hydrate_deferred_critic_values() -> bool:
 		transition["next_value"] = next_value
 		transition["critic_value_deferred"] = false
 	return true
-
-
-func _calculate_advantages_and_returns() -> Dictionary:
-	var count = rollout.size()
-	if count <= 0:
-		return {}
-	var advantages = PackedFloat64Array()
-	var returns = PackedFloat64Array()
-	var value_predictions = PackedFloat64Array()
-	advantages.resize(count)
-	returns.resize(count)
-	value_predictions.resize(count)
-	advantages.fill(0.0)
-	returns.fill(0.0)
-	value_predictions.fill(0.0)
-	var indices_by_worker: Dictionary[int, Array] = {}
-	for index in range(count):
-		var worker_id = int(rollout[index].get("worker_id", -1))
-		if not indices_by_worker.has(worker_id):
-			indices_by_worker[worker_id] = []
-		(indices_by_worker[worker_id] as Array).append(index)
-	for worker_indices_value: Variant in indices_by_worker.values():
-		var worker_indices: Array = worker_indices_value
-		var next_advantage = 0.0
-		for position in range(worker_indices.size() - 1, -1, -1):
-			var index = int(worker_indices[position])
-			var transition = rollout[index]
-			var terminated = bool(transition.get("terminated", false))
-			var truncated = bool(transition.get("truncated", false))
-			var continuation = 0.0 if terminated or truncated else 1.0
-			var bootstrap = 0.0 if terminated else float(transition.get("next_value", 0.0))
-			var gamma_delta = RLTrainingMath.discount_for_delta(
-				float(config["gamma"]),
-				float(transition.get("delta_seconds", config.get("control_interval_seconds", 0.05))),
-				float(config.get("discount_reference_interval_seconds", 0.05))
-			)
-			var lambda_delta = RLTrainingMath.discount_for_delta(
-				float(config["gae_lambda"]),
-				float(transition.get("delta_seconds", config.get("control_interval_seconds", 0.05))),
-				float(config.get("discount_reference_interval_seconds", 0.05))
-			)
-			var delta = (
-				float(transition.get("reward", 0.0))
-				+ gamma_delta * bootstrap
-				- float(transition.get("value", 0.0))
-			)
-			var advantage = delta + (
-				gamma_delta
-				* lambda_delta
-				* continuation
-				* next_advantage
-			)
-			advantages[index] = advantage
-			returns[index] = advantage + float(transition.get("value", 0.0))
-			value_predictions[index] = float(transition.get("value", 0.0))
-			if (
-				not is_finite(advantages[index])
-				or not is_finite(returns[index])
-				or not is_finite(value_predictions[index])
-			):
-				return {}
-			next_advantage = advantage
-	return {
-		"advantages": advantages,
-		"returns": returns,
-		"value_predictions": value_predictions,
-	}
-
-
-func _rollout_reward_statistics() -> Dictionary:
-	var values: PackedFloat64Array = PackedFloat64Array()
-	values.resize(rollout.size())
-	for index: int in range(rollout.size()):
-		values[index] = RLTrainingMath.finite_float_or(
-			rollout[index].get("reward", 0.0),
-			0.0
-		)
-	var statistics: Dictionary = RLTrainingMath.finite_statistics(values)
-	return {
-		"mean": float(statistics.get("mean", 0.0)),
-		"standard_deviation": float(statistics.get("standard_deviation", 0.0)),
-	}
-
-
-func _policy_parameter_delta_rms(
-	actor_parameters_before: PackedFloat64Array,
-	log_standard_deviation_before: PackedFloat64Array
-) -> float:
-	return PPOTrainingDiagnostics.parameter_delta_rms(
-		actor_parameters_before,
-		actor_critic.actor.parameters,
-		log_standard_deviation_before,
-		actor_critic.log_standard_deviation
-	)
-
-func _normalize(values: PackedFloat64Array) -> void:
-	if values.is_empty():
-		return
-	var mean = 0.0
-	for value in values:
-		mean += value
-	mean /= float(values.size())
-	var variance = 0.0
-	for value in values:
-		variance += pow(value - mean, 2.0)
-	variance /= float(values.size())
-	var deviation = sqrt(variance + 0.00000001)
-	for index in range(values.size()):
-		values[index] = (values[index] - mean) / deviation
-
-
-func _shuffle_indices(indices: Array[int]) -> void:
-	for index in range(indices.size() - 1, 0, -1):
-		var swap_index = shuffle_rng.randi_range(0, index)
-		var temporary = indices[index]
-		indices[index] = indices[swap_index]
-		indices[swap_index] = temporary
 
 
 func _sanitize_config() -> void:

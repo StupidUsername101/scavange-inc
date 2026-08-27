@@ -1,0 +1,9 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/server/server_radio.gd" id="1_radio"]
+
+[node name="ServerRadio" type="RigidBody3D"]
+mass = 2.4
+script = ExtResource("1_radio")
+
+[node name="ItemCollision" type="CollisionShape3D" parent="."]

@@ -1,0 +1,15 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/client/speaker_cluster_demo_proxy.gd" id="1_cluster"]
+[ext_resource type="Script" path="res://scripts/client/speaker_cluster_demo_facility_proxy.gd" id="2_facility"]
+[ext_resource type="Resource" path="res://resources/world/garage_pressure_array.tres" id="3_definition"]
+[ext_resource type="PackedScene" path="res://scenes/shared/garage_speaker_array_emitters.tscn" id="4_emitters"]
+
+[node name="SpeakerClusterDemo" type="Node3D"]
+script = ExtResource("1_cluster")
+array_definition = ExtResource("3_definition")
+
+[node name="Facility" type="Node3D" parent="."]
+script = ExtResource("2_facility")
+
+[node name="Emitters" parent="." instance=ExtResource("4_emitters")]

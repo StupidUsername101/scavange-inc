@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://k5t2p6gti4kh"
+path="res://.godot/imported/Im Wald, Im Grünen Walde + Lyrics.mp3-814c61b3ebf5ebf33529fd7a5141fb8e.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Im Wald, Im Grünen Walde + Lyrics.mp3"
+dest_files=["res://.godot/imported/Im Wald, Im Grünen Walde + Lyrics.mp3-814c61b3ebf5ebf33529fd7a5141fb8e.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

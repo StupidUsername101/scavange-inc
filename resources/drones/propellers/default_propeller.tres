@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="DronePropellerDefinition" format=3 uid="uid://cd12pqwk7j3hq"]
+
+[ext_resource type="Script" uid="uid://dd4ovcax8ndar" path="res://scripts/drones/drone_propeller_definition.gd" id="1_propeller"]
+
+[resource]
+script = ExtResource("1_propeller")
+max_power_draw = 42.0
+aerodynamic_efficiency = 0.78
+display_name = "Light Utility Propeller"
+visual_color = Color(0.84, 0.58, 0.12, 1)
+mass = 0.15

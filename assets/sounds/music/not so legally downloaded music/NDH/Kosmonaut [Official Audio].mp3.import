@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://bxp3y061ty7d5"
+path="res://.godot/imported/Kosmonaut [Official Audio].mp3-581a78aa11077ca3869a4b1c40180e12.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/NDH/Kosmonaut [Official Audio].mp3"
+dest_files=["res://.godot/imported/Kosmonaut [Official Audio].mp3-581a78aa11077ca3869a4b1c40180e12.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

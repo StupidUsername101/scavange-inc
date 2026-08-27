@@ -14,7 +14,9 @@ var dark_material: StandardMaterial3D
 func _ready() -> void:
 	steel_material = VisualMaterialFactory.standard(Color(0.18, 0.2, 0.22, 1.0), 0.72, 0.42)
 	dark_material = VisualMaterialFactory.standard(Color(0.045, 0.052, 0.06, 1.0), 0.45, 0.62)
-	_build_warehouse(CATALOG.build_layout())
+	# The authoritative server replicates finalized chips as parts with public snapshots. Do not
+	# let an unrelated client-side user:// model folder add different decorative warehouse slots.
+	_build_warehouse(CATALOG.build_layout(false, false))
 
 
 func _build_warehouse(layout: Dictionary) -> void:

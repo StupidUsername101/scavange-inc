@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://pu5dqcmhbc00"
+path="res://.godot/imported/Wir sind des Geyers schwarzer Haufen.mp3-46600aa96ec973b40cdeb6b0d4619458.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vorwärts/Wir sind des Geyers schwarzer Haufen.mp3"
+dest_files=["res://.godot/imported/Wir sind des Geyers schwarzer Haufen.mp3-46600aa96ec973b40cdeb6b0d4619458.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

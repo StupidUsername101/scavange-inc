@@ -3,6 +3,7 @@ extends RigidBody3D
 class_name ServerItem
 
 const PREVIEW_NODE_NAME := "ItemVisualPreview"
+const PHYSICAL_SURFACE := preload("res://scripts/audio/physical_surface.gd")
 
 #######################################################
 # Owns authoritative item simulation and exposes the state required for replication and
@@ -77,6 +78,8 @@ func _rebuild_from_definition() -> void:
 		collision.shape = null
 		set_meta("grip_surface_disabled", true)
 		remove_meta("grip_surface_tags")
+		remove_meta(PHYSICAL_SURFACE.META)
+		remove_meta(PHYSICAL_SURFACE.LEGACY_FOOTSTEP_META)
 		return
 
 	set_meta("grip_surface_disabled", not definition.grippable)
@@ -85,6 +88,7 @@ func _rebuild_from_definition() -> void:
 	else:
 		remove_meta("grip_surface_tags")
 	mass = definition.get_instance_mass(instance_state)
+	PHYSICAL_SURFACE.apply_to(self, definition.physical_surface)
 	definition.apply_to_collision(collision)
 
 	if Engine.is_editor_hint():
@@ -99,6 +103,12 @@ func get_item_definition() -> ItemDefinition:
 
 func get_inspectable_definition() -> Resource:
 	return definition
+
+
+func get_default_grab_basis() -> Basis:
+	if definition == null:
+		return Basis.IDENTITY
+	return definition.get_default_grab_basis()
 
 
 func serialize_instance_state() -> Dictionary:

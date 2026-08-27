@@ -1,0 +1,33 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/audio/speaker_array_emitter_3d.gd" id="1_emitter"]
+
+[node name="Emitters" type="Node3D"]
+
+[node name="SpeakerBackLeft" type="Marker3D" parent="."]
+position = Vector3(-5.6, 3.55, 6.63)
+rotation = Vector3(0, 3.1415927, 0)
+script = ExtResource("1_emitter")
+sort_order = 0
+
+[node name="SpeakerRightInterior" type="Marker3D" parent="."]
+position = Vector3(8.63, 2.65, -0.6)
+rotation = Vector3(0, -1.5707964, 0)
+script = ExtResource("1_emitter")
+sort_order = 1
+
+[node name="SpeakerEntranceExterior" type="Marker3D" parent="."]
+position = Vector3(-2.2, 4.35, -7.25)
+rotation = Vector3(0, 3.1415927, 0)
+script = ExtResource("1_emitter")
+sort_order = 2
+is_indoor = false
+installation_gain_db = 6.0
+
+[node name="SpeakerRearExterior" type="Marker3D" parent="."]
+position = Vector3(9.22, 3.05, 3.65)
+rotation = Vector3(0, 1.5707964, 0)
+script = ExtResource("1_emitter")
+sort_order = 3
+is_indoor = false
+installation_gain_db = 6.0

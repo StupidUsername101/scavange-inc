@@ -329,8 +329,9 @@ func _calculate_attitude_state(
 		desired_horizontal_acceleration.z
 	)
 	var desired_up := desired_force_direction.normalized()
-	var current_up := host.global_basis.y.normalized()
-	var uprightness := current_up.dot(Vector3.UP)
+	var model_basis_world: Basis = host.model_orientation_basis_world()
+	var current_up: Vector3 = model_basis_world.y.normalized()
+	var uprightness: float = current_up.dot(Vector3.UP)
 	if (
 		ground_clearance < CRITICAL_GROUND_CLEARANCE
 		and uprightness < GROUND_UPRIGHT_OVERRIDE_DOT

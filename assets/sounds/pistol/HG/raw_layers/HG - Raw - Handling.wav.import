@@ -1,0 +1,24 @@
+[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+uid="uid://bi405slvcd7q0"
+path="res://.godot/imported/HG - Raw - Handling.wav-22729dcb026143d96ab4465e57cba43e.sample"
+
+[deps]
+
+source_file="res://assets/sounds/pistol/HG/HG - Raw - Handling.wav"
+dest_files=["res://.godot/imported/HG - Raw - Handling.wav-22729dcb026143d96ab4465e57cba43e.sample"]
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2

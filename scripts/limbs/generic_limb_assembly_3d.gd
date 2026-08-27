@@ -190,11 +190,16 @@ func state_snapshot() -> Dictionary:
 		if not is_instance_valid(limb):
 			continue
 		limb_states.append(GenericLimbStateSnapshot.limb_state(limb))
+	var host_transform: Transform3D = Transform3D.IDENTITY
+	if is_instance_valid(host_body):
+		host_transform = (
+			host_body.call("model_transform_world") as Transform3D
+			if host_body.has_method("model_transform_world")
+			else host_body.global_transform
+		)
 	return {
 		"host_instance_id": host_body.get_instance_id() if is_instance_valid(host_body) else 0,
-		"host_transform_world": (
-			host_body.global_transform if is_instance_valid(host_body) else Transform3D.IDENTITY
-		),
+		"host_transform_world": host_transform,
 		"host_linear_velocity_world": (
 			host_body.linear_velocity if is_instance_valid(host_body) else Vector3.ZERO
 		),

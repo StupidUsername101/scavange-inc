@@ -142,12 +142,16 @@ func _apply_propeller_state(
 		state.get("propeller_definition_paths", []),
 		false
 	)
-	propeller_slot_transforms.clear()
 	var mount_values: Array = SafeVariant.array_copy(
 		state.get("propeller_slot_transforms", []),
 		false
 	)
-	for slot_index: int in range(mini(mount_values.size(), propeller_visuals.size())):
+	_ensure_propeller_visual_capacity(maxi(
+		presence.size(),
+		maxi(definition_paths.size(), mount_values.size())
+	))
+	propeller_slot_transforms.clear()
+	for slot_index: int in range(mount_values.size()):
 		var fallback_transform: Transform3D = Transform3D(
 			Basis.IDENTITY,
 			SLOT_LAYOUT.get_propeller_position(slot_index, current_core_size)
@@ -180,6 +184,30 @@ func _apply_propeller_state(
 		)
 
 
+func _ensure_propeller_visual_capacity(required_count: int) -> void:
+	if required_count <= propeller_visuals.size() or propeller_visuals.is_empty():
+		return
+	var propeller_root: Node3D = $Propellers
+	var guide_root: Node3D = $EditGuides
+	var visual_template: Node3D = propeller_visuals[0]
+	var guide_template: MeshInstance3D = propeller_guides[0]
+	while propeller_visuals.size() < required_count:
+		var slot_index: int = propeller_visuals.size()
+		var visual: Node3D = visual_template.duplicate() as Node3D
+		var guide: MeshInstance3D = guide_template.duplicate() as MeshInstance3D
+		if visual == null or guide == null:
+			return
+		visual.name = "CreatorPropeller%d" % slot_index
+		visual.visible = false
+		propeller_root.add_child(visual)
+		guide.name = "Propeller%dGuide" % slot_index
+		guide.visible = false
+		guide_root.add_child(guide)
+		propeller_visuals.append(visual)
+		propeller_guides.append(guide)
+		propeller_definition_paths.append("")
+
+
 func _apply_ai_chip_state(
 	state: Dictionary,
 	edit_preview: bool
@@ -192,6 +220,10 @@ func _apply_ai_chip_state(
 		state.get("ai_chip_definition_paths", []),
 		false
 	)
+	var ai_snapshots: Array = SafeVariant.array_copy(
+		state.get("ai_chip_definition_snapshots", []),
+		false
+	)
 	for slot_index in range(ai_chip_visuals.size()):
 		var chip_path := (
 			str(ai_paths[slot_index])
@@ -202,7 +234,10 @@ func _apply_ai_chip_state(
 			ai_chip_visuals[slot_index],
 			ai_chip_definition_paths,
 			slot_index,
-			chip_path
+			chip_path,
+			SafeVariant.dictionary_copy(
+				ai_snapshots[slot_index] if slot_index < ai_snapshots.size() else {}
+			)
 		)
 		var chip_supported := slot_index < ai_chip_slot_count
 		ai_chip_visuals[slot_index].visible = (
@@ -305,7 +340,7 @@ func _update_propeller_visuals(delta: float) -> void:
 		MAXIMUM_VISUAL_POWER_RATIO
 	))
 	for slot_index in range(propeller_visuals.size()):
-		var spin_direction := 1.0 if slot_index in [0, 3] else -1.0
+		var spin_direction := 1.0 if posmod(slot_index, 4) in [0, 3] else -1.0
 		propeller_visuals[slot_index].rotate_y(
 			speed * spin_direction * delta
 		)
@@ -373,7 +408,8 @@ func _apply_dynamic_part_definition(
 	container: Node3D,
 	path_cache: Array[String],
 	slot_index: int,
-	path: String
+	path: String,
+	public_snapshot: Dictionary = {}
 ) -> void:
 	if slot_index < 0 or slot_index >= path_cache.size():
 		return
@@ -384,7 +420,13 @@ func _apply_dynamic_part_definition(
 	path_cache[slot_index] = path
 	if path.is_empty():
 		return
-	var definition := load(path) as DronePartDefinition
+	var definition: DronePartDefinition = (
+		FinalizedMLChipStore.chip_from_public_snapshot(public_snapshot)
+		if not public_snapshot.is_empty()
+		else null
+	)
+	if definition == null and ResourceLoader.exists(path):
+		definition = ResourceLoader.load(path) as DronePartDefinition
 	if definition == null:
 		return
 	container.add_child(PART_GEOMETRY.create_visual(definition))

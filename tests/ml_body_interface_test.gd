@@ -18,6 +18,7 @@ func _init() -> void:
 	_test_regular_articulated_drone_limb()
 	_test_creator_attachment_catalog_exposes_real_model_channels()
 	_test_creator_limb_neutral_pose_matches_walker_character()
+	_test_drone_core_model_frame()
 	_test_arbitrary_generic_limb_topology()
 	_test_creator_limb_editor_mutates_generic_runtime_parts()
 	_test_existing_limb_mapping_order()
@@ -134,17 +135,21 @@ func _test_creator_presets_are_editable_templates() -> void:
 	for record: Dictionary in records:
 		ids.append(str(record.get("preset_id", "")))
 	_expect(
-		records.size() == 3
+		records.size() == 5
 		and ids.has(str(MLBodyPresetLibrary.DRONE_QUAD))
+		and ids.has(str(MLBodyPresetLibrary.DRONE_HEX))
 		and not ids.has(str(MLBodyPresetLibrary.DRONE_QUAD_GRABBER))
+		and ids.has(str(MLBodyPresetLibrary.TINY_HUMANOID))
 		and ids.has(str(MLBodyPresetLibrary.FOUR_LIMB_WALKER))
 		and ids.has(str(MLBodyPresetLibrary.STATIONARY_TURRET)),
-		"creator exposes one drone body family; the articulated arm is selectable hardware rather than a second drone preset"
+		"creator library exposes the four worker starts plus the existing stationary turret adapter"
 	)
 
 	for preset_id: StringName in [
 		MLBodyPresetLibrary.DRONE_QUAD,
+		MLBodyPresetLibrary.DRONE_HEX,
 		MLBodyPresetLibrary.DRONE_QUAD_GRABBER,
+		MLBodyPresetLibrary.TINY_HUMANOID,
 		MLBodyPresetLibrary.FOUR_LIMB_WALKER,
 		MLBodyPresetLibrary.STATIONARY_TURRET,
 	]:
@@ -474,7 +479,9 @@ func _test_creator_presets_are_editable_templates() -> void:
 func _test_creator_runtime_bridge() -> void:
 	for preset_id: StringName in [
 		MLBodyPresetLibrary.DRONE_QUAD,
+		MLBodyPresetLibrary.DRONE_HEX,
 		MLBodyPresetLibrary.DRONE_QUAD_GRABBER,
+		MLBodyPresetLibrary.TINY_HUMANOID,
 		MLBodyPresetLibrary.FOUR_LIMB_WALKER,
 		MLBodyPresetLibrary.STATIONARY_TURRET,
 	]:
@@ -1028,6 +1035,37 @@ func _test_creator_limb_editor_mutates_generic_runtime_parts() -> void:
 		and is_equal_approx(edited_limb.segments[4].mass, 0.90),
 		"each creator-authored limb segment keeps independent length, radius and mass"
 	)
+	var rotation_delta: Basis = Basis(Vector3.BACK, deg_to_rad(37.0))
+	var rotated_directions: Array = []
+	var rotated_joint_bases: Array = []
+	for segment: LimbSegmentDefinition in edited_limb.segments:
+		rotated_directions.append((rotation_delta * segment.rest_direction_local).normalized())
+		rotated_joint_bases.append((rotation_delta * segment.joint.joint_basis_local).orthonormalized())
+	var pose_error: String = MLBodyLimbEditor.set_joint_subtree_pose(
+		edited,
+		0,
+		0,
+		rotated_directions,
+		rotated_joint_bases
+	)
+	var mounted_after_edit: Array[GenericLimbDefinition] = edited.mounted_limb_definitions(
+		Transform3D(Basis.IDENTITY, Vector3.RIGHT)
+	)
+	var mounted_keeps_pose: bool = mounted_after_edit.size() == 1
+	if mounted_keeps_pose:
+		for segment_index: int in range(edited_limb.segments.size()):
+			mounted_keeps_pose = (
+				mounted_keeps_pose
+				and mounted_after_edit[0].segments[segment_index].rest_direction_local.is_equal_approx(
+					edited_limb.segments[segment_index].rest_direction_local
+				)
+			)
+	_expect(
+		pose_error.is_empty()
+		and not edited.mount_adaptive_neutral_pose
+		and mounted_keeps_pose,
+		"rotating a creator joint persists every child pose and disables the automatic insect stance"
+	)
 	var templates: Array[LimbEndEffectorDefinition] = MLBodyLimbEditor.end_effector_templates()
 	var plain_foot: LimbEndEffectorDefinition = null
 	var controlled_grip: LimbEndEffectorDefinition = null
@@ -1052,6 +1090,33 @@ func _test_creator_limb_editor_mutates_generic_runtime_parts() -> void:
 		and edited_limb.end_effector.effector_type_id == &"generic_grip"
 		and grip_control_count == foot_control_count + 1,
 		"foot-end attachment templates switch real terminal hardware and rebuild the model control topology"
+	)
+
+
+func _test_drone_core_model_frame() -> void:
+	var core: DroneCoreDefinition = DroneCoreDefinition.new()
+	var forward_accepted: bool = core.set_model_forward(Vector3.RIGHT)
+	var up_accepted: bool = core.set_model_up(Vector3.BACK)
+	var orientation: Basis = core.model_orientation_basis_local()
+	_expect(
+		forward_accepted
+		and up_accepted
+		and (-orientation.z).is_equal_approx(Vector3.RIGHT)
+		and orientation.y.is_equal_approx(Vector3.BACK)
+		and is_equal_approx(orientation.determinant(), 1.0),
+		"a drone Core stores a stable orthonormal worker forward/up frame"
+	)
+	var loadout: DroneLoadout = DroneLoadout.new()
+	core.propeller_slot_count = 1
+	core.set_model_orientation(Vector3.FORWARD, Vector3.RIGHT)
+	loadout.install_core(core)
+	loadout.set_propeller_slot_transform(
+		0,
+		Transform3D(Basis(Vector3.BACK, Vector3.RIGHT, Vector3.UP), Vector3.ZERO)
+	)
+	_expect(
+		is_equal_approx(DroneTrainingLoadoutConfig._propeller_up_component(loadout, 0), 1.0),
+		"training readiness evaluates propeller lift in the authored worker frame"
 	)
 
 

@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://dar2hsb7wk8vc"
+path="res://.godot/imported/Droge_Musik.mp3-553174996845e5d252bd4be9f5642546.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Nachtmahr/Droge_Musik.mp3"
+dest_files=["res://.godot/imported/Droge_Musik.mp3-553174996845e5d252bd4be9f5642546.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

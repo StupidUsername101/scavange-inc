@@ -14,14 +14,25 @@ extends Control
 @onready var training_room_button: Button = (
 	$MarginContainer/MarginContainer/VSplitContainer/TrainingRoomButton
 )
+@onready var level_editor_button: Button = (
+	$MarginContainer/MarginContainer/VSplitContainer/LevelEditorButton
+)
+@onready var exit_button: Button = (
+	$MarginContainer/MarginContainer/VSplitContainer/ExitButton
+)
 @onready var status_label: Label = (
 	$MarginContainer/MarginContainer/VSplitContainer/StatusLabel
 )
 
 func _ready() -> void:
+	# Own the cursor state at the UI boundary as well as in SceneController so
+	# cold starts and direct scene changes cannot inherit gameplay capture.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	host_button.pressed.connect(_on_host_pressed)
 	browser_button.pressed.connect(_on_browser_pressed)
 	training_room_button.pressed.connect(_on_training_room_pressed)
+	level_editor_button.pressed.connect(_on_level_editor_pressed)
+	exit_button.pressed.connect(_on_exit_pressed)
 	Server.lobby_status_changed.connect(_on_lobby_status_changed)
 
 
@@ -45,8 +56,16 @@ func _on_training_room_pressed() -> void:
 	SceneController.open_ml_training_room()
 
 
+func _on_level_editor_pressed() -> void:
+	SceneController.open_level_editor()
+
+
+func _on_exit_pressed() -> void:
+	get_tree().quit()
+
+
 func _on_lobby_status_changed(message: String, is_error: bool) -> void:
 	status_label.text = message
-	if is_error:
+	if is_error or Server.is_lobby_idle():
 		host_button.disabled = false
 		browser_button.disabled = false

@@ -4,7 +4,7 @@ const PLAYER_SCENE := preload("res://scenes/server/server_player.tscn")
 const SHOP_LAYOUT := preload(
 	"res://scripts/characters/body_part_shop_layout.gd"
 )
-const REQUIRED_LIMB_PATHS := PackedStringArray([
+static var REQUIRED_LIMB_PATHS := PackedStringArray([
 	"res://resources/limbs/human_left_arm.tres",
 	"res://resources/limbs/human_right_arm.tres",
 	"res://resources/limbs/human_left_leg.tres",
@@ -105,11 +105,20 @@ func _test_catalog_contract() -> void:
 
 
 func _test_authoritative_order_queue() -> void:
-	var player_id := GameState.try_register_player(
+	var game_state: Variant = root.get_node_or_null("GameState")
+	var server: Variant = root.get_node_or_null("Server")
+	_expect(
+		game_state != null and server != null,
+		"authoritative shop services are available"
+	)
+	if game_state == null or server == null:
+		return
+	var player_id := int(game_state.call(
+		"try_register_player",
 		TEST_PEER_ID,
 		1000,
 		4
-	)
+	))
 	_expect(player_id > 0, "the test player registers with starting credit")
 	if player_id <= 0:
 		return
@@ -117,7 +126,8 @@ func _test_authoritative_order_queue() -> void:
 	var player := PLAYER_SCENE.instantiate() as ServerPlayer
 	root.add_child(player)
 	player.setup(player_id, Vector3.ZERO)
-	Server.server_players_by_player_id[player_id] = player
+	var server_players: Dictionary = server.get("server_players_by_player_id")
+	server_players[player_id] = player
 
 	var limbs := BodyPartShopCatalog.load_buyable_limbs()
 	var limb: LimbDefinition = (
@@ -125,17 +135,23 @@ func _test_authoritative_order_queue() -> void:
 	)
 	_expect(limb != null, "a catalog limb is available for ordering")
 	if limb != null:
-		var credit_before := GameState.get_player_money(player_id)
-		var order_count_before := Server.body_part_delivery_orders.size()
-		var result := Server.schedule_body_part_order(player_id, limb, 2)
+		var credit_before := int(game_state.call("get_player_money", player_id))
+		var delivery_orders: Array = server.get("body_part_delivery_orders")
+		var order_count_before := delivery_orders.size()
+		var result: Dictionary = server.call(
+			"schedule_body_part_order",
+			player_id,
+			limb,
+			2
+		)
 		_expect(bool(result.get("success", false)), "a valid order succeeds")
 		_expect(
-			GameState.get_player_money(player_id)
+			int(game_state.call("get_player_money", player_id))
 				== credit_before - limb.shop_price,
 			"the authoritative balance pays the exact catalog price"
 		)
 		_expect(
-			Server.body_part_delivery_orders.size()
+			delivery_orders.size()
 				== order_count_before + 1,
 			"a successful purchase appends one delivery order"
 		)
@@ -147,13 +163,15 @@ func _test_authoritative_order_queue() -> void:
 			"the order retains its player, payload and scheduled state"
 		)
 		_expect(
-			Server.mark_body_part_order_delivered(
+			bool(server.call(
+				"mark_body_part_order_delivered",
 				int(order.get("order_id", -1))
-			),
+			)),
 			"the queue exposes the future delivery completion transition"
 		)
 
-	var invalid_result := Server.schedule_body_part_order(
+	var invalid_result: Dictionary = server.call(
+		"schedule_body_part_order",
 		player_id + 5000,
 		limb,
 		2
@@ -163,8 +181,8 @@ func _test_authoritative_order_queue() -> void:
 		"an order without an authoritative player is rejected"
 	)
 
-	Server.server_players_by_player_id.erase(player_id)
-	GameState.unregister_peer(TEST_PEER_ID)
+	server_players.erase(player_id)
+	game_state.call("unregister_peer", TEST_PEER_ID)
 	player.free()
 
 
@@ -205,11 +223,14 @@ func _test_terminal_wiring() -> void:
 		"res://scripts/client/body_part_shop_terminal_view.gd"
 	)
 	_expect(
-		proxy_source.contains("\"set_aim_indicator\"")
+		proxy_source.contains("TerminalAimIndicator.update(")
+		and view_source.contains(
+			"res://scripts/client/inspection_terminal_view.gd"
+		)
 		and view_source.contains(
 			"res://scripts/characters/body_part_shop_layout.gd"
 		),
-		"the flat shop menu retains the scanner cursor indicator"
+		"the flat shop menu retains the shared scanner cursor projection and ring"
 	)
 	_expect(
 		view_source.contains("\"Scav. Inc.\"")

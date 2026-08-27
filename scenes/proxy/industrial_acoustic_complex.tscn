@@ -1,0 +1,14 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/client/industrial_acoustic_complex_proxy.gd" id="1_complex"]
+[ext_resource type="PackedScene" path="res://scenes/proxy/large_bunker_speaker_cluster.tscn" id="2_large_array"]
+[ext_resource type="Resource" path="res://resources/world/valve_reference_bunker_array.tres" id="3_valve_array"]
+
+[node name="IndustrialAcousticComplex" type="Node3D"]
+script = ExtResource("1_complex")
+
+[node name="LargeBunkerSpeakerArray" parent="." instance=ExtResource("2_large_array")]
+
+[node name="ValveReferenceBunkerSpeakerArray" parent="." instance=ExtResource("2_large_array")]
+position = Vector3(0, 0, -48)
+array_definition = ExtResource("3_valve_array")

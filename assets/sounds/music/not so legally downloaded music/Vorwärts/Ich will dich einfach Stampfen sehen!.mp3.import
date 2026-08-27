@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://bx0cx1i8aj4sf"
+path="res://.godot/imported/Ich will dich einfach Stampfen sehen!.mp3-c86188f2b38aceefe09452854114b0bf.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vorwärts/Ich will dich einfach Stampfen sehen!.mp3"
+dest_files=["res://.godot/imported/Ich will dich einfach Stampfen sehen!.mp3-c86188f2b38aceefe09452854114b0bf.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

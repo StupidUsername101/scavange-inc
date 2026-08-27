@@ -12,6 +12,14 @@ extends StaticBody3D
 func server_use(player: ServerPlayer, _hit: Dictionary) -> void:
 	var station := get_node_or_null(station_path)
 	if station != null and station.has_method("handle_button"):
+		Server.emit_spatial_sound(
+			&"industrial_button",
+			global_position,
+			18.0,
+			0.0,
+			null,
+			0.4
+		)
 		station.call("handle_button", action, player)
 
 

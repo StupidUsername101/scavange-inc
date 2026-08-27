@@ -207,7 +207,7 @@ func _test_static_strength_budget(definition: FourLimbBodyDefinition, total_mass
 	var worst_required_torque := 0.0
 	var worst_locked_axis_share := 0.0
 	for limb: FourLimbSlotDefinition in definition.limbs:
-		var points := EnemyGaitPlanner.solve_two_bone(
+		var points := LimbKinematics.solve_two_bone(
 			limb.hip_offset,
 			limb.rest_foot_offset,
 			limb.upper_length,
@@ -278,9 +278,9 @@ func _minimum_outward_ratio(
 ) -> float:
 	var result := INF
 	for limb_index in range(FourLimbBodyDefinition.LIMB_SLOT_COUNT):
-		var limb := definition.limbs[limb_index]
+		var limb: FourLimbSlotDefinition = definition.limbs[limb_index]
 		var limb_state := body.physical_rig.limb_snapshot(limb_index)
-		var authored_outward := limb.rest_foot_offset - limb.hip_offset
+		var authored_outward: Vector3 = limb.rest_foot_offset - limb.hip_offset
 		authored_outward.y = 0.0
 		var current_outward: Vector3 = (
 			limb_state.get("foot_position_local", Vector3.ZERO) - limb.hip_offset

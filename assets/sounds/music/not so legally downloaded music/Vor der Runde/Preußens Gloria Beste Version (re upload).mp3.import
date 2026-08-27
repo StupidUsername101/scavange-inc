@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://ct5hton40vyv8"
+path="res://.godot/imported/Preußens Gloria Beste Version (re upload).mp3-614275fdcba3f3adaf6591a7801eac9a.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Preußens Gloria Beste Version (re upload).mp3"
+dest_files=["res://.godot/imported/Preußens Gloria Beste Version (re upload).mp3-614275fdcba3f3adaf6591a7801eac9a.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

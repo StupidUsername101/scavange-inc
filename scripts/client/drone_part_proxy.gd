@@ -34,7 +34,8 @@ func apply_server_state(state: Dictionary) -> void:
 	broken = SafeVariant.strict_bool_or(state.get("broken", false), false)
 	_apply_definition(
 		str(state.get("definition_path", "")),
-		was_broken and not broken
+		was_broken and not broken,
+		SafeVariant.dictionary_copy(state.get("definition_snapshot", {}))
 	)
 	_apply_broken_visual()
 	WarehouseNameLabel.set_display_name(
@@ -55,11 +56,24 @@ func apply_server_state(state: Dictionary) -> void:
 	time_since_last_state = 0.0
 
 
-func _apply_definition(new_path: String, force_rebuild: bool = false) -> void:
+func _apply_definition(
+	new_path: String,
+	force_rebuild: bool = false,
+	public_snapshot: Dictionary = {}
+) -> void:
 	if new_path.is_empty() or (new_path == definition_path and not force_rebuild):
 		return
 
-	var resource := load(new_path) as DronePartDefinition
+	# A user:// path names the server's artifact, not the remote client's unrelated user data.
+	# Prefer the replicated public identity whenever it is present and never resolve that path
+	# against the client's local finalized-model folder.
+	var resource: DronePartDefinition = (
+		FinalizedMLChipStore.chip_from_public_snapshot(public_snapshot)
+		if not public_snapshot.is_empty()
+		else null
+	)
+	if resource == null and ResourceLoader.exists(new_path):
+		resource = ResourceLoader.load(new_path) as DronePartDefinition
 	if resource == null:
 		push_error("Invalid drone part definition: %s" % new_path)
 		return

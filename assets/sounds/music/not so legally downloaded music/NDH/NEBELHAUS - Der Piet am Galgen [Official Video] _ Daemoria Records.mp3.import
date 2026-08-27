@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://dd5o67n00ixxf"
+path="res://.godot/imported/NEBELHAUS - Der Piet am Galgen [Official Video] _ Daemoria Records.mp3-e68628a28844d4f31c59ac5602007382.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/NDH/NEBELHAUS - Der Piet am Galgen [Official Video] _ Daemoria Records.mp3"
+dest_files=["res://.godot/imported/NEBELHAUS - Der Piet am Galgen [Official Video] _ Daemoria Records.mp3-e68628a28844d4f31c59ac5602007382.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

@@ -64,7 +64,7 @@ static func sample(
 	if not is_instance_valid(drone) or space_state == null:
 		return clear_probe()
 	var origin := drone.global_position
-	var inverse_basis := drone.global_basis.inverse()
+	var inverse_basis := _model_basis_world(drone).transposed()
 	var query := PhysicsRayQueryParameters3D.new()
 	query.collision_mask = collision_mask
 	query.exclude = [drone.get_rid()]
@@ -395,7 +395,7 @@ static func refresh_motion(drone: ServerDrone, cached_probe: Dictionary) -> Dict
 			Vector3.ZERO
 		)
 		nearest_world_direction = (
-			(drone.global_basis * nearest_local_direction).normalized()
+			(_model_basis_world(drone) * nearest_local_direction).normalized()
 			if nearest_local_direction.length_squared() > 0.0
 			else Vector3.ZERO
 		)
@@ -404,7 +404,7 @@ static func refresh_motion(drone: ServerDrone, cached_probe: Dictionary) -> Dict
 	# appear in its local observation on every control step.
 	cached_probe["nearest_direction_world"] = nearest_world_direction
 	cached_probe["nearest_direction_local"] = (
-		(drone.global_basis.inverse() * nearest_world_direction).normalized()
+		(_model_basis_world(drone).transposed() * nearest_world_direction).normalized()
 		if nearest_world_direction.length_squared() > MINIMUM_DIRECTION_LENGTH_SQUARED
 		else Vector3.ZERO
 	)
@@ -529,7 +529,7 @@ static func _yaw_aligned_world_direction(
 	# Sector bearings must follow heading only. Applying the full tilted body basis would skew
 	# the horizontal fan whenever the drone rolls or pitches, making the same corridor produce
 	# different inputs during an evasive manoeuvre.
-	var forward = _horizontal_direction(-drone.global_basis.z)
+	var forward = _horizontal_direction(-_model_basis_world(drone).z)
 	if forward.length_squared() <= MINIMUM_DIRECTION_LENGTH_SQUARED:
 		forward = Vector3.FORWARD
 	var right = forward.cross(Vector3.UP).normalized()
@@ -595,7 +595,7 @@ static func _world_direction_to_yaw_local(
 	var horizontal = _horizontal_direction(world_direction)
 	if horizontal.length_squared() <= MINIMUM_DIRECTION_LENGTH_SQUARED:
 		return Vector3.ZERO
-	var forward = _horizontal_direction(-drone.global_basis.z)
+	var forward = _horizontal_direction(-_model_basis_world(drone).z)
 	if forward.length_squared() <= MINIMUM_DIRECTION_LENGTH_SQUARED:
 		forward = Vector3.FORWARD
 	var right = forward.cross(Vector3.UP).normalized()
@@ -604,6 +604,14 @@ static func _world_direction_to_yaw_local(
 		0.0,
 		-horizontal.dot(forward)
 	).normalized()
+
+
+static func _model_basis_world(drone: ServerDrone) -> Basis:
+	return (
+		drone.model_orientation_basis_world()
+		if is_instance_valid(drone)
+		else Basis.IDENTITY
+	)
 
 
 static func _set_contact_sector_zero(

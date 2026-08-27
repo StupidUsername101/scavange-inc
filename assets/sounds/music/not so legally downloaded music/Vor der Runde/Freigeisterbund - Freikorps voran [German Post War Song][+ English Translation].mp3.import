@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://dtl3ff1uhs3c2"
+path="res://.godot/imported/Freigeisterbund - Freikorps voran [German Post War Song][+ English Translation].mp3-3825d8b9caa25d77fe846ebca6703f70.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Freigeisterbund - Freikorps voran [German Post War Song][+ English Translation].mp3"
+dest_files=["res://.godot/imported/Freigeisterbund - Freikorps voran [German Post War Song][+ English Translation].mp3-3825d8b9caa25d77fe846ebca6703f70.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

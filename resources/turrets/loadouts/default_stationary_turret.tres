@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="TurretLoadout" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/turrets/turret_loadout.gd" id="1"]
+[ext_resource type="Resource" path="res://resources/turrets/bases/training_servo_base.tres" id="2"]
+[ext_resource type="Resource" path="res://resources/turrets/guns/training_autocannon.tres" id="3"]
+
+[resource]
+script = ExtResource("1")
+base = ExtResource("2")
+gun = ExtResource("3")

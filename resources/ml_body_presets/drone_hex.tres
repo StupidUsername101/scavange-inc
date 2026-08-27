@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="DroneLoadout" load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_loadout.gd" id="1_loadout"]
+[ext_resource type="Script" path="res://scripts/drones/drone_propeller_definition.gd" id="2_propeller_type"]
+[ext_resource type="Resource" path="res://resources/drones/cores/hex_training_core.tres" id="3_core"]
+[ext_resource type="Resource" path="res://resources/drones/propellers/standard_propeller.tres" id="4_propeller"]
+[ext_resource type="Resource" path="res://resources/drones/batteries/standard_battery.tres" id="5_battery"]
+
+[resource]
+script = ExtResource("1_loadout")
+core = ExtResource("3_core")
+battery = ExtResource("5_battery")
+propellers = Array[ExtResource("2_propeller_type")]([ExtResource("4_propeller"), ExtResource("4_propeller"), ExtResource("4_propeller"), ExtResource("4_propeller"), ExtResource("4_propeller"), ExtResource("4_propeller")])
+propeller_slot_transforms = Array[Transform3D]([Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.48, 0.18, -0.3), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.18, -0.55), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.48, 0.18, -0.3), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.48, 0.18, 0.3), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.18, 0.55), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.48, 0.18, 0.3)])

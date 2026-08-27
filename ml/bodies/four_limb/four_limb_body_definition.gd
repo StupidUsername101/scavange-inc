@@ -155,7 +155,7 @@ func _rest_support_horizontal_extent(limb: FourLimbSlotDefinition) -> float:
 
 
 func _rest_lower_segment_basis(limb: FourLimbSlotDefinition) -> Basis:
-	var points := EnemyGaitPlanner.solve_two_bone(
+	var points := LimbKinematics.solve_two_bone(
 		limb.hip_offset,
 		limb.rest_foot_offset,
 		limb.upper_length,

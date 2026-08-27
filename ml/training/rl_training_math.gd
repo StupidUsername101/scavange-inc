@@ -129,6 +129,158 @@ static func finite_statistics(values: PackedFloat64Array) -> Dictionary:
 	}
 
 
+static func finite_transition_statistics(
+	transitions: Array[Dictionary],
+	field: String,
+	fallback: float = NAN
+) -> Dictionary:
+	var count = 0
+	var total = 0.0
+	var minimum = INF
+	var maximum = -INF
+	for transition: Dictionary in transitions:
+		var value = finite_float_or(transition.get(field), fallback)
+		if not is_finite(value):
+			continue
+		count += 1
+		total += value
+		minimum = minf(minimum, value)
+		maximum = maxf(maximum, value)
+	if count <= 0:
+		return {
+			"count": 0,
+			"mean": 0.0,
+			"standard_deviation": 0.0,
+			"minimum": 0.0,
+			"maximum": 0.0,
+			"non_finite_count": transitions.size(),
+		}
+	var mean = total / float(count)
+	var variance = 0.0
+	for transition: Dictionary in transitions:
+		var value = finite_float_or(transition.get(field), fallback)
+		if is_finite(value):
+			var difference = value - mean
+			variance += difference * difference
+	variance /= float(count)
+	return {
+		"count": count,
+		"mean": mean,
+		"standard_deviation": sqrt(maxf(variance, 0.0)),
+		"minimum": minimum,
+		"maximum": maximum,
+		"non_finite_count": transitions.size() - count,
+	}
+
+
+static func normalize_in_place(
+	values: PackedFloat64Array,
+	variance_epsilon: float = 0.00000001
+) -> Vector2:
+	if values.is_empty():
+		return Vector2.ZERO
+	var mean = 0.0
+	for value: float in values:
+		mean += value
+	mean /= float(values.size())
+	var variance = 0.0
+	for value: float in values:
+		var difference = value - mean
+		variance += difference * difference
+	variance /= float(values.size())
+	var standard_deviation = sqrt(variance + maxf(variance_epsilon, 0.0))
+	for index: int in range(values.size()):
+		values[index] = (values[index] - mean) / standard_deviation
+	return Vector2(mean, standard_deviation)
+
+
+static func shuffle_indices_in_place(
+	indices: Array[int],
+	random: RandomNumberGenerator
+) -> void:
+	for index: int in range(indices.size() - 1, 0, -1):
+		var swap_index = random.randi_range(0, index)
+		var temporary = indices[index]
+		indices[index] = indices[swap_index]
+		indices[swap_index] = temporary
+
+
+static func generalized_advantage_estimates(
+	transitions: Array[Dictionary],
+	discount_at_reference: float,
+	lambda_at_reference: float,
+	reference_interval_seconds: float,
+	default_interval_seconds: float,
+	value_field: String
+) -> Dictionary:
+	if transitions.is_empty():
+		return {}
+	var advantages = PackedFloat64Array()
+	var returns = PackedFloat64Array()
+	var value_predictions = PackedFloat64Array()
+	advantages.resize(transitions.size())
+	returns.resize(transitions.size())
+	value_predictions.resize(transitions.size())
+	# Rollouts are interleaved across workers. One reverse scan needs only the next trace value
+	# for each worker, avoiding a temporary index Array per worker at every PPO update.
+	var next_advantage_by_worker: Dictionary[int, float] = {}
+	for transition_index: int in range(transitions.size() - 1, -1, -1):
+		var transition: Dictionary = transitions[transition_index]
+		var worker_id = int(transition.get("worker_id", -1))
+		var terminated = bool(transition.get("terminated", false))
+		var truncated = bool(transition.get("truncated", false))
+		var value = float(transition.get(value_field, 0.0))
+		var next_value = (
+			0.0
+			if terminated
+			else float(transition.get("next_value", 0.0))
+		)
+		var delta_seconds = float(transition.get(
+			"delta_seconds",
+			default_interval_seconds
+		))
+		var gamma_delta = discount_for_delta(
+			discount_at_reference,
+			delta_seconds,
+			reference_interval_seconds
+		)
+		var lambda_delta = discount_for_delta(
+			lambda_at_reference,
+			delta_seconds,
+			reference_interval_seconds
+		)
+		var advantage = (
+			float(transition.get("reward", 0.0))
+			+ gamma_delta * next_value
+			- value
+		)
+		if (
+			not terminated
+			and not truncated
+			and next_advantage_by_worker.has(worker_id)
+		):
+			advantage += (
+				gamma_delta
+				* lambda_delta
+				* next_advantage_by_worker[worker_id]
+			)
+		advantages[transition_index] = advantage
+		returns[transition_index] = advantage + value
+		value_predictions[transition_index] = value
+		if (
+			not is_finite(advantage)
+			or not is_finite(returns[transition_index])
+			or not is_finite(value)
+		):
+			return {}
+		next_advantage_by_worker[worker_id] = advantage
+	return {
+		"advantages": advantages,
+		"returns": returns,
+		"value_predictions": value_predictions,
+	}
+
+
 static func bounded_command_diagnostics(
 	transitions: Array[Dictionary],
 	minimum_command: float,
@@ -154,13 +306,12 @@ static func bounded_command_diagnostics(
 	var saturated_01 = PackedInt32Array()
 	var saturated_05 = PackedInt32Array()
 	var saturated_10 = PackedInt32Array()
-	for _index in range(action_count):
-		sums.append(0.0)
-		squared_sums.append(0.0)
-		counts.append(0)
-		saturated_01.append(0)
-		saturated_05.append(0)
-		saturated_10.append(0)
+	sums.resize(action_count)
+	squared_sums.resize(action_count)
+	counts.resize(action_count)
+	saturated_01.resize(action_count)
+	saturated_05.resize(action_count)
+	saturated_10.resize(action_count)
 	var previous_by_worker: Dictionary = {}
 	var command_total = 0
 	var delta_total = 0.0
@@ -193,7 +344,9 @@ static func bounded_command_diagnostics(
 			if previous.size() == action_count:
 				delta_total += absf(command - previous[index]) / delta_seconds
 				delta_count += 1
-		previous_by_worker[worker_id] = commands.duplicate()
+		# Rollout command arrays are immutable snapshots, so retaining their shared reference is safe
+		# and avoids cloning one packed array for every transition inspected by this diagnostic.
+		previous_by_worker[worker_id] = commands
 	var per_action: Array[Dictionary] = []
 	var total_saturated_01 = 0
 	var total_saturated_05 = 0

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AcousticMaterial" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/audio/acoustic_material.gd" id="1_material"]
+
+[resource]
+script = ExtResource("1_material")
+material_id = &"valve_reference_concrete"
+transmission_gain = Vector3(0.015, 0.002, 0.001)
+absorption = Vector3(0.05, 0.07, 0.08)
+scattering = 0.05
+transmission_volume_db = 0.0
+transmission_lowpass_hz = 20000.0
+resonance = 0.0
+reverb_send = 0.12

@@ -1041,7 +1041,7 @@ func _build_four_limb_slot(limb_index: int) -> void:
 	if slot == null or not slot.installed:
 		limb_records.append({})
 		return
-	var points := EnemyGaitPlanner.solve_two_bone(
+	var points := LimbKinematics.solve_two_bone(
 		slot.hip_offset,
 		slot.rest_foot_offset,
 		slot.upper_length,

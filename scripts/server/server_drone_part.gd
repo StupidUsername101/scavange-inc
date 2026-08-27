@@ -3,6 +3,7 @@ extends RigidBody3D
 const PART_GEOMETRY := preload(
 	"res://scripts/drones/drone_part_geometry.gd"
 )
+const PHYSICAL_SURFACE := preload("res://scripts/audio/physical_surface.gd")
 
 #######################################################
 # Owns authoritative drone part simulation and exposes the state required for replication and
@@ -37,6 +38,7 @@ func configure(
 
 func _ready() -> void:
 	add_to_group("drone_parts")
+	PHYSICAL_SURFACE.apply_to(self, &"metal")
 	_rebuild_from_definition()
 
 	if part_token_id == -1:
@@ -125,7 +127,7 @@ func receive_rope_energy(offered_wh: float) -> float:
 
 
 func to_state_dict() -> Dictionary:
-	return {
+	var state: Dictionary = {
 		"drone_part_id": drone_part_id,
 		"part_token_id": part_token_id,
 		"definition_path": (
@@ -145,3 +147,9 @@ func to_state_dict() -> Dictionary:
 		"linear_velocity": linear_velocity,
 		"angular_velocity": angular_velocity,
 	}
+	var chip: DroneAIChipDefinition = definition as DroneAIChipDefinition
+	if chip != null and chip.has_finalized_model_contract():
+		# Finalized weights never cross replication. Remote clients receive only enough immutable
+		# identity/geometry data to render a user:// chip that exists on the authoritative server.
+		state["definition_snapshot"] = FinalizedMLChipStore.public_chip_snapshot(chip)
+	return state

@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "id": "nature_pine_trunk",
+      "source": "res://assets/third_party/pizza_doggy/models/nature/pine_tree_1.glb",
+      "output": "res://resources/world/nature_collisions/pine_tree_1_trunk_convex.tres",
+      "mode": "convex",
+      "material_contains": "bark"
+    },
+    {
+      "id": "nature_broadleaf_trunk",
+      "source": "res://assets/third_party/pizza_doggy/models/nature/tree_8.glb",
+      "output": "res://resources/world/nature_collisions/tree_8_trunk_convex.tres",
+      "mode": "convex",
+      "maximum_radius": 0.62
+    },
+    {
+      "id": "nature_stone",
+      "source": "res://assets/third_party/pizza_doggy/models/nature/stone_2.glb",
+      "output": "res://resources/world/nature_collisions/stone_2_convex.tres",
+      "mode": "convex"
+    },
+    {
+      "id": "prop_generator",
+      "source": "res://assets/third_party/pizza_doggy/models/bunkers/generator_1.glb",
+      "output": "res://resources/world/prop_collisions/generator_1_convex.tres",
+      "mode": "convex"
+    },
+    {
+      "id": "prop_machinery",
+      "source": "res://assets/third_party/pizza_doggy/models/bunkers/machinery_1.glb",
+      "output": "res://resources/world/prop_collisions/machinery_1_convex.tres",
+      "mode": "convex"
+    },
+    {
+      "id": "prop_metal_crate",
+      "source": "res://assets/third_party/pizza_doggy/models/bunkers/metal_crate_3.glb",
+      "output": "res://resources/world/prop_collisions/metal_crate_3_convex.tres",
+      "mode": "convex"
+    },
+    {
+      "id": "prop_water_barrel",
+      "source": "res://assets/third_party/pizza_doggy/models/bunkers/water_barrel_1.glb",
+      "output": "res://resources/world/prop_collisions/water_barrel_1_convex.tres",
+      "mode": "convex"
+    },
+    {
+      "id": "prop_wood_pallet",
+      "source": "res://assets/third_party/pizza_doggy/models/bunkers/wood_pallet_1.glb",
+      "output": "res://resources/world/prop_collisions/wood_pallet_1_convex.tres",
+      "mode": "convex"
+    },
+    {
+      "id": "prop_computer_terminal",
+      "source": "res://assets/third_party/pizza_doggy/models/tech/computer_terminal_1.glb",
+      "output": "res://resources/world/prop_collisions/computer_terminal_1_convex.tres",
+      "mode": "convex"
+    },
+    {
+      "id": "prop_control_panel",
+      "source": "res://assets/third_party/pizza_doggy/models/tech/control_panel_1.glb",
+      "output": "res://resources/world/prop_collisions/control_panel_1_convex.tres",
+      "mode": "convex"
+    },
+    {
+      "id": "prop_fuse_box",
+      "source": "res://assets/third_party/pizza_doggy/models/tech/fuse_box_1.glb",
+      "output": "res://resources/world/prop_collisions/fuse_box_1_convex.tres",
+      "mode": "convex"
+    }
+  ]
+}

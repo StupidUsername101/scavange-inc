@@ -21,8 +21,11 @@ func _init() -> void:
 	_test_model_body_creator_fits_realized_content_to_viewport()
 	_test_model_body_creator_staged_core_layout()
 	_test_model_body_creator_core_geometry_editing()
+	_test_model_body_creator_limb_shape_editor()
 	_test_editable_core_geometry_rejects_corrupt_topology()
+	_test_model_body_creator_preflights_propeller_only_flight_geometry()
 	_test_plot_series_builder_preserves_context_tags()
+	_test_model_body_creator_unbounded_propeller_layout_and_uplift()
 	_test_model_body_creator_unbounded_attachment_layout()
 	_test_paused_drone_candidate_keeps_frozen_hardware()
 	_test_room_episode_status_is_one_shared_line()
@@ -94,6 +97,24 @@ func _test_model_body_creator_carries_training_setup() -> void:
 		"model creator sends the selected reward-card preset with the fresh worker group"
 	)
 	panel.free()
+
+
+func _test_model_body_creator_preflights_propeller_only_flight_geometry() -> void:
+	var panel_source: String = FileAccess.get_file_as_string(
+		"res://ml/training/ui/ml_body_creator_panel.gd"
+	)
+	var accept_start: int = panel_source.find("func _accept_current_build() -> void:")
+	var accept_end: int = panel_source.find("\nfunc ", accept_start + 1)
+	var accept_source: String = panel_source.substr(
+		accept_start,
+		(accept_end - accept_start) if accept_end > accept_start else panel_source.length() - accept_start
+	)
+	_expect(
+		accept_start >= 0
+		and accept_source.contains("training_readiness_error")
+		and accept_source.find("training_readiness_error") < accept_source.find("create_requested.emit"),
+		"model creator rejects an impossible propeller-only flight body before emitting and discarding its editable draft"
+	)
 
 
 func _test_model_body_creator_fits_realized_content_to_viewport() -> void:
@@ -199,10 +220,17 @@ func _test_model_body_creator_staged_core_layout() -> void:
 		"slot kind picker authors propeller and attachment mounts instead of inheriting Core defaults"
 	)
 	_expect(
-		propeller_mounts[0].basis.y.dot(Vector3.RIGHT) > 0.99
-		and propeller_mounts[1].basis.y.dot(Vector3.LEFT) > 0.99
+		propeller_mounts[0].basis.y.dot(Vector3.UP) > 0.99
+		and propeller_mounts[1].basis.y.dot(Vector3.UP) > 0.99
 		and (-attachment_mounts[0].basis.y).dot(Vector3.FORWARD) > 0.99,
-		"free Core mounts preserve attachment outward orientation while propeller +Y points along its actual thrust surface normal"
+		"free Core mounts preserve attachment outward orientation while ordinary propeller thrust defaults to worker up"
+	)
+	_expect(
+		panel.layout_slot_surface_normals.size() == 3
+		and panel.layout_slot_surface_normals[0].dot(Vector3.RIGHT) > 0.99
+		and panel.layout_slot_surface_normals[1].dot(Vector3.LEFT) > 0.99
+		and panel.layout_slot_surface_normals[2].dot(Vector3.FORWARD) > 0.99,
+		"creator retains clicked surface normals separately from worker-aligned propeller thrust axes"
 	)
 	panel._accept_core_layout()
 	_expect(
@@ -299,6 +327,119 @@ func _test_model_body_creator_core_geometry_editing() -> void:
 		shape is ConvexPolygonShape3D
 		and (shape as ConvexPolygonShape3D).points.size() == core.editable_mesh.vertices.size(),
 		"edited dynamic Cores use their authored vertices for one convex physics hull instead of reverting to BoxShape3D"
+	)
+	panel.free()
+
+
+func _test_model_body_creator_limb_shape_editor() -> void:
+	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
+	get_root().add_child(panel)
+	panel.mirror_next_checkbox.button_pressed = false
+	panel.layout_slot_kind_picker.select(1)
+	panel._on_layout_slot_kind_selected(1)
+	panel._on_layout_surface_clicked(Transform3D(
+		panel._slot_basis_from_surface_normal(Vector3.FORWARD),
+		Vector3(0.0, 0.0, -0.425)
+	))
+	panel._accept_core_layout()
+	var battery: DroneBatteryDefinition = load(
+		"res://resources/drones/batteries/standard_battery.tres"
+	) as DroneBatteryDefinition
+	var limb_template: DroneLimbAttachmentDefinition = load(
+		"res://resources/model_forge/attachments/configurable_articulated_limb.tres"
+	) as DroneLimbAttachmentDefinition
+	var equipped: bool = battery != null and limb_template != null
+	if equipped:
+		equipped = panel.current_draft.equip(
+			&"battery",
+			MLBodyPartContract.deep_duplicate_resource(battery)
+		)
+	if equipped:
+		equipped = panel.current_draft.equip(
+			&"attachment_0",
+			MLBodyPartContract.deep_duplicate_resource(limb_template)
+		)
+	panel._rebuild_slot_rows()
+	_expect(
+		panel.limb_shape_editors.is_empty(),
+		"articulated mounts keep their 3D viewport lazy until the shape accordion is opened"
+	)
+	panel._on_limb_editor_expansion_toggled(true, "attachment_0")
+	var editor_key: String = "attachment_0:0"
+	var shape_editor: MLLimbShapeEditor3D = (
+		panel.limb_shape_editors.get(editor_key) as MLLimbShapeEditor3D
+	)
+	var attachment: DroneLimbAttachmentDefinition = (
+		panel.current_draft.equipped_part(&"attachment_0") as DroneLimbAttachmentDefinition
+	)
+	var limb: GenericLimbDefinition = (
+		attachment.limb_definitions[0]
+		if attachment != null and not attachment.limb_definitions.is_empty()
+		else null
+	)
+	_expect(
+		equipped
+		and shape_editor != null
+		and limb != null
+		and shape_editor.segment_visuals.size() == limb.segments.size()
+		and shape_editor.length_gizmo_handle != null
+		and shape_editor.radius_gizmo_handle != null,
+		"equipping articulated hardware creates a selectable 3D limb editor with length and thickness gizmos"
+	)
+	_expect(
+		panel.training_options_button != null
+		and not panel.training_options_button.button_pressed
+		and not panel.training_settings_panel.visible,
+		"advanced training settings stay available behind a compact collapsed section"
+	)
+	var visual_instance_id: int = (
+		shape_editor.segment_visuals[0].get_instance_id()
+		if shape_editor != null and not shape_editor.segment_visuals.is_empty()
+		else 0
+	)
+	var target_length: float = 0.0
+	var target_radius: float = 0.0
+	if shape_editor != null and limb != null and not limb.segments.is_empty():
+		target_length = minf(limb.segments[0].length + 0.20, 10.0)
+		target_radius = limb.segments[0].radius
+		shape_editor.selected_segment_index = 0
+		shape_editor.drag_mode = MLLimbShapeEditor3D.DragMode.LENGTH
+		shape_editor.drag_start_mouse = Vector2.ZERO
+		shape_editor.drag_axis_screen = Vector2.RIGHT
+		shape_editor.drag_world_per_pixel = 0.01
+		shape_editor.drag_start_length = limb.segments[0].length
+		shape_editor.drag_start_radius = target_radius
+		shape_editor._update_dimension_drag(Vector2(20.0, 0.0))
+	_expect(
+		limb != null
+		and not limb.segments.is_empty()
+		and is_equal_approx(limb.segments[0].length, target_length)
+		and is_equal_approx(limb.segments[0].radius, target_radius)
+		and shape_editor != null
+		and shape_editor.segment_visuals[0].get_instance_id() == visual_instance_id
+		and is_equal_approx(
+			(shape_editor.segment_visuals[0].mesh as CapsuleMesh).height,
+			target_length
+		),
+		"dragging a 3D handle edits the draft resource and resizes the existing preview mesh in place"
+	)
+	var runtime: DroneLoadout = MLBodyCreatorRuntimeFactory.runtime_from_draft(
+		panel.current_preset_id,
+		panel.current_draft,
+		panel.changed_slot_ids
+	) as DroneLoadout
+	var runtime_attachment: DroneLimbAttachmentDefinition = (
+		runtime.get_attachment(0) as DroneLimbAttachmentDefinition
+		if runtime != null
+		else null
+	)
+	_expect(
+		runtime_attachment != null
+		and not runtime_attachment.limb_definitions.is_empty()
+		and runtime_attachment.limb_definitions[0] != limb
+		and is_equal_approx(runtime_attachment.limb_definitions[0].segments[0].length, target_length)
+		and is_equal_approx(runtime_attachment.limb_definitions[0].segments[0].radius, target_radius),
+		"3D-authored limb dimensions survive the creator-to-runtime deep-copy boundary"
 	)
 	panel.free()
 
@@ -417,12 +558,29 @@ func _test_model_body_creator_unbounded_attachment_layout() -> void:
 			and target_slot != null
 		):
 			var target_mount_before: Transform3D = target_slot.mount_transform
-			source_attachment.limb_definitions[0].segments[0].length = 1.37
-			var target_picker: OptionButton = OptionButton.new()
-			target_picker.add_item("Attachment 2")
-			target_picker.set_item_metadata(0, "attachment_1")
-			target_picker.select(0)
-			panel._on_apply_slot_configuration_pressed("attachment_0", target_picker)
+			panel._rebuild_slot_rows()
+			var target_picker: OptionButton = panel.slot_pickers.get(
+				"attachment_1"
+			) as OptionButton
+			var same_as_index: int = -1
+			var same_as_option_valid: bool = false
+			if target_picker != null:
+				var same_as_key: String = (
+					MLBodyCreatorPanel.SAME_AS_KEY_PREFIX + "attachment_0"
+				)
+				for option_index: int in range(target_picker.item_count):
+					if str(target_picker.get_item_metadata(option_index)) == same_as_key:
+						same_as_index = option_index
+						break
+			if target_picker != null and same_as_index >= 0:
+				same_as_option_valid = (
+					target_picker.get_item_text(same_as_index) == "Same as Attachment 1"
+					and not target_picker.get_popup().get_item_tooltip(same_as_index).is_empty()
+				)
+				# Resolve the source when the user selects the option, after any live 3D edits.
+				source_attachment.limb_definitions[0].segments[0].length = 1.37
+				target_picker.select(same_as_index)
+				panel._on_slot_part_selected(same_as_index, "attachment_1")
 			var copied_attachment: DroneLimbAttachmentDefinition = (
 				panel.current_draft.equipped_part(&"attachment_1") as DroneLimbAttachmentDefinition
 			)
@@ -432,17 +590,19 @@ func _test_model_body_creator_unbounded_attachment_layout() -> void:
 				else null
 			)
 			copied_attachment_configuration_valid = (
-				copied_attachment != null
+				same_as_option_valid
+				and copied_attachment != null
 				and copied_attachment != source_attachment
 				and copied_limb != null
 				and copied_limb != source_attachment.limb_definitions[0]
+				and copied_limb.segments[0] != source_attachment.limb_definitions[0].segments[0]
 				and is_equal_approx(copied_limb.segments[0].length, 1.37)
 				and panel.current_draft.slot_definition(&"attachment_1").mount_transform == target_mount_before
+				and bool(panel.changed_slot_ids.get("attachment_1", false))
 			)
-			target_picker.free()
 	_expect(
 		copied_attachment_configuration_valid,
-		"creator can deep-copy one attachment configuration to a compatible same-kind slot without moving that target mount"
+		"each compatible limb dropdown can deep-copy a live modeled limb without moving that target mount"
 	)
 	var spider_manifest: MLBodyInterfaceManifest = (
 		panel.current_draft.duplicate_editable().accept_build() if equipped_all_limbs else null
@@ -493,6 +653,87 @@ func _test_model_body_creator_unbounded_attachment_layout() -> void:
 	_expect(
 		spider_power_cache_valid,
 		"an eight-limb spider keeps authored idle electrical draw through the cached non-weapon attachment power path"
+	)
+	panel.free()
+
+
+func _test_model_body_creator_unbounded_propeller_layout_and_uplift() -> void:
+	var panel: MLBodyCreatorPanel = MLBodyCreatorPanel.new()
+	get_root().add_child(panel)
+	var core: DroneCoreDefinition = panel._current_physical_core() as DroneCoreDefinition
+	var orientation_ready: bool = (
+		core != null
+		and core.set_model_orientation(Vector3.RIGHT, Vector3.BACK)
+	)
+	var worker_up: Vector3 = core.model_up_local.normalized() if core != null else Vector3.UP
+	panel._realign_creator_propellers_to_worker_up()
+	panel.mirror_next_checkbox.button_pressed = false
+	panel.layout_slot_kind_picker.select(0)
+	for index: int in range(6):
+		var x: float = -0.30 + float(index) * 0.12
+		panel._on_layout_surface_clicked(Transform3D(
+			panel._slot_basis_from_surface_normal(Vector3.FORWARD),
+			Vector3(x, 0.0, -0.425)
+		))
+	var creator_axes_follow_worker_up: bool = orientation_ready
+	for mount: Transform3D in panel.layout_slot_transforms:
+		creator_axes_follow_worker_up = (
+			creator_axes_follow_worker_up
+			and mount.basis.y.normalized().dot(worker_up) > 0.999
+		)
+	_expect(
+		panel.layout_slot_transforms.size() == 6
+		and panel._layout_slot_kind_count(&"propeller") == 6
+		and creator_axes_follow_worker_up,
+		"creator accepts six side-mounted propeller slots and aligns their default thrust with authored worker up"
+	)
+	panel._accept_core_layout()
+	var battery: DroneBatteryDefinition = load(
+		"res://resources/drones/batteries/calibrated_reference_cell.tres"
+	) as DroneBatteryDefinition
+	var propeller: DronePropellerDefinition = load(
+		"res://resources/drones/propellers/calibrated_reference_propeller.tres"
+	) as DronePropellerDefinition
+	var equipped: bool = (
+		panel.current_draft != null
+		and battery != null
+		and propeller != null
+		and panel.current_draft.equip(
+			&"battery",
+			MLBodyPartContract.deep_duplicate_resource(battery)
+		)
+	)
+	for slot_index: int in range(6):
+		if not equipped:
+			break
+		equipped = panel.current_draft.equip(
+			StringName("propeller_%d" % slot_index),
+			MLBodyPartContract.deep_duplicate_resource(propeller)
+		)
+	var runtime: DroneLoadout = (
+		MLBodyCreatorRuntimeFactory.runtime_from_draft(
+			panel.current_preset_id,
+			panel.current_draft,
+			panel.changed_slot_ids
+		) as DroneLoadout
+		if equipped
+		else null
+	)
+	var summary: Dictionary = DroneTrainingLoadoutConfig.physical_summary(runtime)
+	var manifest: MLBodyInterfaceManifest = (
+		DroneMLBodyInterfaceFactory.finalize_loadout(runtime)
+		if runtime != null
+		else null
+	)
+	_expect(
+		runtime != null
+		and runtime.core.propeller_slot_count == 6
+		and manifest != null
+		and manifest.control_count() == 6
+		and int(summary.get("propeller_count", 0)) == 6
+		and float(summary.get("nominal_upward_thrust_n", 0.0)) > 0.0
+		and float(summary.get("nominal_lift_to_weight", 0.0)) > 0.0,
+		"creator click-to-runtime path preserves all six rotors and reports nonzero nominal uplift in the authored worker frame"
 	)
 	panel.free()
 

@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="EquippableItemDefinition" format=3 uid="uid://b5o42enh8dj1r"]
+
+[ext_resource type="Script" uid="uid://b0bx1qf7owq46" path="res://scripts/items/equippable_item_definition.gd" id="1_definition"]
+[ext_resource type="PackedScene" path="res://scenes/items/visuals/corporate_field_terminal_visual.tscn" id="2_visual"]
+
+[sub_resource type="BoxShape3D" id="Shape_terminal"]
+size = Vector3(0.36, 0.23, 0.09)
+
+[resource]
+script = ExtResource("1_definition")
+equipment_slot = &"wrist_device"
+equipped_visual_scene = ExtResource("2_visual")
+display_name = "S.I. Fieldlink"
+inventory_code = "FLK"
+fieldlink_detectable = null
+fieldlink_device_class = null
+fieldlink_control_type = null
+fieldlink_signal_strength = null
+sync_size_sliders = false
+mass = 0.42
+physical_surface = null
+grip_surface_tags = PackedStringArray("carryable", "electronics")
+default_grab_rotation_degrees = Vector3(90, 0, 0)
+visual_scene = ExtResource("2_visual")
+collision_shape = SubResource("Shape_terminal")

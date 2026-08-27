@@ -6,9 +6,14 @@
 [ext_resource type="PackedScene" path="res://scenes/server/drone_inspection_station.tscn" id="4_inspection_station"]
 [ext_resource type="PackedScene" path="res://scenes/server/dev_warehouse.tscn" id="5_warehouse"]
 [ext_resource type="Resource" path="res://resources/drones/loadouts/maxed_follow_quad.tres" id="6_maxed_loadout"]
-[ext_resource type="PackedScene" path="res://scenes/server/dev_zoo.tscn" id="7_zoo"]
+[ext_resource type="PackedScene" path="res://scenes/server/industrial_acoustic_complex.tscn" id="7_environment"]
 [ext_resource type="Resource" path="res://resources/drones/loadouts/perfect_combat_follow_quad.tres" id="8_perfect_loadout"]
 [ext_resource type="PackedScene" path="res://scenes/server/body_part_shop_terminal.tscn" id="9_body_part_shop"]
+[ext_resource type="PackedScene" path="res://scenes/server/acoustic_test_house.tscn" id="10_acoustic_house"]
+[ext_resource type="Script" path="res://scripts/server/world_nature_collision.gd" id="11_nature"]
+[ext_resource type="PackedScene" path="res://scenes/server/weapon_crafting_station.tscn" id="12_weapon_station"]
+[ext_resource type="PackedScene" path="res://scenes/server/speaker_cluster_demo.tscn" id="13_speaker_cluster"]
+[ext_resource type="PackedScene" path="res://scenes/server/acoustic_maze.tscn" id="14_acoustic_maze"]
 
 [sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_ground"]
 
@@ -18,9 +23,14 @@
 script = ExtResource("1_air")
 
 [node name="Ground" type="StaticBody3D" parent="." unique_id=248901509]
+metadata/physical_surface = &"soil"
+metadata/footstep_surface = &"soil"
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Ground" unique_id=1308376672]
 shape = SubResource("WorldBoundaryShape3D_ground")
+
+[node name="WorldNature" type="Node3D" parent="."]
+script = ExtResource("11_nature")
 
 [node name="DefaultDrone" parent="." unique_id=976199589 instance=ExtResource("2_drone")]
 position = Vector3(-1.25, 0.55, -2.5)
@@ -42,8 +52,20 @@ position = Vector3(-5, 0, -2)
 [node name="BodyPartShopTerminal" parent="." instance=ExtResource("9_body_part_shop")]
 position = Vector3(-5, 0, 2)
 
+[node name="WeaponCraftingStation" parent="." instance=ExtResource("12_weapon_station")]
+position = Vector3(7.5, 0, -7.5)
+
 [node name="DevWarehouse" parent="." instance=ExtResource("5_warehouse")]
 position = Vector3(0, 0, -12)
 
-[node name="DevZoo" parent="." instance=ExtResource("7_zoo")]
+[node name="AcousticTestHouse" parent="." instance=ExtResource("10_acoustic_house")]
+position = Vector3(12, 0, -5)
+
+[node name="IndustrialAcousticComplex" parent="." instance=ExtResource("7_environment")]
 position = Vector3(0, 0, 19)
+
+[node name="SpeakerClusterDemo" parent="." instance=ExtResource("13_speaker_cluster")]
+position = Vector3(6, 0, -48)
+
+[node name="AcousticMaze" parent="." instance=ExtResource("14_acoustic_maze")]
+position = Vector3(150, 0.02, -10)

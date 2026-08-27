@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://clvfvvakpgksv"
+path="res://.godot/imported/✠ Auf Kreta bei Sturm und bei Regen- Fallschirmjägerlied ✠ (Accordion + Chorus Version).mp3-a94f14286bacf94d57d31348c940d7e2.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/✠ Auf Kreta bei Sturm und bei Regen- Fallschirmjägerlied ✠ (Accordion + Chorus Version).mp3"
+dest_files=["res://.godot/imported/✠ Auf Kreta bei Sturm und bei Regen- Fallschirmjägerlied ✠ (Accordion + Chorus Version).mp3-a94f14286bacf94d57d31348c940d7e2.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

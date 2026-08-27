@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://ctgaygpte1kca"
+path="res://.godot/imported/Übermensch - Könige Europas.mp3-ef9794b6b3376f5853257594662a0bb2.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vorwärts/Übermensch - Könige Europas.mp3"
+dest_files=["res://.godot/imported/Übermensch - Könige Europas.mp3-ef9794b6b3376f5853257594662a0bb2.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

@@ -6,6 +6,7 @@ var assertion_count = 0
 
 func _init() -> void:
 	_test_time_aware_discount()
+	_test_shared_ppo_math()
 	_test_non_finite_config_sanitization()
 	_test_deterministic_evaluation_contract()
 	_test_replay_chronology_and_real_step_gate()
@@ -43,6 +44,102 @@ func _test_time_aware_discount() -> void:
 	_expect(
 		RLTrainingMath.half_life_seconds(gamma_reference, reference_interval) > 0.0,
 		"discount metrics expose a finite positive real-time half-life"
+	)
+
+
+func _test_shared_ppo_math() -> void:
+	var transitions: Array[Dictionary] = [
+		{
+			"worker_id": 0,
+			"reward": 1.0,
+			"value": 0.5,
+			"next_value": 0.6,
+			"terminated": false,
+			"truncated": false,
+			"delta_seconds": 1.0,
+		},
+		{
+			"worker_id": 1,
+			"reward": 2.0,
+			"value": 1.0,
+			"next_value": 1.5,
+			"terminated": false,
+			"truncated": false,
+			"delta_seconds": 1.0,
+		},
+		{
+			"worker_id": 0,
+			"reward": 3.0,
+			"value": 0.6,
+			"next_value": 99.0,
+			"terminated": true,
+			"truncated": false,
+			"delta_seconds": 1.0,
+		},
+		{
+			"worker_id": 1,
+			"reward": 4.0,
+			"value": 1.5,
+			"next_value": 2.0,
+			"terminated": false,
+			"truncated": true,
+			"delta_seconds": 1.0,
+		},
+	]
+	var targets = RLTrainingMath.generalized_advantage_estimates(
+		transitions,
+		0.9,
+		0.8,
+		1.0,
+		1.0,
+		"value"
+	)
+	var advantages: PackedFloat64Array = targets.get(
+		"advantages",
+		PackedFloat64Array()
+	)
+	var returns: PackedFloat64Array = targets.get("returns", PackedFloat64Array())
+	_expect(
+		advantages.size() == 4
+		and absf(advantages[0] - 2.768) <= 0.000000001
+		and absf(advantages[1] - 5.446) <= 0.000000001
+		and absf(advantages[2] - 2.4) <= 0.000000001
+		and absf(advantages[3] - 4.3) <= 0.000000001
+		and absf(returns[2] - 3.0) <= 0.000000001
+		and absf(returns[3] - 5.8) <= 0.000000001,
+		"shared GAE keeps interleaved worker traces independent, bootstraps truncations, and never bootstraps natural terminals"
+	)
+	var normalized = PackedFloat64Array([1.0, 2.0, 3.0])
+	var normalization = RLTrainingMath.normalize_in_place(normalized)
+	_expect(
+		absf(normalization.x - 2.0) <= 0.000000001
+		and absf(normalized[0] + normalized[2]) <= 0.000000001
+		and absf(normalized[1]) <= 0.000000001,
+		"shared advantage normalization reports its source mean and normalizes in place"
+	)
+	var reward_statistics = RLTrainingMath.finite_transition_statistics(
+		transitions,
+		"reward"
+	)
+	_expect(
+		absf(float(reward_statistics.get("mean", 0.0)) - 2.5) <= 0.000000001
+		and absf(
+			float(reward_statistics.get("standard_deviation", 0.0))
+			- sqrt(1.25)
+		) <= 0.000000001,
+		"transition statistics avoid materializing a temporary reward array"
+	)
+	var first_indices: Array[int] = [0, 1, 2, 3, 4, 5]
+	var second_indices: Array[int] = [0, 1, 2, 3, 4, 5]
+	var first_random = RandomNumberGenerator.new()
+	var second_random = RandomNumberGenerator.new()
+	first_random.seed = 77119
+	second_random.seed = 77119
+	RLTrainingMath.shuffle_indices_in_place(first_indices, first_random)
+	RLTrainingMath.shuffle_indices_in_place(second_indices, second_random)
+	_expect(
+		first_indices == second_indices and first_indices != [0, 1, 2, 3, 4, 5],
+		"shared Fisher-Yates shuffling remains deterministic for a trainer RNG seed"
 	)
 
 

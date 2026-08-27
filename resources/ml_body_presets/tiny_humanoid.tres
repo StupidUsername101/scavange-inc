@@ -1,0 +1,156 @@
+[gd_resource type="Resource" script_class="FourLimbBodyDefinition" load_steps=12 format=3]
+
+[ext_resource type="Script" path="res://ml/bodies/four_limb/four_limb_body_definition.gd" id="1_body"]
+[ext_resource type="Script" path="res://ml/bodies/four_limb/four_limb_slot_definition.gd" id="2_limb_type"]
+[ext_resource type="Script" path="res://ml/bodies/four_limb/four_limb_attachment_slot_definition.gd" id="3_slot_type"]
+[ext_resource type="Script" path="res://scripts/limbs/limb_end_effector_definition.gd" id="4_effector_type"]
+[ext_resource type="Resource" path="res://resources/model_forge/end_effectors/controlled_grip.tres" id="5_hand"]
+
+[sub_resource type="Resource" id="FootEffector"]
+script = ExtResource("4_effector_type")
+effector_name = "Foot"
+enabled = true
+effector_type_id = &"plain_foot"
+geometry_type = 2
+local_offset = Vector3(0, 0.04, 0)
+box_size = Vector3(0.18, 0.07, 0.28)
+added_mass = 0.05
+maximum_health = 100.0
+friction = 1.0
+bounce = 0.0
+rough = true
+grip_mode = 2
+grip_action_index = -1
+grip_collision_mask = 0
+allow_static_grip = false
+allow_dynamic_grip = false
+maximum_held_mass = 0.0
+grip_stiffness = 0.0
+grip_damping = 0.0
+maximum_normal_holding_force = 0.0
+maximum_shear_holding_force = 0.0
+
+[sub_resource type="Resource" id="RightArm"]
+script = ExtResource("2_limb_type")
+slot_name = "Right Arm"
+installed = true
+hip_offset = Vector3(0.27, 0.25, 0)
+rest_foot_offset = Vector3(0.72, -0.03, -0.08)
+bend_hint = Vector3(0.55, 0.2, -0.8)
+upper_length = 0.34
+lower_length = 0.32
+segment_radius = 0.055
+segment_mass = 0.18
+maximum_health = 100.0
+end_effector = ExtResource("5_hand")
+hip_swing_span_degrees = 80.0
+hip_elevation_upper_extension_degrees = 55.0
+hip_twist_span_degrees = 85.0
+knee_limit_lower_degrees = -8.0
+knee_limit_upper_degrees = 115.0
+
+[sub_resource type="Resource" id="LeftArm"]
+script = ExtResource("2_limb_type")
+slot_name = "Left Arm"
+installed = true
+hip_offset = Vector3(-0.27, 0.25, 0)
+rest_foot_offset = Vector3(-0.72, -0.03, -0.08)
+bend_hint = Vector3(-0.55, 0.2, -0.8)
+upper_length = 0.34
+lower_length = 0.32
+segment_radius = 0.055
+segment_mass = 0.18
+maximum_health = 100.0
+end_effector = ExtResource("5_hand")
+hip_swing_span_degrees = 80.0
+hip_elevation_upper_extension_degrees = 55.0
+hip_twist_span_degrees = 85.0
+knee_limit_lower_degrees = -8.0
+knee_limit_upper_degrees = 115.0
+
+[sub_resource type="Resource" id="RightLeg"]
+script = ExtResource("2_limb_type")
+slot_name = "Right Leg"
+installed = true
+hip_offset = Vector3(0.14, -0.32, 0)
+rest_foot_offset = Vector3(0.16, -1.25, -0.08)
+bend_hint = Vector3(0.15, 0.1, -1)
+upper_length = 0.49
+lower_length = 0.5
+segment_radius = 0.065
+segment_mass = 0.28
+maximum_health = 100.0
+end_effector = SubResource("FootEffector")
+hip_swing_span_degrees = 58.0
+hip_elevation_upper_extension_degrees = 38.0
+hip_twist_span_degrees = 42.0
+knee_limit_lower_degrees = -6.0
+knee_limit_upper_degrees = 105.0
+
+[sub_resource type="Resource" id="LeftLeg"]
+script = ExtResource("2_limb_type")
+slot_name = "Left Leg"
+installed = true
+hip_offset = Vector3(-0.14, -0.32, 0)
+rest_foot_offset = Vector3(-0.16, -1.25, -0.08)
+bend_hint = Vector3(-0.15, 0.1, -1)
+upper_length = 0.49
+lower_length = 0.5
+segment_radius = 0.065
+segment_mass = 0.28
+maximum_health = 100.0
+end_effector = SubResource("FootEffector")
+hip_swing_span_degrees = 58.0
+hip_elevation_upper_extension_degrees = 38.0
+hip_twist_span_degrees = 42.0
+knee_limit_lower_degrees = -6.0
+knee_limit_upper_degrees = 105.0
+
+[sub_resource type="Resource" id="HeadSlot"]
+script = ExtResource("3_slot_type")
+slot_name = "Head"
+core_offset = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.42, 0)
+
+[sub_resource type="Resource" id="BackSlot"]
+script = ExtResource("3_slot_type")
+slot_name = "Back"
+core_offset = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0.18)
+
+[sub_resource type="Resource" id="LeftHipSlot"]
+script = ExtResource("3_slot_type")
+slot_name = "Left Hip"
+core_offset = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.24, -0.2, 0)
+
+[sub_resource type="Resource" id="RightHipSlot"]
+script = ExtResource("3_slot_type")
+slot_name = "Right Hip"
+core_offset = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.24, -0.2, 0)
+
+[resource]
+script = ExtResource("1_body")
+core_size = Vector3(0.42, 0.72, 0.3)
+core_mass = 1.8
+core_maximum_health = 220.0
+friction = 0.92
+bounce = 0.01
+linear_damp = 0.55
+angular_damp = 1.1
+hip_stiffness = 175.0
+hip_damping = 20.0
+maximum_hip_torque = 240.0
+hip_horizontal_response_degrees_per_second = 180.0
+knee_stiffness = 205.0
+knee_damping = 22.0
+maximum_knee_torque = 285.0
+joint_limit_soft_zone_degrees = 8.0
+joint_limit_stiffness = 245.0
+joint_limit_damping = 19.0
+maximum_joint_limit_torque = 430.0
+passive_joint_stiffness = 105.0
+passive_joint_damping = 16.0
+maximum_passive_joint_torque = 310.0
+passive_joint_progressive_onset_ratio = 0.42
+passive_joint_progressive_ratio = 4.0
+passive_joint_native_fraction = 0.35
+limbs = Array[ExtResource("2_limb_type")]([SubResource("RightArm"), SubResource("LeftArm"), SubResource("RightLeg"), SubResource("LeftLeg")])
+attachment_slots = Array[ExtResource("3_slot_type")]([SubResource("HeadSlot"), SubResource("BackSlot"), SubResource("LeftHipSlot"), SubResource("RightHipSlot")])

@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cb4y2rdwegnsq"
+path="res://.godot/imported/Erika (Marching Song of the German Military).mp3-35f0218cf83645c0850a207e44758105.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Erika (Marching Song of the German Military).mp3"
+dest_files=["res://.godot/imported/Erika (Marching Song of the German Military).mp3-35f0218cf83645c0850a207e44758105.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

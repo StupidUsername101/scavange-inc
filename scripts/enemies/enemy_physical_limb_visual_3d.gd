@@ -207,7 +207,7 @@ func _build_limbs() -> void:
 			target_points.append(PackedVector3Array())
 			stepping_by_limb.append(false)
 			continue
-		var points := EnemyGaitPlanner.solve_two_bone(
+		var points := LimbKinematics.solve_two_bone(
 			limb.hip_offset,
 			limb.rest_foot_offset,
 			limb.upper_length,

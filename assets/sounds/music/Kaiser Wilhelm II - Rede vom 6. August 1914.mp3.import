@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cry6i1s1qb863"
+path="res://.godot/imported/Kaiser Wilhelm II - Rede vom 6. August 1914.mp3-e2b65f2f2e089b2ec68a021c50970ae0.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/Kaiser Wilhelm II - Rede vom 6. August 1914.mp3"
+dest_files=["res://.godot/imported/Kaiser Wilhelm II - Rede vom 6. August 1914.mp3-e2b65f2f2e089b2ec68a021c50970ae0.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

@@ -46,6 +46,11 @@ func synchronize(loadout: DroneLoadout) -> void:
 		if definition == null:
 			chip_states.append({})
 			continue
+		# Finalized models bypass scripted intent arbitration and drive the existing low-level
+		# DroneMLController. The authoritative ServerDrone accounts for their power separately.
+		if definition.has_finalized_model_contract():
+			chip_states.append({})
+			continue
 		var previous = (
 			old_states[slot_index]
 			if slot_index < old_states.size()

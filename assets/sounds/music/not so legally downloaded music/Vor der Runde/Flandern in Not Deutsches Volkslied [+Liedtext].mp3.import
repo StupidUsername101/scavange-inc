@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cgipqycxk8wlm"
+path="res://.godot/imported/Flandern in Not Deutsches Volkslied [+Liedtext].mp3-daf82668ffdf1d06f5e59a438f753b41.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Flandern in Not Deutsches Volkslied [+Liedtext].mp3"
+dest_files=["res://.godot/imported/Flandern in Not Deutsches Volkslied [+Liedtext].mp3-daf82668ffdf1d06f5e59a438f753b41.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

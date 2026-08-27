@@ -74,7 +74,9 @@ func _add_player() -> void:
 	player = scene.instantiate() as ServerPlayer
 	test_root.add_child(player)
 	player.setup(TEST_PLAYER_ID, Vector3(0.0, 1.0, 0.0))
-	Server.server_players_by_player_id[TEST_PLAYER_ID] = player
+	var server := root.get_node_or_null("Server")
+	if server != null:
+		(server.get("server_players_by_player_id") as Dictionary)[TEST_PLAYER_ID] = player
 
 
 func _add_enemy() -> void:
@@ -178,7 +180,9 @@ func _on_physics_frame() -> void:
 func _finish() -> void:
 	if physics_frame.is_connected(_on_physics_frame):
 		physics_frame.disconnect(_on_physics_frame)
-	Server.server_players_by_player_id.erase(TEST_PLAYER_ID)
+	var server := root.get_node_or_null("Server")
+	if server != null:
+		(server.get("server_players_by_player_id") as Dictionary).erase(TEST_PLAYER_ID)
 	if failure_count == 0:
 		print("Drone runtime integration test passed")
 		quit(0)

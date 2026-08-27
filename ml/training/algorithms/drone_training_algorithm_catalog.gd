@@ -121,7 +121,6 @@ static func inspect_checkpoint(checkpoint: Dictionary) -> Dictionary:
 				and RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1)
 				== _body_propeller_control_count(body_contract)
 				and _body_propeller_control_count(body_contract) >= 0
-				and _body_propeller_control_count(body_contract) <= DronePPOObservationEncoder.QUAD_PROPELLER_COUNT
 				and RLTrainingMath.finite_int_or(network.get("schema_version", 0), -1)
 				== DronePPOActorCritic.STATE_SCHEMA_VERSION
 				and DronePPOObservationEncoder.is_trainable_schema(observation_schema)

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="AcousticMaterial" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/audio/acoustic_material.gd" id="1_material"]
+
+[resource]
+script = ExtResource("1_material")
+material_id = &"wood_prop"
+transmission_gain = Vector3(0.72, 0.4, 0.16)
+absorption = Vector3(0.18, 0.48, 0.72)
+scattering = 0.46
+transmission_volume_db = -2.4
+transmission_lowpass_hz = 6000.0
+reverb_send = 0.06

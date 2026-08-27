@@ -43,9 +43,9 @@ same motor targets until the next action arrives.
 
 Observations contain an ordered `propellers` array with stable `slot_index` fields, and accepted
 body manifests carry explicit control descriptors instead of inferring hardware from action width.
-The snapshot/manifest formats can therefore describe variable propeller topology. The current
-`ServerDrone` training/evaluation runtime still instantiates at most four physical propeller slots;
-wider rotor layouts require expanding that runtime cap rather than changing the snapshot schema.
+The snapshot/manifest formats and `ServerDrone` runtime therefore describe variable propeller
+topology end to end. The stock four nodes remain pooled in the scene, while wider creator bodies
+materialize only the additional slot/collision nodes they need and retain that pool across edits.
 
 The general `encoded` snapshot entry contains `global_features` and one `propeller_features` row
 per slot. Feature names travel beside both arrays so their order cannot silently drift. Those raw
@@ -62,10 +62,10 @@ different model contracts instead of guessing hardware from action count. See
 
 ## Interactive training room
 
-Choose **ML Training Room** in the main menu to open the first environment. This room currently
-keeps the flight core at four propellers. Fresh PPO groups can optionally install an ordinary
+Choose **ML Training Room** in the main menu to open the first environment. Fresh PPO groups use
+the exact accepted creator rotor count; SAC-HER retains its stock-quad contract. Groups can also install an ordinary
 two-segment `GenericLimbDefinition` in a normal belly attachment slot. The model receives four
-independent limb controls (shoulder X/Z, elbow Z, grip) in addition to the four propellers, and the
+independent limb controls (shoulder X/Z, elbow Z, grip) in addition to its propeller controls, and the
 standard grip can hold both `climbable` static surfaces and `carryable` dynamic items.
 
 Target selection is routed per worker group without changing policy tensor sizes. **Target Settings**
@@ -212,8 +212,17 @@ lift-to-weight ratio. Target height is the literal world-space drone objective h
 hover-radius ring, observations, reward, and evaluator all use that same Y value with no hidden
 vertical offset. Rotor power changes lift and climb authority. Hardware edits lock while a group is running, branches inherit a
 deep private copy, checkpoints serialize the exact part stats, saved evaluators reconstruct them,
-and loading a modern checkpoint restores its hardware alongside its policy. Both installed
-learners retain the same validated four-motor action contract; each owns its own observation tensor.
+and loading a modern checkpoint restores its hardware alongside its policy. PPO follows the exact
+accepted propeller action width; SAC retains its validated four-motor tensor and checkpoint contract.
+
+The **Worker Groups +** button first opens a compact starting-body chooser. It offers independent,
+editable copies of a four-propeller drone, six-propeller drone, tiny humanoid with gripping hands and
+physical feet, and the established four-legged robo-dog body, plus a route into the empty custom-body
+creator. A selected preset opens directly at its equipped hardware rather than making the user rebuild
+the stock body slot by slot; Core mounts, parts, 3D limb shapes, joint poses, training settings, and
+group name remain editable before acceptance. The stock quad exposes PPO and SAC-HER. Wider drone
+action contracts, including the six-propeller preset, use PPO because the current SAC actor, replay,
+and checkpoint schema intentionally remain the validated fixed four-motor contract.
 
 Finished drones are intentionally frozen at their terminal position until the synchronized episode
 ends. A floating terminal-reason label distinguishes a horizontal `left_arena` exit, crash, wall

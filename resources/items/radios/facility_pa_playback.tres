@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="RadioItemDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/items/radio_item_definition.gd" id="1_definition"]
+
+[resource]
+script = ExtResource("1_definition")
+display_name = "Facility PA Playback"
+inventory_code = "PA"
+distortion_mode = 4
+distortion_drive = 0.0
+distortion_keep_hf_hz = 20000.0
+distortion_post_gain_db = 0.0
+receiver_static_enabled = false
+static_mix_db = -60.0
+metadata/_custom_type_script = "res://scripts/items/radio_item_definition.gd"

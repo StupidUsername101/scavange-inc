@@ -1,0 +1,28 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/server/server_speaker_cluster.gd" id="1_cluster"]
+[ext_resource type="Script" path="res://scripts/server/server_speaker_cluster_demo_facility.gd" id="2_facility"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_material.gd" id="3_material"]
+[ext_resource type="Resource" path="res://resources/world/garage_pressure_array.tres" id="4_definition"]
+[ext_resource type="PackedScene" path="res://scenes/shared/garage_speaker_array_emitters.tscn" id="5_emitters"]
+[sub_resource type="Resource" id="AcousticMaterial_garage"]
+script = ExtResource("3_material")
+material_id = &"garage_concrete_metal"
+transmission_gain = Vector3(0.38, 0.075, 0.014)
+absorption = Vector3(0.08, 0.18, 0.34)
+scattering = 0.38
+transmission_volume_db = -8.2
+transmission_lowpass_hz = 1650.0
+resonance = 0.22
+reverb_send = 0.38
+
+[node name="SpeakerClusterDemo" type="Node3D"]
+script = ExtResource("1_cluster")
+array_definition = ExtResource("4_definition")
+
+[node name="Facility" type="Node3D" parent="."]
+script = ExtResource("2_facility")
+acoustic_material = SubResource("AcousticMaterial_garage")
+use_baked_room_response = false
+
+[node name="Emitters" parent="." instance=ExtResource("5_emitters")]

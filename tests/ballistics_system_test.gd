@@ -3,6 +3,9 @@ extends SceneTree
 const GUN_PATH := (
 	"res://resources/items/guns/basic_service_pistol.tres"
 )
+const RIFLE_PATH := (
+	"res://resources/items/guns/warehouse_automatic_rifle.tres"
+)
 const WAREHOUSE_CATALOG := preload(
 	"res://scripts/drones/dev_warehouse_catalog.gd"
 )
@@ -26,8 +29,10 @@ func _init() -> void:
 
 func _run() -> void:
 	_test_modular_gun_contract()
+	_test_automatic_rifle_contract()
 	_test_warehouse_catalog()
 	_test_inventory_fire_and_reload()
+	_test_automatic_fire_cadence()
 	_test_drone_projectile_profiles()
 	_test_intercept_solution()
 	_test_projectile_network_wiring()
@@ -74,8 +79,17 @@ func _test_modular_gun_contract() -> void:
 	_expect(
 		float(profile.get("muzzle_velocity", 0.0)) > 0.0
 		and float(profile.get("maximum_range", 0.0)) > 0.0
-		and float(profile.get("damage", 0.0)) > 0.0,
+		and float(profile.get("damage", 0.0)) > 0.0
+		and profile.get("impact_sound_id", &"") == &"projectile_impact_9mm"
+		and float(profile.get("impact_sound_volume_db", 0.0)) >= 3.0,
 		"assembled parts produce a usable ballistic profile"
+	)
+	var fire_sound := build.get_fire_sound_profile()
+	_expect(
+		fire_sound.get("sound_id", &"") == &"service_pistol_fire"
+		and float(fire_sound.get("max_distance", 0.0)) >= 100.0
+		and float(fire_sound.get("pressure_strength", 0.0)) >= 0.9,
+		"assembled service receiver exposes its spatial report and pressure profile"
 	)
 
 	var incompatible := build.duplicate(true) as GunBuild
@@ -98,6 +112,64 @@ func _test_modular_gun_contract() -> void:
 	)
 
 
+func _test_automatic_rifle_contract() -> void:
+	var rifle := load(RIFLE_PATH) as GunItemDefinition
+	_expect(rifle != null, "warehouse automatic rifle loads")
+	if rifle == null:
+		return
+	var state := rifle.make_default_instance_state()
+	var build := rifle.get_build(state)
+	var profile := build.get_ballistic_profile()
+	_expect(
+		build.is_compatible()
+		and build.is_automatic()
+		and rifle.is_automatic(state),
+		"rifle build is caliber-compatible and explicitly automatic"
+	)
+	_expect(
+		build.get_magazine_capacity() == 30
+		and float(profile.get("rounds_per_second", 0.0)) >= 9.0
+		and float(profile.get("muzzle_velocity", 0.0)) > 100.0
+		and profile.get("impact_sound_id", &"") == &"projectile_impact_556",
+		"rifle exposes its 30-round magazine, automatic cadence, and rifle ballistics"
+	)
+	var sound_profile := build.get_fire_sound_profile()
+	_expect(
+		sound_profile.get("sound_id", &"") == &"automatic_rifle_fire"
+		and sound_profile.get("sound_id", &"") != &"service_pistol_fire"
+		and float(sound_profile.get("pressure_strength", 0.0)) >= 1.0,
+		"rifle publishes a distinct full-strength semantic report"
+	)
+	_expect(
+		build.get_reload_sound_id(false) == &"rifle_reload_out"
+		and build.get_reload_sound_id(true) == &"rifle_reload_in",
+		"rifle receiver selects its matching magazine cues"
+	)
+	var visual := rifle.instantiate_held_visual(state, true)
+	_expect(
+		visual.get_node_or_null("UpperReceiver") != null
+		and visual.get_node_or_null("Handguard") != null
+		and visual.get_node_or_null("Stock") != null
+		and visual.get_node_or_null("MuzzleBrake") != null
+		and visual.get_node_or_null("MagazineLower") != null,
+		"rifle presentation has a stock, handguard, curved magazine, and muzzle detail"
+	)
+	visual.free()
+
+	var sound_spec: Dictionary = {}
+	for candidate: Dictionary in GameAudioLibrary.WEAPON_REPORT_SPECS:
+		if candidate.get("id", &"") == &"automatic_rifle_fire":
+			sound_spec = candidate
+			break
+	_expect(
+		not sound_spec.is_empty()
+		and (sound_spec.get("streams", []) as Array).size() == 4
+		and (sound_spec.get("pressure_streams", []) as Array).size() == 4
+		and float(sound_spec.get("pressure_layer_gain_db", 0.0)) > 5.0,
+		"shared client catalog registers four rifle reports and calibrated pressure transients"
+	)
+
+
 func _test_warehouse_catalog() -> void:
 	var layout := WAREHOUSE_CATALOG.build_layout()
 	var paths: Array[String] = []
@@ -107,6 +179,10 @@ func _test_warehouse_catalog() -> void:
 	_expect(
 		GUN_PATH in paths,
 		"basic gun is physically available in the dev warehouse"
+	)
+	_expect(
+		RIFLE_PATH in paths,
+		"automatic rifle is physically available in the dev warehouse"
 	)
 	for part_path: String in [
 		"res://resources/guns/parts/stamped_service_receiver.tres",
@@ -142,6 +218,12 @@ func _test_inventory_fire_and_reload() -> void:
 			bool(result.get("fired", false)),
 			"round %d fires authoritatively" % shot_index
 		)
+		if shot_index == 0:
+			_expect(
+				result.get("fire_sound", {}).get("sound_id", &"")
+				== &"service_pistol_fire",
+				"authoritative fire result carries the receiver's semantic sound"
+			)
 	player.weapon_fire_cooldown_remaining = 0.0
 	var empty_result := player.try_fire_selected_gun()
 	_expect(
@@ -153,7 +235,17 @@ func _test_inventory_fire_and_reload() -> void:
 		player.weapon_reload_remaining > 0.0,
 		"empty trigger begins a bounded reload"
 	)
+	var initial_reload_time := player.weapon_reload_remaining
 	player.weapon_fire_cooldown_remaining = 0.0
+	player.call(
+		"_update_weapon_state",
+		initial_reload_time * 0.6
+	)
+	_expect(
+		player.weapon_reload_remaining > 0.0
+		and player.weapon_reload_insert_emitted,
+		"reload stages the magazine-out and magazine-in cues before completion"
+	)
 	player.call(
 		"_update_weapon_state",
 		player.weapon_reload_remaining + 0.01
@@ -172,6 +264,59 @@ func _test_inventory_fire_and_reload() -> void:
 		"players without arms cannot fire a selected gun"
 	)
 	player.queue_free()
+
+
+func _test_automatic_fire_cadence() -> void:
+	var scene := load(
+		"res://scenes/server/server_player.tscn"
+	) as PackedScene
+	var rifle_player := scene.instantiate() as ServerPlayer
+	root.add_child(rifle_player)
+	rifle_player.setup(421, Vector3.ZERO)
+	var rifle := load(RIFLE_PATH) as GunItemDefinition
+	_expect(
+		rifle_player.try_store_inventory_entry(
+			PlayerInventoryRules.make_entry(rifle)
+		),
+		"automatic rifle enters the ordinary player inventory"
+	)
+	rifle_player.set_primary_action_held(true)
+	_expect(
+		rifle_player.wants_automatic_fire(),
+		"held primary action requests server-driven fire for the automatic receiver"
+	)
+	var first_shot := rifle_player.try_fire_selected_gun()
+	var cooldown := rifle_player.weapon_fire_cooldown_remaining
+	rifle_player.call("_update_weapon_state", cooldown * 0.5)
+	var early_shot := rifle_player.try_fire_selected_gun()
+	rifle_player.call("_update_weapon_state", cooldown * 0.5 + 0.001)
+	var next_shot := rifle_player.try_fire_selected_gun()
+	_expect(
+		bool(first_shot.get("fired", false))
+		and not bool(early_shot.get("fired", false))
+		and bool(next_shot.get("fired", false)),
+		"server cooldown gates held fire to the receiver-authored cadence"
+	)
+	rifle_player.set_primary_action_held(false)
+	_expect(
+		not rifle_player.wants_automatic_fire(),
+		"releasing primary action immediately clears automatic-fire intent"
+	)
+	rifle_player.queue_free()
+
+	var pistol_player := scene.instantiate() as ServerPlayer
+	root.add_child(pistol_player)
+	pistol_player.setup(422, Vector3.ZERO)
+	var pistol := load(GUN_PATH) as GunItemDefinition
+	pistol_player.try_store_inventory_entry(
+		PlayerInventoryRules.make_entry(pistol)
+	)
+	pistol_player.set_primary_action_held(true)
+	_expect(
+		not pistol_player.wants_automatic_fire(),
+		"held primary action cannot turn the service pistol automatic"
+	)
+	pistol_player.queue_free()
 
 
 func _test_drone_projectile_profiles() -> void:
@@ -294,6 +439,11 @@ func _test_projectile_network_wiring() -> void:
 		client_source.contains("spawn_projectile_proxy")
 		and client_source.contains("PROJECTILE_PROXY_SCENE"),
 		"clients create immediate visible projectile proxies"
+	)
+	_expect(
+		client_source.contains("set_primary_action_held")
+		and server_source.contains("player.wants_automatic_fire()"),
+		"held trigger state crosses the network once and advances on the server tick"
 	)
 
 

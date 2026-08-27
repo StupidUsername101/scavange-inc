@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AcousticMaterial" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/audio/acoustic_material.gd" id="1_material"]
+
+[resource]
+script = ExtResource("1_material")
+material_id = &"thin_metal_housing"
+transmission_gain = Vector3(0.58, 0.22, 0.06)
+absorption = Vector3(0.09, 0.18, 0.3)
+scattering = 0.28
+transmission_volume_db = -4.5
+transmission_lowpass_hz = 3600.0
+resonance = 0.14
+reverb_send = 0.12

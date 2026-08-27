@@ -253,6 +253,8 @@ func _draw_equipment_badges(bar_origin: Vector2, visual_width: float) -> void:
 		badges.append("EYE")
 	if equipment.has(PlayerInventoryRules.BACKPACK_SLOT):
 		badges.append("PACK")
+	if equipment.has(PlayerInventoryRules.WRIST_DEVICE_SLOT):
+		badges.append("LINK")
 	if badges.is_empty():
 		return
 

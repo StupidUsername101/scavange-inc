@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://ch6ssetrp1h85"]
+
+[ext_resource type="Script" uid="uid://lca2ulrc1224" path="res://SpatialAudioPlayer3D.gd" id="1_jnqdv"]
+
+[node name="SpatialAudioPlayer3D" type="Node3D" unique_id=1341358732]
+script = ExtResource("1_jnqdv")

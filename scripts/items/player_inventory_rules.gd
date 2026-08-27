@@ -5,6 +5,7 @@ const BASE_CAPACITY := 1
 const MAX_CAPACITY := 9
 const BACKPACK_SLOT := "backpack"
 const EYES_SLOT := "eyes"
+const WRIST_DEVICE_SLOT := "wrist_device"
 
 #######################################################
 # Centralizes deterministic player inventory policy shared by clients and the server.

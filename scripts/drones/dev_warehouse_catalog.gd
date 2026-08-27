@@ -58,6 +58,14 @@ const SECTION_SPECS: Array[Dictionary] = [
 		"color": Color(0.24, 0.82, 0.62, 1.0),
 	},
 	{
+		"title": "WRIST DEVICES",
+		"directory": "res://resources/items/wrist_devices",
+		"columns": 2,
+		"copies": 1,
+		"slot_rotation": Vector3.ZERO,
+		"color": Color(0.12, 0.66, 0.52, 1.0),
+	},
+	{
 		"title": "FIREARMS",
 		"directory": "res://resources/items/guns",
 		"columns": 2,
@@ -78,6 +86,25 @@ const SECTION_SPECS: Array[Dictionary] = [
 		"copies": 1,
 		"color": Color(0.96, 0.72, 0.18, 1.0),
 	},
+	{
+		"title": "RADIOS",
+		"directory": "res://resources/items/radios",
+		"columns": 2,
+		"copies": 1,
+		"slot_rotation": Vector3.ZERO,
+		"color": Color(0.16, 0.68, 0.76, 1.0),
+	},
+	{
+		"title": "FINALIZED ML CHIPS",
+		"directory": FinalizedMLChipStore.DEFAULT_ROOT_PATH,
+		"columns": 3,
+		"copies": 1,
+		# Reserve a stable client/server shelf footprint even when a remote client does not own
+		# the server's user:// checkpoint files. Server part-state snapshots still render the chips.
+		"fixed_rows": 6,
+		"finalized_models": true,
+		"color": Color(0.43, 0.36, 1.0, 1.0),
+	},
 ]
 
 #######################################################
@@ -86,20 +113,32 @@ const SECTION_SPECS: Array[Dictionary] = [
 #######################################################
 
 
-static func build_layout() -> Dictionary:
+static func build_layout(
+	validate_finalized_models: bool = true,
+	include_local_finalized_models: bool = true
+) -> Dictionary:
 	var sections: Array[Dictionary] = []
 	var slots: Array[Dictionary] = []
 	var cursor_x := 0.0
 	var slot_index := 0
 
 	for spec: Dictionary in SECTION_SPECS:
-		var definitions := _load_definitions(str(spec["directory"]))
+		var is_finalized_section: bool = bool(spec.get("finalized_models", false))
+		var definitions: Array[Resource] = []
+		if is_finalized_section:
+			if include_local_finalized_models:
+				definitions = _load_finalized_model_definitions(
+					FinalizedMLChipStore.configured_root_path(),
+					validate_finalized_models
+				)
+		else:
+			definitions = _load_definitions(str(spec["directory"]))
 		var columns := int(spec["columns"])
 		var copies := int(spec["copies"])
 		var row_count := definitions.size()
 		if copies == 1:
 			row_count = int(ceili(float(definitions.size()) / float(columns)))
-		row_count = maxi(row_count, 1)
+		row_count = maxi(row_count, maxi(int(spec.get("fixed_rows", 1)), 1))
 
 		var section_width := (
 			float(columns) * HORIZONTAL_SPACING
@@ -147,7 +186,10 @@ static func build_layout() -> Dictionary:
 					"definition_path": definition.resource_path,
 					"display_name": str(definition.get("display_name")),
 					"position": position,
-					"rotation": Vector3(deg_to_rad(90.0), 0.0, 0.0),
+					"rotation": spec.get(
+						"slot_rotation",
+						Vector3(deg_to_rad(90.0), 0.0, 0.0)
+					),
 					"copy_index": copy_index,
 					"copy_count": item_copy_count,
 				})
@@ -195,6 +237,17 @@ static func _load_definitions(directory_path: String) -> Array[Resource]:
 				< 0
 			)
 	)
+	return definitions
+
+
+static func _load_finalized_model_definitions(
+	directory_path: String,
+	validate_checkpoints: bool
+) -> Array[Resource]:
+	var definitions: Array[Resource] = []
+	var chip_store: FinalizedMLChipStore = FinalizedMLChipStore.new(directory_path)
+	for chip: DroneAIChipDefinition in chip_store.discover_chips(validate_checkpoints):
+		definitions.append(chip)
 	return definitions
 
 

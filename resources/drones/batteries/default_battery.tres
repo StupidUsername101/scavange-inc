@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="DroneBatteryDefinition" format=3 uid="uid://b53muwhx707k8"]
+
+[ext_resource type="Script" uid="uid://e5xgxm7idoes" path="res://scripts/drones/drone_battery_definition.gd" id="1_battery"]
+
+[resource]
+script = ExtResource("1_battery")
+nominal_power_output = 135.0
+maximum_power_output = 165.0
+spike_chance_per_second = 0.015
+minimum_spike_duration = 0.08
+maximum_spike_duration = 0.2
+minimum_drop_multiplier = 0.75
+maximum_drop_multiplier = 0.9
+display_name = "Minute Cell"
+visual_color = Color(0.12, 0.48, 0.22, 1)
+mass = 0.35

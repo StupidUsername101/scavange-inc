@@ -1,0 +1,30 @@
+[gd_resource type="Resource" script_class="GunReceiverDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/weapons/gun_receiver_definition.gd" id="1_receiver"]
+
+[sub_resource type="BoxShape3D" id="Shape"]
+size = Vector3(0.25, 0.2, 0.52)
+
+[resource]
+script = ExtResource("1_receiver")
+display_name = "Automatic Rifle Receiver"
+inventory_code = "ARR"
+mass = 1.86
+collision_shape = SubResource("Shape")
+part_slot = 0
+caliber_id = &"5.56x45"
+component_color = Color(0.135, 0.15, 0.14, 1)
+component_size = Vector3(0.25, 0.2, 0.52)
+rounds_per_second = 9.5
+base_spread_degrees = 1.05
+damage_multiplier = 1.0
+reload_seconds = 1.95
+automatic = true
+presentation_profile = &"rifle"
+fire_sound_id = &"automatic_rifle_fire"
+fire_sound_max_distance = 165.0
+fire_sound_volume_db = 1.0
+fire_sound_priority = 1.0
+fire_pressure_strength = 1.0
+reload_out_sound_id = &"rifle_reload_out"
+reload_in_sound_id = &"rifle_reload_in"

@@ -5,6 +5,7 @@ signal surface_clicked(mount_transform: Transform3D)
 signal slot_selected(slot_index: int)
 signal slot_remove_requested(slot_index: int)
 signal face_selected(face_index: int)
+signal orientation_direction_clicked(direction_local: Vector3)
 
 const PART_GEOMETRY = preload("res://scripts/drones/drone_part_geometry.gd")
 const BACKGROUND_COLOR: Color = Color("071713")
@@ -14,6 +15,8 @@ const PROPELLER_SLOT_COLOR: Color = Color("67c7ff")
 const SLOT_SELECTED_COLOR: Color = Color("ffad42")
 const FACE_SELECTED_COLOR: Color = Color(1.0, 0.47, 0.13, 0.55)
 const FACE_HIGHLIGHT_OFFSET_M: float = 0.003
+const FORWARD_COLOR: Color = Color("ffad42")
+const UP_COLOR: Color = Color("54e6b1")
 const PLACEMENT_OFFSET_M: float = 0.10
 const MARKER_RADIUS_PX: float = 18.0
 const ORBIT_SENSITIVITY: float = 0.009
@@ -21,20 +24,29 @@ const ZOOM_STEP: float = 0.12
 const MIN_PITCH: float = -1.25
 const MAX_PITCH: float = 1.25
 
+const ORIENTATION_EDIT_NONE: int = 0
+const ORIENTATION_EDIT_FORWARD: int = 1
+const ORIENTATION_EDIT_UP: int = 2
+
 var preview_viewport: SubViewport
 var scene_root: Node3D
 var core_visual_root: Node3D
 var marker_root: Node3D
 var face_highlight_root: Node3D
+var orientation_root: Node3D
 var camera: Camera3D
 var core_size: Vector3 = Vector3(0.65, 0.24, 0.65)
 var editable_core_mesh: DroneCoreEditableMeshDefinition
+var orientation_supported: bool = false
 var slot_transforms: Array[Transform3D] = []
 var slot_kinds: Array[StringName] = []
 var selected_slot_index: int = -1
 var placement_enabled: bool = true
 var face_edit_enabled: bool = false
 var selected_face_index: int = -1
+var orientation_edit_axis: int = ORIENTATION_EDIT_NONE
+var model_forward_local: Vector3 = Vector3.FORWARD
+var model_up_local: Vector3 = Vector3.UP
 var orbit_dragging: bool = false
 var orbit_yaw: float = 0.7
 var orbit_pitch: float = 0.35
@@ -72,6 +84,9 @@ func _build_viewport() -> void:
 	face_highlight_root = Node3D.new()
 	face_highlight_root.name = "FaceHighlight"
 	scene_root.add_child(face_highlight_root)
+	orientation_root = Node3D.new()
+	orientation_root.name = "WorkerOrientation"
+	scene_root.add_child(orientation_root)
 
 	camera = Camera3D.new()
 	camera.name = "PreviewCamera"
@@ -106,8 +121,14 @@ func set_core_resource(core: Resource, reset_camera_distance: bool = true) -> vo
 	for child: Node in core_visual_root.get_children():
 		child.queue_free()
 	editable_core_mesh = null
+	orientation_supported = core is DroneCoreDefinition
+	model_forward_local = Vector3.FORWARD
+	model_up_local = Vector3.UP
 	if core is DroneCoreDefinition:
 		var drone_core: DroneCoreDefinition = core as DroneCoreDefinition
+		var model_basis: Basis = drone_core.model_orientation_basis_local()
+		model_forward_local = -model_basis.z
+		model_up_local = model_basis.y
 		if drone_core.editable_mesh != null and drone_core.editable_mesh.has_geometry():
 			editable_core_mesh = drone_core.editable_mesh
 	core_size = _core_preview_size(core)
@@ -130,7 +151,20 @@ func set_core_resource(core: Resource, reset_camera_distance: bool = true) -> vo
 		else -1
 	)
 	_rebuild_face_highlight()
+	_rebuild_orientation_visual()
 	_update_camera()
+
+
+func set_orientation_edit_axis(axis: int) -> void:
+	orientation_edit_axis = clampi(axis, ORIENTATION_EDIT_NONE, ORIENTATION_EDIT_UP)
+
+
+func set_model_orientation(forward_local: Vector3, up_local: Vector3) -> void:
+	if forward_local.is_finite() and forward_local.length_squared() > 0.000001:
+		model_forward_local = forward_local.normalized()
+	if up_local.is_finite() and up_local.length_squared() > 0.000001:
+		model_up_local = up_local.normalized()
+	_rebuild_orientation_visual()
 
 
 func set_face_edit_enabled(enabled: bool) -> void:
@@ -227,6 +261,14 @@ func _gui_input(event: InputEvent) -> void:
 
 func _handle_left_click(local_position: Vector2) -> void:
 	var viewport_position: Vector2 = _to_viewport_position(local_position)
+	if orientation_edit_axis != ORIENTATION_EDIT_NONE:
+		var orientation_hit: Dictionary = _core_hit_at(viewport_position)
+		if orientation_hit.is_empty():
+			return
+		var direction: Vector3 = orientation_hit.get("normal", Vector3.ZERO).normalized()
+		if direction.length_squared() > 0.000001:
+			orientation_direction_clicked.emit(direction)
+		return
 	if face_edit_enabled:
 		var face_hit: Dictionary = _core_hit_at(viewport_position)
 		if face_hit.is_empty():
@@ -444,6 +486,76 @@ func _rebuild_face_highlight() -> void:
 	highlight.material_override = material
 	highlight.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	face_highlight_root.add_child(highlight)
+
+
+func _rebuild_orientation_visual() -> void:
+	if orientation_root == null:
+		return
+	for child: Node in orientation_root.get_children():
+		child.queue_free()
+	if not orientation_supported:
+		return
+	var extent: float = maxf(core_size.x, maxf(core_size.y, core_size.z))
+	var arrow_length: float = maxf(extent * 0.82, 0.32)
+	_add_orientation_arrow(model_forward_local, arrow_length, FORWARD_COLOR, "FORWARD")
+	_add_orientation_arrow(model_up_local, arrow_length, UP_COLOR, "UP")
+
+
+func _add_orientation_arrow(
+	direction_value: Vector3,
+	length: float,
+	color: Color,
+	label_text: String
+) -> void:
+	var direction: Vector3 = direction_value.normalized()
+	if direction.length_squared() <= 0.000001:
+		return
+	var shaft_length: float = length * 0.76
+	var shaft_radius: float = maxf(length * 0.018, 0.006)
+	var shaft: MeshInstance3D = MeshInstance3D.new()
+	var shaft_mesh: CylinderMesh = CylinderMesh.new()
+	shaft_mesh.top_radius = shaft_radius
+	shaft_mesh.bottom_radius = shaft_radius
+	shaft_mesh.height = shaft_length
+	shaft.mesh = shaft_mesh
+	shaft.transform = Transform3D(
+		GeometryBasis.from_y(direction),
+		direction * shaft_length * 0.5
+	)
+	shaft.material_override = _orientation_material(color)
+	shaft.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	orientation_root.add_child(shaft)
+
+	var head: MeshInstance3D = MeshInstance3D.new()
+	var head_mesh: CylinderMesh = CylinderMesh.new()
+	head_mesh.top_radius = 0.0
+	head_mesh.bottom_radius = maxf(length * 0.065, 0.022)
+	head_mesh.height = length - shaft_length
+	head.mesh = head_mesh
+	head.transform = Transform3D(
+		GeometryBasis.from_y(direction),
+		direction * (shaft_length + head_mesh.height * 0.5)
+	)
+	head.material_override = _orientation_material(color)
+	head.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	orientation_root.add_child(head)
+
+	var label: Label3D = Label3D.new()
+	label.text = label_text
+	label.font_size = 28
+	label.modulate = color
+	label.outline_size = 5
+	label.position = direction * (length + maxf(length * 0.08, 0.04))
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	orientation_root.add_child(label)
+
+
+func _orientation_material(color: Color) -> StandardMaterial3D:
+	var material: StandardMaterial3D = StandardMaterial3D.new()
+	material.albedo_color = color
+	material.emission_enabled = true
+	material.emission = color * 0.4
+	return material
 
 
 func _fallback_core_visual(size_value: Vector3) -> Node3D:

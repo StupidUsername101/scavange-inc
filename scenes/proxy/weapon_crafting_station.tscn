@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/client/weapon_crafting_station_proxy.gd" id="1_station"]
+[ext_resource type="Script" path="res://scripts/client/fieldlink_device_beacon.gd" id="2_beacon"]
+
+[node name="WeaponCraftingStation" type="Node3D"]
+script = ExtResource("1_station")
+station_id = 3
+
+[node name="FieldlinkBeacon" type="Node3D" parent="."]
+position = Vector3(-0.5, 1.72, -1.02)
+script = ExtResource("2_beacon")
+contact_id = &"station:weapon_fabricator"
+display_name = "WEAPON FABRICATOR"
+device_class = &"FABRICATOR"
+status_text = "READY"

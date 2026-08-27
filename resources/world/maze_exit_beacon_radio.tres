@@ -1,0 +1,41 @@
+[gd_resource type="Resource" script_class="RadioItemDefinition" load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/items/radio_item_definition.gd" id="1_definition"]
+[ext_resource type="PackedScene" path="res://scenes/items/visuals/portable_radio_visual.tscn" id="2_visual"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_path_modifier.gd" id="3_modifier"]
+
+[sub_resource type="BoxShape3D" id="RadioShape"]
+size = Vector3(0.78, 0.48, 0.32)
+
+[sub_resource type="Resource" id="MazeBeaconSourceModifier"]
+script = ExtResource("3_modifier")
+modifier_id = &"maze_exit_beacon"
+band_gain = Vector3(1, 1, 0.96)
+lowpass_hz = 18000.0
+highpass_hz = 30.0
+resonance = 0.05
+
+[resource]
+script = ExtResource("1_definition")
+display_name = "Maze Exit Beacon"
+inventory_code = "MZB"
+fieldlink_detectable = true
+fieldlink_device_class = &"AUDIO BEACON"
+fieldlink_control_type = &"radio"
+fieldlink_signal_strength = 1.4
+sync_size_sliders = false
+mass = 2.4
+grip_surface_tags = PackedStringArray("electronics")
+visual_scene = ExtResource("2_visual")
+collision_shape = SubResource("RadioShape")
+shape_position = Vector3(0, 0.24, 0)
+maximum_hearing_distance = 300.0
+playback_volume_db = 5.0
+source_modifier = SubResource("MazeBeaconSourceModifier")
+distortion_mode = 4
+distortion_drive = 0.03
+distortion_keep_hf_hz = 18000.0
+distortion_post_gain_db = -0.5
+receiver_static_enabled = true
+static_mix_db = -31.0
+metadata/_custom_type_script = "res://scripts/items/radio_item_definition.gd"

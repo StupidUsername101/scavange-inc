@@ -529,9 +529,9 @@ func begin_update(force_partial_rollout = false) -> bool:
 		)
 	update_advantages = update_prepared["advantages"]
 	update_returns = update_prepared["returns"]
-	update_indices.clear()
-	for index in range(update_rollout.size()):
-		update_indices.append(index)
+	update_indices.resize(update_rollout.size())
+	for index: int in range(update_indices.size()):
+		update_indices[index] = index
 
 	update_metric_totals = _empty_metric_totals()
 	update_metric_sample_count = 0
@@ -553,7 +553,7 @@ func begin_update(force_partial_rollout = false) -> bool:
 		maxi(update_count + 1, optimizer_policy_revision + 1),
 		behavior_policy_update + 1
 	)
-	_shuffle(update_indices)
+	RLTrainingMath.shuffle_indices_in_place(update_indices, shuffle_rng)
 	update_in_progress = true
 	return true
 
@@ -1116,7 +1116,6 @@ func load_checkpoint(checkpoint: Dictionary) -> bool:
 		RLTrainingMath.finite_int_or(checkpoint.get("schema_version", 0), -1) != CHECKPOINT_SCHEMA_VERSION
 		or str(checkpoint.get("algorithm", "")) != ALGORITHM_NAME
 		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) < 0
-		or RLTrainingMath.finite_int_or(checkpoint.get("propeller_count", 0), -1) > DronePPOObservationEncoder.QUAD_PROPELLER_COUNT
 		or not DronePPOObservationEncoder.is_trainable_schema(
 			RLTrainingMath.finite_int_or(network.get("observation_schema_version", 0), -1)
 		)
@@ -1409,7 +1408,7 @@ func _finish_epoch_or_update() -> bool:
 	if update_epoch >= maxi(int(config["update_epochs"]), 1):
 		_finalize_update()
 		return true
-	_shuffle(update_indices)
+	RLTrainingMath.shuffle_indices_in_place(update_indices, shuffle_rng)
 	update_batch_start = 0
 	update_batch_cursor = 0
 	update_batch_end = 0
@@ -1776,98 +1775,39 @@ func _policy_divergence_metrics(
 	)
 
 func _prepare_rollout(source_rollout: Array[Dictionary]) -> Dictionary:
-	var advantages = PackedFloat64Array()
-	var returns = PackedFloat64Array()
-	var value_predictions = PackedFloat64Array()
-	advantages.resize(source_rollout.size())
-	returns.resize(source_rollout.size())
-	value_predictions.resize(source_rollout.size())
 	var discount_reference = float(config["discount_factor"])
 	var discount_reference_interval = float(config.get(
 		"discount_reference_interval_seconds",
 		config.get("control_interval_seconds", 0.05)
 	))
 	var gae_lambda = float(config["gae_lambda"])
-	# Rollouts are interleaved across workers. One reverse scan keeps only the next GAE
-	# value per worker, avoiding a temporary index Array for every drone at update start.
-	var next_advantage_by_worker: Dictionary = {}
-	for transition_index in range(source_rollout.size() - 1, -1, -1):
-		var transition: Dictionary = source_rollout[transition_index]
-		var worker_id = int(transition["worker_id"])
-		var terminated = bool(transition["terminated"])
-		var truncated = bool(transition["truncated"])
-		var bootstrap_mask = 0.0 if terminated else 1.0
-		var gamma_delta = RLTrainingMath.discount_for_delta(
-			discount_reference,
-			float(transition.get("delta_seconds", config.get("control_interval_seconds", 0.05))),
-			discount_reference_interval
-		)
-		var lambda_delta = RLTrainingMath.discount_for_delta(
-			gae_lambda,
-			float(transition.get("delta_seconds", config.get("control_interval_seconds", 0.05))),
-			discount_reference_interval
-		)
-		var delta = (
-			float(transition["reward"])
-			+ gamma_delta * float(transition["next_value"]) * bootstrap_mask
-			- float(transition["old_value"])
-		)
-		var advantage = delta
-		if (
-			not terminated
-			and not truncated
-			and next_advantage_by_worker.has(worker_id)
-		):
-			# Gamma and the GAE trace decay use the same real-time reference interval, so
-			# changing a group's control rate does not silently change the estimator horizon.
-			advantage += (
-				gamma_delta
-				* lambda_delta
-				* float(next_advantage_by_worker[worker_id])
-			)
-		advantages[transition_index] = advantage
-		returns[transition_index] = advantage + float(transition["old_value"])
-		value_predictions[transition_index] = float(transition["old_value"])
-		if (
-			not is_finite(advantages[transition_index])
-			or not is_finite(returns[transition_index])
-			or not is_finite(value_predictions[transition_index])
-		):
-			return {}
-		next_advantage_by_worker[worker_id] = advantage
-
-	var mean = 0.0
-	for advantage in advantages:
-		mean += advantage
-	mean /= float(maxi(advantages.size(), 1))
-	var variance = 0.0
-	for advantage in advantages:
-		var difference = advantage - mean
-		variance += difference * difference
-	variance /= float(maxi(advantages.size(), 1))
-	var standard_deviation = sqrt(variance + 0.00000001)
-	for index in range(advantages.size()):
-		advantages[index] = (advantages[index] - mean) / standard_deviation
+	var prepared = RLTrainingMath.generalized_advantage_estimates(
+		source_rollout,
+		discount_reference,
+		gae_lambda,
+		discount_reference_interval,
+		float(config.get("control_interval_seconds", 0.05)),
+		"old_value"
+	)
+	if prepared.is_empty():
+		return {}
+	var advantages: PackedFloat64Array = prepared["advantages"]
+	var returns: PackedFloat64Array = prepared["returns"]
+	var value_predictions: PackedFloat64Array = prepared["value_predictions"]
+	var normalization = RLTrainingMath.normalize_in_place(advantages)
+	for index: int in range(advantages.size()):
 		if not is_finite(advantages[index]) or not is_finite(returns[index]):
 			return {}
 	return {
 		"advantages": advantages,
 		"returns": returns,
 		"value_predictions": value_predictions,
-		"advantage_mean": mean,
-		"advantage_standard_deviation": standard_deviation,
+		"advantage_mean": normalization.x,
+		"advantage_standard_deviation": normalization.y,
 		"return_statistics": RLTrainingMath.finite_statistics(returns),
 		"value_prediction_statistics": RLTrainingMath.finite_statistics(value_predictions),
 		"explained_variance": RLTrainingMath.explained_variance(returns, value_predictions),
 	}
-
-
-func _shuffle(indices: Array[int]) -> void:
-	for index in range(indices.size() - 1, 0, -1):
-		var swap_index = shuffle_rng.randi_range(0, index)
-		var temporary = indices[index]
-		indices[index] = indices[swap_index]
-		indices[swap_index] = temporary
 
 
 func _safe_average(total: float, count: int) -> float:

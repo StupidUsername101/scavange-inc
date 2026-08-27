@@ -82,7 +82,8 @@ func get_grab_direction() -> Vector3:
 
 func get_grab_target(
 	grab_distance: float,
-	lift_offset: float
+	lift_offset: float,
+	side_offset := 0.0
 ) -> Vector3:
 	if capability == null:
 		return get_grab_origin()
@@ -91,6 +92,7 @@ func get_grab_target(
 		get_grab_origin()
 		+ get_grab_direction() * grab_distance
 		+ global_basis.y.normalized() * lift_offset
+		+ global_basis.x.normalized() * side_offset
 	)
 
 

@@ -506,6 +506,19 @@ func _build_ai_behavior_group(chip: DroneAIChipDefinition) -> Dictionary:
 			)
 		),
 	]
+	if chip.has_finalized_model_identity():
+		behavior_values.append(InspectionDocumentBuilder.stat(
+			"Model artifact",
+			chip.finalized_model_id
+		))
+		behavior_values.append(InspectionDocumentBuilder.stat(
+			"Algorithm",
+			chip.finalized_algorithm_id
+		))
+		behavior_values.append(InspectionDocumentBuilder.stat(
+			"Body signature",
+			chip.finalized_body_signature
+		))
 	if not chip.behavior_description.is_empty():
 		behavior_values.append(InspectionDocumentBuilder.stat("Profile", chip.behavior_description))
 	return InspectionDocumentBuilder.node(

@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://1hq4t50fc371"
+path="res://.godot/imported/LALE ANDERSEN, _Lili Marleen_ (1938)..mp3-88801c6e5b23e8e6d97e073095aa42b0.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Deutsch Swing/LALE ANDERSEN, _Lili Marleen_ (1938)..mp3"
+dest_files=["res://.godot/imported/LALE ANDERSEN, _Lili Marleen_ (1938)..mp3-88801c6e5b23e8e6d97e073095aa42b0.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

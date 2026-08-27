@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://bvnu8c4d3rhus"
+path="res://.godot/imported/Lebe wohl, du kleine Monika.mp3-aa42367ec9841e8f37a57a1be13a5b04.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Lebe wohl, du kleine Monika.mp3"
+dest_files=["res://.godot/imported/Lebe wohl, du kleine Monika.mp3-aa42367ec9841e8f37a57a1be13a5b04.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

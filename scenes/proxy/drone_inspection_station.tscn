@@ -1,6 +1,7 @@
-[gd_scene load_steps=21 format=3]
+[gd_scene load_steps=22 format=3]
 
 [ext_resource type="Script" path="res://scripts/client/drone_inspection_station_proxy.gd" id="1_proxy"]
+[ext_resource type="Script" path="res://scripts/client/fieldlink_device_beacon.gd" id="2_beacon"]
 
 [sub_resource type="StandardMaterial3D" id="Material_steel"]
 albedo_color = Color(0.11, 0.13, 0.15, 1)
@@ -99,6 +100,14 @@ radial_segments = 10
 [node name="DroneInspectionStation" type="Node3D"]
 script = ExtResource("1_proxy")
 station_id = 1
+
+[node name="FieldlinkBeacon" type="Node3D" parent="."]
+position = Vector3(0, 1.73, -0.55)
+script = ExtResource("2_beacon")
+contact_id = &"station:drone_inspection"
+display_name = "DRONE INSPECTION TERMINAL"
+device_class = &"DIAGNOSTIC"
+status_text = "ONLINE"
 
 [node name="Tabletop" type="MeshInstance3D" parent="."]
 position = Vector3(0, 1, 0)

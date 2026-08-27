@@ -1,6 +1,7 @@
-[gd_scene load_steps=15 format=3]
+[gd_scene load_steps=16 format=3]
 
 [ext_resource type="Script" path="res://scripts/client/body_part_shop_terminal_proxy.gd" id="1_shop"]
+[ext_resource type="Script" path="res://scripts/client/fieldlink_device_beacon.gd" id="2_beacon"]
 
 [sub_resource type="StandardMaterial3D" id="Material_housing"]
 albedo_color = Color(0.055, 0.065, 0.068, 1)
@@ -66,6 +67,14 @@ size = Vector3(0.92, 0.06, 1.8)
 [node name="BodyPartShopTerminal" type="Node3D"]
 script = ExtResource("1_shop")
 station_id = 2
+
+[node name="FieldlinkBeacon" type="Node3D" parent="."]
+position = Vector3(0, 1.73, -0.55)
+script = ExtResource("2_beacon")
+contact_id = &"station:limb_supply"
+display_name = "LIMB SUPPLY TERMINAL"
+device_class = &"LOGISTICS"
+status_text = "ONLINE"
 
 [node name="TerminalHousing" type="MeshInstance3D" parent="."]
 position = Vector3(0, 1.73, -0.63)

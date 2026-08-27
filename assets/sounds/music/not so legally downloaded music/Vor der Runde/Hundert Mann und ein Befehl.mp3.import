@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://b4odnvqlm2cbd"
+path="res://.godot/imported/Hundert Mann und ein Befehl.mp3-d86d2499b52950c52443447fd3b326ee.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Hundert Mann und ein Befehl.mp3"
+dest_files=["res://.godot/imported/Hundert Mann und ein Befehl.mp3-d86d2499b52950c52443447fd3b326ee.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

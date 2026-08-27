@@ -78,7 +78,7 @@ func failure_reason() -> String:
 
 
 func camera_anchor_transform() -> Transform3D:
-	return drone.global_transform if is_instance_valid(drone) else Transform3D.IDENTITY
+	return drone.model_transform_world() if is_instance_valid(drone) else Transform3D.IDENTITY
 
 
 func hardware_signature() -> String:

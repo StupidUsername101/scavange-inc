@@ -5,8 +5,9 @@ const SLOT_LAYOUT := preload(
 	"res://scripts/drones/drone_slot_layout.gd"
 )
 const PART_GEOMETRY = preload("res://scripts/drones/drone_part_geometry.gd")
+const PHYSICAL_SURFACE := preload("res://scripts/audio/physical_surface.gd")
 const AI_GROUND_PROBE_DISTANCE := 12.0
-const MAX_PROPELLER_SLOTS := 4
+const LEGACY_QUAD_PROPELLER_COUNT := 4
 const DEFAULT_CORE_SIZE := Vector3(0.65, 0.24, 0.65)
 const DEFAULT_BATTERY_SIZE := Vector3(0.35, 0.12, 0.26)
 const DEFAULT_PROPELLER_RADIUS := 0.18
@@ -61,8 +62,13 @@ var propeller_slots: Array[DronePropellerSlot] = []
 var ai_controller: DroneAIController
 var flight_controller: DroneFlightController
 var ml_controller: DroneMLController
+var ml_gameplay_chip: DroneAIChipDefinition
+var ml_gameplay_chip_active: bool = false
+var ml_gameplay_chip_power_ratio: float = 0.0
+var ml_gameplay_model_error: String = ""
+var ml_gameplay_hold_target: Vector3 = Vector3.ZERO
 var obstacle_avoidance: DroneObstacleAvoidance
-var ai_motor_thrust_targets: Array[float] = [0.0, 0.0, 0.0, 0.0]
+var ai_motor_thrust_targets: Array[float] = []
 var last_propeller_requested_power_w: Array[float] = []
 var last_propeller_applied_power_w: Array[float] = []
 var last_propeller_realized_thrust_n: Array[float] = []
@@ -75,6 +81,7 @@ var propeller_axial_response_by_slot: Array[float] = []
 var propeller_minimum_axial_factor_by_slot: Array[float] = []
 var propeller_maximum_axial_factor_by_slot: Array[float] = []
 var cached_ground_effect_by_slot: Array[float] = []
+var cached_model_orientation_basis_local: Basis = Basis.IDENTITY
 var cached_ai_collision_radius := 0.72
 var cached_spool_up_response := 1.0
 var cached_spool_down_response := 1.0
@@ -104,11 +111,29 @@ var limb_attachment_slot_cache: PackedInt32Array = PackedInt32Array()
 var limb_attachment_assembly_tick_cache: Array[GenericLimbAssembly3D] = []
 var core_camera_part_definition: DroneCameraAttachmentDefinition
 var ml_body_interface_manifest: MLBodyInterfaceManifest
+var cached_server_service: Node
+
+
+func _server_service() -> Node:
+	if is_instance_valid(cached_server_service):
+		return cached_server_service
+	var tree := get_tree()
+	if tree != null:
+		cached_server_service = tree.root.get_node_or_null("Server")
+	return cached_server_service
 
 
 func _ready() -> void:
+	PHYSICAL_SURFACE.apply_to(self, &"metal")
 	if loadout != null:
 		loadout = MLBodyPartContract.deep_duplicate_resource(loadout) as DroneLoadout
+		if loadout != null and loadout.core != null:
+			cached_model_orientation_basis_local = loadout.core.model_orientation_basis_local()
+			# Scene transforms are authored as worker transforms. Apply the inverse model frame once so
+			# the physical Core, its mount geometry, and client-replicated pose start in that frame.
+			global_basis = (
+				global_basis * cached_model_orientation_basis_local.transposed()
+			).orthonormalized()
 
 	ai_controller = DroneAIController.new(self)
 	flight_controller = DroneFlightController.new(self)
@@ -127,7 +152,11 @@ func _ready() -> void:
 	if air_environment == null:
 		push_error("ServerDrone requires an AirEnvironment in the server world")
 
-	drone_id = Server.register_drone(self)
+	var server_service := _server_service()
+	if server_service == null:
+		push_error("ServerDrone requires the Server autoload")
+		return
+	drone_id = int(server_service.call("register_drone", self))
 	power_rng.seed = (
 		RANDOM_SEED_BASE
 		+ drone_id * DRONE_RANDOM_SEED_FACTOR
@@ -138,24 +167,38 @@ func _ready() -> void:
 
 func _exit_tree() -> void:
 	if drone_id != -1:
-		Server.unregister_drone(drone_id)
+		var server_service := _server_service()
+		if server_service != null:
+			server_service.call("unregister_drone", drone_id)
 
 
 func _collect_propeller_slots() -> void:
 	propeller_slots.clear()
 	var available_slots: Array[DronePropellerSlot] = []
-	for child in $PropellerSlots.get_children():
+	var propeller_root: Node3D = $PropellerSlots
+	for child in propeller_root.get_children():
 		if child is DronePropellerSlot:
 			available_slots.append(child as DronePropellerSlot)
+	var supported_count: int = (
+		maxi(loadout.core.propeller_slot_count, 0)
+		if loadout != null and loadout.core != null
+		else 0
+	)
+	# The stock scene keeps its four familiar slots for compatibility, while creator bodies grow
+	# this pool only when their accepted topology requires it. Nodes are retained on a later shrink
+	# so hardware edits do not churn SceneTree/physics allocations.
+	while available_slots.size() < supported_count:
+		var slot_index: int = available_slots.size()
+		var new_slot: DronePropellerSlot = DronePropellerSlot.new()
+		new_slot.name = "CreatorPropeller%d" % slot_index
+		new_slot.slot_index = slot_index
+		new_slot.spin_direction = _default_propeller_spin_direction(slot_index)
+		propeller_root.add_child(new_slot)
+		available_slots.append(new_slot)
 
 	available_slots.sort_custom(
 		func(a: DronePropellerSlot, b: DronePropellerSlot) -> bool:
 			return a.slot_index < b.slot_index
-	)
-	var supported_count: int = (
-		mini(maxi(loadout.core.propeller_slot_count, 0), MAX_PROPELLER_SLOTS)
-		if loadout != null and loadout.core != null
-		else 0
 	)
 	for array_index: int in range(available_slots.size()):
 		var slot: DronePropellerSlot = available_slots[array_index]
@@ -170,13 +213,17 @@ func _collect_propeller_slots() -> void:
 	$CoreCollision.set_meta("edit_slot_index", -1)
 	$BatteryCollision.set_meta("edit_slot_kind", &"battery")
 	$BatteryCollision.set_meta("edit_slot_index", -1)
-	for slot_index in range(MAX_PROPELLER_SLOTS):
-		var collision := get_node_or_null(
-			"Propeller%dCollision" % slot_index
-		) as CollisionShape3D
-		if collision != null:
-			collision.set_meta("edit_slot_kind", &"propeller")
-			collision.set_meta("edit_slot_index", slot_index)
+	for slot_index: int in range(supported_count):
+		_ensure_propeller_collision(slot_index)
+	for child: Node in get_children():
+		var collision: CollisionShape3D = child as CollisionShape3D
+		if collision == null:
+			continue
+		var collision_slot_index: int = _propeller_collision_slot_index(collision)
+		if collision_slot_index < 0:
+			continue
+		collision.set_meta("edit_slot_kind", &"propeller")
+		collision.set_meta("edit_slot_index", collision_slot_index)
 
 	for slot_index in range(SLOT_LAYOUT.MAX_AI_CHIP_SLOTS):
 		var chip_collision := get_node_or_null(
@@ -200,10 +247,46 @@ func _collect_propeller_slots() -> void:
 		attachment_collision.set_meta("edit_slot_index", int(suffix))
 
 
+func _default_propeller_spin_direction(slot_index: int) -> int:
+	# Repeat the balanced stock-quad winding for larger layouts. Explicitly retaining this pattern
+	# keeps the first four bit-for-bit compatible and gives each complete group of four zero net
+	# reaction-torque bias before the policy learns differential control.
+	return 1 if posmod(slot_index, LEGACY_QUAD_PROPELLER_COUNT) in [0, 3] else -1
+
+
+func _propeller_collision_slot_index(collision: CollisionShape3D) -> int:
+	if collision == null:
+		return -1
+	var child_name: String = str(collision.name)
+	if not child_name.begins_with("Propeller") or not child_name.ends_with("Collision"):
+		return -1
+	var suffix: String = child_name.trim_prefix("Propeller").trim_suffix("Collision")
+	return int(suffix) if suffix.is_valid_int() else -1
+
+
+func _ensure_propeller_collision(slot_index: int) -> CollisionShape3D:
+	if slot_index < 0:
+		return null
+	var node_name: String = "Propeller%dCollision" % slot_index
+	var collision: CollisionShape3D = get_node_or_null(node_name) as CollisionShape3D
+	if collision == null:
+		collision = CollisionShape3D.new()
+		collision.name = node_name
+		add_child(collision)
+	collision.set_meta("edit_slot_kind", &"propeller")
+	collision.set_meta("edit_slot_index", slot_index)
+	return collision
+
+
 func _apply_loadout(
 	reset_health := false,
 	reset_battery := false
 ) -> void:
+	cached_model_orientation_basis_local = (
+		loadout.core.model_orientation_basis_local()
+		if loadout != null and loadout.core != null
+		else Basis.IDENTITY
+	)
 	_collect_propeller_slots()
 	if loadout == null or loadout.core == null:
 		mass = (
@@ -228,6 +311,7 @@ func _apply_loadout(
 		_refresh_propeller_runtime_cache()
 		if ai_controller != null:
 			ai_controller.synchronize(loadout)
+		_sync_finalized_model_chip()
 		_refresh_spatial_interest()
 		sleeping = false
 		return
@@ -254,6 +338,7 @@ func _apply_loadout(
 	_refresh_propeller_runtime_cache()
 	if ai_controller != null:
 		ai_controller.synchronize(loadout)
+	_sync_finalized_model_chip()
 	_refresh_spatial_interest()
 	sleeping = false
 
@@ -373,6 +458,20 @@ func install_ai_chip(
 ) -> bool:
 	if loadout == null:
 		return false
+	if chip != null and chip.has_finalized_model_contract():
+		var body_signature: String = model_body_contract_signature()
+		var chip_store: FinalizedMLChipStore = FinalizedMLChipStore.new()
+		if (
+			body_signature.is_empty()
+			or chip.finalized_body_signature != body_signature
+			or chip_store.load_checkpoint(chip).is_empty()
+		):
+			ml_gameplay_model_error = (
+				chip_store.last_error
+				if not chip_store.last_error.is_empty()
+				else "This finalized model is incompatible with the installed drone body."
+			)
+			return false
 	var installed := loadout.install_ai_chip(slot_index, chip)
 	if installed:
 		_apply_loadout()
@@ -384,6 +483,140 @@ func remove_ai_chip(slot_index: int) -> void:
 		return
 	loadout.remove_ai_chip(slot_index)
 	_apply_loadout()
+
+
+func _sync_finalized_model_chip() -> void:
+	var selected_chip: DroneAIChipDefinition = null
+	if loadout != null and loadout.core != null:
+		for slot_index: int in range(maxi(loadout.core.ai_chip_slot_count, 0)):
+			var candidate: DroneAIChipDefinition = loadout.get_ai_chip(slot_index)
+			if candidate == null or not candidate.has_finalized_model_contract():
+				continue
+			if selected_chip == null or candidate.processing_priority > selected_chip.processing_priority:
+				selected_chip = candidate
+	if selected_chip == null:
+		if ml_gameplay_chip_active and ml_controller != null:
+			ml_controller.disable()
+		ml_gameplay_chip = null
+		ml_gameplay_chip_active = false
+		ml_gameplay_chip_power_ratio = 0.0
+		ml_gameplay_model_error = ""
+		return
+
+	var body_signature: String = model_body_contract_signature()
+	if (
+		ml_gameplay_chip_active
+		and ml_gameplay_chip != null
+		and ml_gameplay_chip.finalized_model_id == selected_chip.finalized_model_id
+		and selected_chip.finalized_body_signature == body_signature
+		and ml_controller != null
+		and ml_controller.model != null
+	):
+		ml_gameplay_chip = selected_chip
+		return
+	if ml_gameplay_chip_active and ml_controller != null:
+		ml_controller.disable()
+	ml_gameplay_chip = selected_chip
+	ml_gameplay_chip_active = false
+	ml_gameplay_chip_power_ratio = 0.0
+	var chip_store: FinalizedMLChipStore = FinalizedMLChipStore.new()
+	var checkpoint: Dictionary = chip_store.load_checkpoint(selected_chip)
+	var checkpoint_inspection: Dictionary = (
+		DroneTrainingAlgorithmCatalog.inspect_checkpoint(checkpoint)
+		if not checkpoint.is_empty()
+		else {}
+	)
+	var runtime_model: DroneMLModel = (
+		DroneTrainingAlgorithmCatalog.create_runtime_model(checkpoint)
+		if bool(checkpoint_inspection.get("compatible", false))
+		and selected_chip.finalized_body_signature == body_signature
+		else null
+	)
+	if runtime_model == null:
+		ml_gameplay_model_error = (
+			chip_store.last_error
+			if not chip_store.last_error.is_empty()
+			else str(checkpoint_inspection.get(
+				"compatibility_text",
+				"This finalized model is incompatible with the installed drone body."
+			))
+		)
+		return
+	ml_gameplay_model_error = ""
+	ml_gameplay_chip_active = true
+	ml_gameplay_hold_target = global_position
+	ml_controller.enable(runtime_model)
+	_refresh_gameplay_ml_objective()
+
+
+func _consume_gameplay_ml_chip_power(available_power: float) -> float:
+	ml_gameplay_chip_power_ratio = 0.0
+	if not ml_gameplay_chip_active or ml_gameplay_chip == null:
+		return 0.0
+	var requested_power: float = ml_gameplay_chip.get_power_draw(1.0)
+	if requested_power <= MIN_POWER_REQUEST:
+		ml_gameplay_chip_power_ratio = 1.0
+		return 0.0
+	var consumed: float = minf(maxf(available_power, 0.0), requested_power)
+	ml_gameplay_chip_power_ratio = consumed / requested_power
+	return consumed
+
+
+func _refresh_gameplay_ml_objective() -> void:
+	if not ml_gameplay_chip_active or ml_gameplay_chip == null or ml_controller == null:
+		return
+	var target_position: Vector3 = ml_gameplay_hold_target
+	var target_velocity: Vector3 = Vector3.ZERO
+	var target_radius: float = maxf(
+		float(ml_gameplay_chip.get_parameter(&"gameplay_target_radius", 0.75)),
+		0.05
+	)
+	if ai_controller != null and ai_controller.follow_player_id >= 0:
+		var follow: Dictionary = get_ai_follow_target_snapshot(ai_controller.follow_player_id)
+		if not follow.is_empty():
+			target_position = follow.get("position", target_position) + Vector3.UP * float(
+				ml_gameplay_chip.get_parameter(&"gameplay_height_offset", 2.8)
+			)
+			target_velocity = follow.get("velocity", Vector3.ZERO)
+	elif ai_controller != null and not ai_controller.waypoints.is_empty():
+		var waypoint_count: int = ai_controller.waypoints.size()
+		ai_controller.waypoint_index = clampi(ai_controller.waypoint_index, 0, waypoint_count - 1)
+		target_position = ai_controller.waypoints[ai_controller.waypoint_index]
+		if global_position.distance_to(target_position) <= target_radius:
+			if ai_controller.waypoint_index + 1 < waypoint_count:
+				ai_controller.waypoint_index += 1
+			elif ai_controller.waypoint_loop:
+				ai_controller.waypoint_index = 0
+			target_position = ai_controller.waypoints[ai_controller.waypoint_index]
+	elif ai_controller != null and ai_controller.guard_enabled:
+		target_position = ai_controller.guard_center
+		target_radius = maxf(ai_controller.guard_radius, target_radius)
+
+	var ground_probe: Dictionary = _get_ai_ground_probe()
+	var ground_clearance: float = DroneMLObservation.NO_GROUND_HIT_CLEARANCE_M
+	if not ground_probe.is_empty():
+		var ground_position_value: Variant = ground_probe.get("position", global_position)
+		if ground_position_value is Vector3:
+			var ground_position: Vector3 = ground_position_value
+			ground_clearance = maxf(global_position.y - ground_position.y, 0.0)
+	# This runs at physics cadence. Reuse the controller's dictionaries rather than allocating a
+	# fresh objective tree every tick.
+	var gameplay_objective: Dictionary = ml_controller.objective
+	var obstacle_probe_value: Variant = gameplay_objective.get("obstacle_probe", {})
+	var obstacle_probe: Dictionary = (
+		obstacle_probe_value as Dictionary
+		if obstacle_probe_value is Dictionary
+		else {}
+	)
+	gameplay_objective["target_position_world"] = target_position
+	gameplay_objective["target_velocity_world"] = target_velocity
+	gameplay_objective["target_hover_radius_m"] = target_radius
+	gameplay_objective["movement_target"] = target_position
+	gameplay_objective["movement_target_velocity"] = target_velocity
+	gameplay_objective["episode_progress"] = 0.0
+	obstacle_probe["ground_clearance_m"] = ground_clearance
+	gameplay_objective["obstacle_probe"] = obstacle_probe
+	ml_controller.objective = gameplay_objective
 
 
 func install_attachment(
@@ -620,9 +853,9 @@ func _uses_legacy_cross_arm_collisions() -> bool:
 		return false
 	if loadout.core.editable_mesh != null and loadout.core.editable_mesh.has_geometry():
 		return false
-	if loadout.core.propeller_slot_count != MAX_PROPELLER_SLOTS:
+	if loadout.core.propeller_slot_count != LEGACY_QUAD_PROPELLER_COUNT:
 		return false
-	for slot_index: int in range(MAX_PROPELLER_SLOTS):
+	for slot_index: int in range(LEGACY_QUAD_PROPELLER_COUNT):
 		var actual: Transform3D = loadout.get_propeller_slot_transform(slot_index)
 		var expected: Transform3D = Transform3D(
 			Basis.IDENTITY,
@@ -640,17 +873,29 @@ func _uses_legacy_cross_arm_collisions() -> bool:
 
 
 func _refresh_propeller_collisions() -> void:
-	for slot_index in range(MAX_PROPELLER_SLOTS):
-		var collision := get_node_or_null(
-			"Propeller%dCollision" % slot_index
-		) as CollisionShape3D
+	var supported_count: int = (
+		maxi(loadout.core.propeller_slot_count, 0)
+		if loadout != null and loadout.core != null
+		else 0
+	)
+	var collision_count: int = supported_count
+	for child: Node in get_children():
+		var existing_collision: CollisionShape3D = child as CollisionShape3D
+		var existing_slot_index: int = _propeller_collision_slot_index(existing_collision)
+		if existing_slot_index >= 0:
+			collision_count = maxi(collision_count, existing_slot_index + 1)
+	for slot_index: int in range(collision_count):
+		var collision: CollisionShape3D = (
+			_ensure_propeller_collision(slot_index)
+			if slot_index < supported_count
+			else get_node_or_null("Propeller%dCollision" % slot_index) as CollisionShape3D
+		)
 		if collision == null:
 			continue
 		var slot_supported: bool = (
 			loadout != null
 			and loadout.core != null
 			and slot_index < loadout.core.propeller_slot_count
-			and slot_index < MAX_PROPELLER_SLOTS
 		)
 		collision.transform = (
 			loadout.get_propeller_slot_transform(slot_index)
@@ -1143,7 +1388,10 @@ func server_physics_tick(delta: float) -> void:
 	if has_weapon_attachments_cache:
 		_tick_weapon_cooldowns(delta)
 	var ai_consumed_power := 0.0
-	if activated and ai_controller != null and not is_ml_control_enabled():
+	if activated and ml_gameplay_chip_active:
+		ai_consumed_power = _consume_gameplay_ml_chip_power(remaining_power)
+		remaining_power = maxf(remaining_power - ai_consumed_power, 0.0)
+	elif activated and ai_controller != null and not is_ml_control_enabled():
 		ai_consumed_power = ai_controller.process(delta, remaining_power)
 		remaining_power = maxf(remaining_power - ai_consumed_power, 0.0)
 	elif ai_controller != null and not ai_controller.combined_intent.is_empty():
@@ -1185,6 +1433,16 @@ func _update_ai_command_outputs(delta: float) -> void:
 		if not activated or flight_controller == null or air_environment == null:
 			_clear_propeller_targets()
 			return
+		if (
+			ml_gameplay_chip_active
+			and ml_gameplay_chip != null
+			and ml_gameplay_chip_power_ratio
+			< ml_gameplay_chip.minimum_operating_power_ratio
+		):
+			_clear_propeller_targets()
+			return
+		if ml_gameplay_chip_active:
+			_refresh_gameplay_ml_objective()
 		var ml_targets: Array[float] = ml_controller.step(delta)
 		if ai_motor_thrust_targets.size() != ml_targets.size():
 			ai_motor_thrust_targets.resize(ml_targets.size())
@@ -1265,6 +1523,10 @@ func get_ml_ground_probe() -> Dictionary:
 
 
 func enable_ml_control(model: DroneMLModel = null) -> void:
+	ml_gameplay_chip = null
+	ml_gameplay_chip_active = false
+	ml_gameplay_chip_power_ratio = 0.0
+	ml_gameplay_model_error = ""
 	if ml_controller != null:
 		ml_controller.enable(model)
 	_refresh_spatial_interest()
@@ -1272,6 +1534,10 @@ func enable_ml_control(model: DroneMLModel = null) -> void:
 
 func disable_ml_control() -> void:
 	ml_episode_unlimited_battery = false
+	ml_gameplay_chip = null
+	ml_gameplay_chip_active = false
+	ml_gameplay_chip_power_ratio = 0.0
+	ml_gameplay_model_error = ""
 	if ml_controller != null:
 		ml_controller.disable()
 	_refresh_spatial_interest()
@@ -1318,6 +1584,18 @@ func submit_ml_action(action: Dictionary) -> bool:
 	return ml_controller.submit_external_action(action)
 
 
+func model_orientation_basis_local() -> Basis:
+	return cached_model_orientation_basis_local
+
+
+func model_orientation_basis_world() -> Basis:
+	return global_basis * cached_model_orientation_basis_local
+
+
+func model_transform_world() -> Transform3D:
+	return Transform3D(model_orientation_basis_world(), global_position)
+
+
 func reset_ml_episode(
 	spawn_transform: Transform3D,
 	random_seed: int,
@@ -1335,7 +1613,12 @@ func reset_ml_episode(
 		set_ml_training_paused(false)
 	set_activated(false)
 	freeze = true
-	global_transform = spawn_transform
+	# Spawn transforms describe the worker frame. Rotate the physical Core underneath that frame so
+	# an authored non-Y-up chassis still begins upright and looking along the requested heading.
+	global_transform = Transform3D(
+		(spawn_transform.basis * model_orientation_basis_local().transposed()).orthonormalized(),
+		spawn_transform.origin
+	)
 	reset_limb_attachments_to_rest()
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
@@ -1456,10 +1739,15 @@ func _process_powered_weapon_fire() -> void:
 	):
 		weapon_aim_local_by_slot.clear()
 		return
-	var intended_target := Server.get_combat_target_body(
+	var server_service := _server_service()
+	if server_service == null:
+		weapon_aim_local_by_slot.clear()
+		return
+	var intended_target := server_service.call(
+		"get_combat_target_body",
 		ai_combat_target_kind,
 		ai_combat_target_id
-	)
+	) as Node3D
 	if not is_instance_valid(intended_target):
 		weapon_aim_local_by_slot.clear()
 		return
@@ -1508,7 +1796,8 @@ func _process_powered_weapon_fire() -> void:
 		weapon_cooldowns_by_slot[slot_index] = (
 			1.0 / maxf(weapon.rounds_per_second, 0.01)
 		)
-		Server.spawn_ballistic_projectile(
+		server_service.call(
+			"spawn_ballistic_projectile",
 			profile,
 			origin,
 			aim_direction,
@@ -2086,9 +2375,12 @@ func build_ai_context() -> Dictionary:
 				"rounds_per_second": weapon.rounds_per_second,
 				"projectile_speed": weapon.projectile_speed,
 			})
-	var fiber_links: Array[Dictionary] = (
-		Server.get_fiber_link_states_for_body(self)
-	)
+	var fiber_links: Array[Dictionary] = []
+	var server_service := _server_service()
+	if server_service != null:
+		fiber_links.assign(
+			server_service.call("get_fiber_link_states_for_body", self)
+		)
 	return {
 		"position": global_position,
 		"velocity": linear_velocity,
@@ -2116,7 +2408,16 @@ func get_ai_combat_candidates(
 	center: Vector3,
 	maximum_range: float
 ) -> Array[Dictionary]:
-	return Server.get_drone_ai_candidates(self, center, maximum_range)
+	var result: Array[Dictionary] = []
+	var server_service := _server_service()
+	if server_service != null:
+		result.assign(server_service.call(
+			"get_drone_ai_candidates",
+			self,
+			center,
+			maximum_range
+		))
+	return result
 
 
 func calculate_ai_avoidance(
@@ -2147,13 +2448,15 @@ func calculate_ai_avoidance(
 	var own_radius := (
 		physical_radius + definition.get_avoidance_radius_padding()
 	)
-	var raw_neighbors: Array[Dictionary] = (
-		Server.get_drone_avoidance_neighbors(
+	var raw_neighbors: Array[Dictionary] = []
+	var server_service := _server_service()
+	if server_service != null:
+		raw_neighbors.assign(server_service.call(
+			"get_drone_avoidance_neighbors",
 			self,
 			definition.get_avoidance_neighbor_distance(),
 			definition.get_avoidance_vertical_tolerance()
-		)
-	)
+		))
 	if raw_neighbors.is_empty():
 		return {}
 
@@ -2301,8 +2604,12 @@ func _has_weapon_attachment() -> bool:
 func _refresh_spatial_interest() -> void:
 	if drone_id < 0:
 		return
+	var server_service := _server_service()
+	if server_service == null:
+		return
 	var general_ai_enabled := activated and not is_ml_control_enabled()
-	Server.set_drone_spatial_interest(
+	server_service.call(
+		"set_drone_spatial_interest",
 		drone_id,
 		general_ai_enabled
 		and _has_weapon_attachment()
@@ -2312,7 +2619,10 @@ func _refresh_spatial_interest() -> void:
 
 
 func get_ai_follow_target_snapshot(player_id: int) -> Dictionary:
-	var player := Server.get_server_player(player_id)
+	var server_service := _server_service()
+	if server_service == null:
+		return {}
+	var player := server_service.call("get_server_player", player_id) as ServerPlayer
 	if player == null:
 		return {}
 	# Orientation is deliberately not part of the follow contract. Chips may
@@ -2396,14 +2706,18 @@ func _eject_broken_ai_chip(slot_index: int) -> void:
 	)
 	loadout.remove_ai_chip(slot_index)
 	_apply_loadout()
-	var ejected := Server.spawn_drone_part(
+	var server_service := _server_service()
+	if server_service == null:
+		return
+	var ejected := server_service.call(
+		"spawn_drone_part",
 		chip,
 		ejection_transform,
 		-1.0,
 		-1.0,
 		-1,
 		true
-	)
+	) as RigidBody3D
 	if ejected == null:
 		return
 	var side_impulse := (
@@ -2423,6 +2737,7 @@ func _eject_broken_ai_chip(slot_index: int) -> void:
 
 func to_state_dict() -> Dictionary:
 	var weapon_aim_directions: Array[Vector3] = []
+	var ai_chip_definition_snapshots: Array[Dictionary] = []
 	var attachment_slot_count = (
 		loadout.core.attachment_slot_count
 		if loadout != null and loadout.core != null
@@ -2435,6 +2750,20 @@ func to_state_dict() -> Dictionary:
 				Vector3.FORWARD
 			)
 		)
+	if loadout != null and loadout.core != null:
+		var chip_slot_count: int = maxi(loadout.core.ai_chip_slot_count, 0)
+		for slot_index: int in range(chip_slot_count):
+			var installed_chip: DroneAIChipDefinition = loadout.get_ai_chip(slot_index)
+			if installed_chip == null or not installed_chip.has_finalized_model_contract():
+				continue
+			var public_chip: Dictionary = FinalizedMLChipStore.public_chip_snapshot(
+				installed_chip
+			)
+			if public_chip.is_empty():
+				continue
+			if ai_chip_definition_snapshots.is_empty():
+				ai_chip_definition_snapshots.resize(chip_slot_count)
+			ai_chip_definition_snapshots[slot_index] = public_chip
 	return {
 		"drone_id": drone_id,
 		"pos": global_position,
@@ -2488,6 +2817,7 @@ func to_state_dict() -> Dictionary:
 			if loadout != null
 			else []
 		),
+		"ai_chip_definition_snapshots": ai_chip_definition_snapshots,
 		"attachment_slot_count": attachment_slot_count,
 		"attachment_definition_paths": (
 			loadout.get_attachment_definition_paths()
@@ -2501,10 +2831,21 @@ func to_state_dict() -> Dictionary:
 		),
 		"weapon_aim_directions": weapon_aim_directions,
 		"ai_active_chip_count": (
-			ai_controller.get_active_chip_count()
-			if ai_controller != null
-			else 0
+			1
+			if (
+				ml_gameplay_chip_active
+				and ml_gameplay_chip != null
+				and ml_gameplay_chip_power_ratio
+				>= ml_gameplay_chip.minimum_operating_power_ratio
+			)
+			else (ai_controller.get_active_chip_count() if ai_controller != null else 0)
 		),
+		"ml_gameplay_model_id": (
+			ml_gameplay_chip.finalized_model_id
+			if ml_gameplay_chip_active and ml_gameplay_chip != null
+			else ""
+		),
+		"ml_gameplay_model_error": ml_gameplay_model_error,
 		"ai_fire_requested": ai_fire_requested,
 		"ai_combat_target_id": ai_combat_target_id,
 		"ai_combat_target_kind": ai_combat_target_kind,

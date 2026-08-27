@@ -1,0 +1,28 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/audio/speaker_array_emitter_3d.gd" id="1_emitter"]
+
+[node name="Emitters" type="Node3D"]
+
+[node name="LargeBunkerSpeakerWest" type="Marker3D" parent="."]
+position = Vector3(-74.48, 4.2, -10)
+rotation = Vector3(0, 1.5707964, 0)
+script = ExtResource("1_emitter")
+sort_order = 0
+
+[node name="LargeBunkerSpeakerEast" type="Marker3D" parent="."]
+position = Vector3(-35.52, 4.2, -10)
+rotation = Vector3(0, -1.5707964, 0)
+script = ExtResource("1_emitter")
+sort_order = 1
+
+[node name="LargeBunkerSpeakerSouth" type="Marker3D" parent="."]
+position = Vector3(-55, 4.2, -25.48)
+script = ExtResource("1_emitter")
+sort_order = 2
+
+[node name="LargeBunkerSpeakerNorth" type="Marker3D" parent="."]
+position = Vector3(-55, 4.2, 5.48)
+rotation = Vector3(0, 3.1415927, 0)
+script = ExtResource("1_emitter")
+sort_order = 3

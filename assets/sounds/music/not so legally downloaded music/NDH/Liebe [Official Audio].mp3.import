@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://h25br3j4yyoh"
+path="res://.godot/imported/Liebe [Official Audio].mp3-0690c30348c234ee06aacc02f0bf3db4.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/NDH/Liebe [Official Audio].mp3"
+dest_files=["res://.godot/imported/Liebe [Official Audio].mp3-0690c30348c234ee06aacc02f0bf3db4.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

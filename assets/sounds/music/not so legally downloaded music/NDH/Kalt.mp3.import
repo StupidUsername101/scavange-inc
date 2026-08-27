@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://csmb6cvd4sbh5"
+path="res://.godot/imported/Kalt.mp3-e73c5563eddef5ef7eb57b8b0b9acbb4.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/NDH/Kalt.mp3"
+dest_files=["res://.godot/imported/Kalt.mp3-e73c5563eddef5ef7eb57b8b0b9acbb4.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

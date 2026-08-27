@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="SpeakerArrayDefinition" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/audio/speaker_array_definition.gd" id="1_definition"]
+[ext_resource type="Resource" path="res://resources/items/radios/facility_pa_playback.tres" id="2_playback"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_path_modifier.gd" id="3_modifier"]
+
+[sub_resource type="Resource" id="AcousticModifier_pa"]
+script = ExtResource("3_modifier")
+modifier_id = &"garage_pa_speaker"
+band_gain = Vector3(1, 1, 0.96)
+lowpass_hz = 18000.0
+highpass_hz = 32.0
+resonance = 0.04
+
+[resource]
+script = ExtResource("1_definition")
+contact_id = &"facility:garage_pa"
+display_name = "GARAGE PRESSURE ARRAY"
+audio_id_base = 1500004200
+playback_profile = ExtResource("2_playback")
+source_modifier = SubResource("AcousticModifier_pa")
+maximum_hearing_distance = 72.0
+playback_volume_db = -11.0
+shared_late_field_enabled = false
+scanner_beacon_position = Vector3(0, 1.6, 0)
+scanner_signal_strength = 1.35
+

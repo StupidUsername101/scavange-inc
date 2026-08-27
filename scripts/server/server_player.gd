@@ -1,18 +1,22 @@
 class_name ServerPlayer
 extends CharacterBody3D
 
-const WALK_SPEED := 8.5
+const WALK_SPEED := 5.75
 const RUN_SPEED := 13.5
+const GROUND_ACCELERATION := 46.0
+const GROUND_DECELERATION := 52.0
+const AIR_CONTROL_ACCELERATION := 7.0
 
 const GRAVITY := 24.0
 const JUMP_VELOCITY := 10.0
-const FALL_GRAVITY_RAMP := 2.0
-const MAX_GRAVITY_MULT := 3.0
+const MAX_FALL_SPEED := 48.0
 const ARM_CRAWL_MOVEMENT_MULTIPLIER := 0.2
 const STANDING_COLLISION_HEIGHT := 1.979
 const LEGLESS_COLLISION_HEIGHT := 1.1
 const MAX_HEALTH := 100.0
-const MAX_STAMINA := 100.0
+const BASE_MAX_STAMINA := 100.0
+const TEMPORARY_STAMINA_MULTIPLIER := 3.0
+const MAX_STAMINA := BASE_MAX_STAMINA * TEMPORARY_STAMINA_MULTIPLIER
 const RUN_STAMINA_DRAIN_PER_SECOND := 19.0
 const STAMINA_RECOVERY_PER_SECOND := 15.0
 const STAMINA_RECOVERY_DELAY := 0.7
@@ -30,14 +34,39 @@ const MOVEMENT_INPUT_THRESHOLD_SQUARED := 0.001
 const MOTION_THRESHOLD_SQUARED := 0.000001
 const FLOOR_CONTACT_NORMAL_Y := 0.6
 const FLOOR_STICK_VELOCITY := -0.1
+const MAX_STEP_HEIGHT := 0.28
+const STEP_DOWN_PROBE_DISTANCE := 0.04
+const MIN_STEP_RISE := 0.008
+const MIN_STEP_FORWARD_PROGRESS_SQUARED := 0.000004
 const MIN_PUSH_BODY_MASS := 0.1
 const PUSH_IMPULSE_STRENGTH := 4.0
 const RELOAD_DURATION_THRESHOLD := 0.001
+const RELOAD_INSERT_SOUND_REMAINING_RATIO := 0.45
+const FOOTSTEP_MAX_DISTANCE := 24.0
+const FOOTSTEP_PRIORITY := 0.25
+const JUMP_SOUND_MAX_DISTANCE := 26.0
+const JUMP_SOUND_PRIORITY := 0.35
+const LANDING_SOUND_MAX_DISTANCE := 30.0
+const LANDING_SOUND_PRIORITY := 0.4
+const LANDING_MIN_AIR_TIME := 0.18
+const LANDING_MIN_IMPACT_SPEED := 2.0
+const WRIST_SOUND_HOVER_COOLDOWN_MSEC := 80
+const WRIST_SOUND_CLICK_COOLDOWN_MSEC := 90
+const WRIST_SOUND_FEEDBACK_COOLDOWN_MSEC := 220
+const WRIST_SOUND_SOURCE_HEIGHT_OFFSET := -0.12
+const WRIST_SOUND_OUTPUT_GAIN_DB := -5.0
 const DISTORTION_FADE_DURATION_RATIO := 0.3
 const MIN_DISTORTION_FADE_DURATION := 0.08
 const MAX_DISTORTION_FADE_DURATION := 1.2
 const DEFAULT_EYES := preload(
 	"res://resources/items/eyes/factory_oculars.tres"
+)
+const DEFAULT_WRIST_DEVICE := preload(
+	"res://resources/items/wrist_devices/corporate_field_terminal.tres"
+)
+const PHYSICAL_SURFACE := preload("res://scripts/audio/physical_surface.gd")
+const FIELDLINK_DISPLAY_STATE := preload(
+	"res://scripts/network/fieldlink_display_state.gd"
 )
 
 #######################################################
@@ -75,7 +104,12 @@ var weapon_fire_cooldown_remaining := 0.0
 var weapon_reload_remaining := 0.0
 var weapon_reload_duration := 0.0
 var weapon_reload_slot := -1
+var weapon_reload_insert_emitted := false
+var weapon_reload_insert_sound_id: StringName = &""
+var primary_action_held := false
 var weapon_rng := RandomNumberGenerator.new()
+var gait := PlayerGait.new()
+var footstep_surface: StringName = &"concrete"
 var interaction_hint := ""
 var vision_distortion_remaining := 0.0
 var vision_distortion_duration := 0.0
@@ -88,6 +122,14 @@ var edit_aim_active := false
 var edit_aim_origin := Vector3.ZERO
 var edit_aim_hit := Vector3.ZERO
 var edit_aim_color := Color(0.2, 0.8, 1.0, 1.0)
+var wrist_interface_open := false
+var wrist_display_page: StringName = FIELDLINK_DISPLAY_STATE.PAGE_HOME
+var last_requested_wrist_sound_msec := PackedInt64Array([
+	-100000,
+	-100000,
+	-100000,
+	-100000,
+])
 
 
 func _ready() -> void:
@@ -111,7 +153,7 @@ func _ready() -> void:
 		body_loadout = body_loadout.duplicate(true) as CharacterLoadout
 
 	_apply_body_loadout()
-	_install_default_eyes()
+	_install_default_equipment()
 
 func setup(_player_id: int, spawn_pos: Vector3) -> void:
 	player_id = _player_id
@@ -153,12 +195,109 @@ func set_look_direction(yaw: float, pitch: float) -> void:
 	grabber.rotation.x = look_pitch
 
 
+func set_primary_action_held(value: bool) -> void:
+	primary_action_held = value and not wrist_interface_open
+
+
+func set_wrist_interface_open(value: bool) -> void:
+	var next_open := value and has_equipped_wrist_device()
+	if next_open == wrist_interface_open:
+		return
+	wrist_interface_open = next_open
+	_emit_wrist_device_sound(
+		&"fieldlink_open" if wrist_interface_open else &"fieldlink_close"
+	)
+	if not wrist_interface_open:
+		return
+	primary_action_held = false
+
+
+func set_wrist_display_page(page_value: Variant) -> bool:
+	if not wrist_interface_open or not has_equipped_wrist_device():
+		return false
+	var next_page := FIELDLINK_DISPLAY_STATE.sanitize_page(page_value)
+	if next_page == wrist_display_page:
+		return false
+	wrist_display_page = next_page
+	return true
+
+
+func request_wrist_device_sound(sound_id: StringName) -> bool:
+	if not wrist_interface_open or not has_equipped_wrist_device():
+		return false
+	var cue_index := _requested_wrist_sound_index(sound_id)
+	if cue_index < 0:
+		return false
+	var now_msec := Time.get_ticks_msec()
+	var cooldown_msec := _requested_wrist_sound_cooldown_msec(cue_index)
+	if (
+		now_msec - last_requested_wrist_sound_msec[cue_index]
+		< cooldown_msec
+	):
+		return false
+	last_requested_wrist_sound_msec[cue_index] = now_msec
+	_emit_wrist_device_sound(sound_id)
+	return true
+
+
+static func _requested_wrist_sound_index(sound_id: StringName) -> int:
+	match sound_id:
+		&"fieldlink_hover":
+			return 0
+		&"fieldlink_click":
+			return 1
+		&"fieldlink_confirm":
+			return 2
+		&"fieldlink_warning":
+			return 3
+		_:
+			return -1
+
+
+static func _requested_wrist_sound_cooldown_msec(cue_index: int) -> int:
+	match cue_index:
+		0:
+			return WRIST_SOUND_HOVER_COOLDOWN_MSEC
+		1:
+			return WRIST_SOUND_CLICK_COOLDOWN_MSEC
+		_:
+			return WRIST_SOUND_FEEDBACK_COOLDOWN_MSEC
+
+
+func wants_automatic_fire() -> bool:
+	if (
+		not primary_action_held
+		or wrist_interface_open
+		or weapon_fire_cooldown_remaining > 0.0
+		or weapon_reload_remaining > 0.0
+		or body_loadout == null
+		or not body_loadout.has_any_arm()
+	):
+		return false
+	var entry := get_selected_inventory_entry()
+	var definition := PlayerInventoryRules.get_definition(
+		entry
+	) as GunItemDefinition
+	return (
+		definition != null
+		and definition.is_automatic(entry.get("instance_state", {}))
+	)
+
+
 func set_grab_capability(value: GrabCapability) -> void:
 	grabber.set_capability(value, true)
 
 
 func get_grab_capability() -> GrabCapability:
 	return grabber.capability
+
+
+func get_audio_listener_position() -> Vector3:
+	# Aim/grab origin sits forward of the body and rotates around it. Using it as the listener made
+	# turning in place move the authoritative ears through an 84 cm circle, crossing acoustic
+	# boundaries without any player movement. Keep only the authored head height here.
+	var listener_height := grabber.position.y if is_instance_valid(grabber) else 0.56
+	return global_position + Vector3.UP * listener_height
 
 
 func set_body_loadout(value: CharacterLoadout) -> void:
@@ -223,12 +362,17 @@ func _on_grab_load_changed(
 	grab_movement_multiplier = mobility_multiplier
 
 
-func _install_default_eyes() -> void:
-	if equipment_entries.has(PlayerInventoryRules.EYES_SLOT):
-		return
-	var entry := PlayerInventoryRules.make_entry(DEFAULT_EYES)
-	if not entry.is_empty():
-		equipment_entries[PlayerInventoryRules.EYES_SLOT] = entry
+func _install_default_equipment() -> void:
+	if not equipment_entries.has(PlayerInventoryRules.EYES_SLOT):
+		var eye_entry := PlayerInventoryRules.make_entry(DEFAULT_EYES)
+		if not eye_entry.is_empty():
+			equipment_entries[PlayerInventoryRules.EYES_SLOT] = eye_entry
+	if not equipment_entries.has(PlayerInventoryRules.WRIST_DEVICE_SLOT):
+		var wrist_entry := PlayerInventoryRules.make_entry(
+			DEFAULT_WRIST_DEVICE
+		)
+		if not wrist_entry.is_empty():
+			equipment_entries[PlayerInventoryRules.WRIST_DEVICE_SLOT] = wrist_entry
 
 
 func get_inventory_capacity() -> int:
@@ -285,6 +429,8 @@ func try_equip_world_entry(entry: Dictionary) -> Dictionary:
 
 	var displaced: Dictionary = equipment_entries.get(slot, {}).duplicate(true)
 	equipment_entries[slot] = entry.duplicate(true)
+	if slot == PlayerInventoryRules.WRIST_DEVICE_SLOT:
+		set_wrist_interface_open(false)
 	return {
 		"success": true,
 		"slot": slot,
@@ -321,6 +467,8 @@ func try_equip_inventory_entry(slot_index: int) -> Dictionary:
 
 	inventory_entries = next_inventory
 	equipment_entries = next_equipment
+	if equipment_slot == PlayerInventoryRules.WRIST_DEVICE_SLOT:
+		set_wrist_interface_open(false)
 	selected_inventory_slot = clampi(
 		slot_index,
 		0,
@@ -350,6 +498,8 @@ func try_unequip_to_world(equipment_slot: String) -> Dictionary:
 		return {}
 
 	equipment_entries = next_equipment
+	if equipment_slot == PlayerInventoryRules.WRIST_DEVICE_SLOT:
+		set_wrist_interface_open(false)
 	selected_inventory_slot = clampi(
 		selected_inventory_slot,
 		0,
@@ -393,14 +543,23 @@ func try_fire_selected_gun() -> Dictionary:
 	var state: Dictionary = entry.get("instance_state", {})
 	state = definition.normalize_instance_state(state)
 	var build := definition.get_build(state)
-	var profile := build.get_ballistic_profile()
-	if profile.is_empty():
+	var profiles := build.get_ballistic_profiles()
+	if profiles.is_empty():
 		return {"handled": true, "fired": false}
-	if int(state.get("rounds", 0)) <= 0:
+	var available_rounds := int(state.get("rounds", 0))
+	if available_rounds <= 0:
 		begin_reload_selected_gun()
 		return {"handled": true, "fired": false}
+	var fired_barrel_count := mini(profiles.size(), available_rounds)
+	var fired_profiles: Array[Dictionary] = []
+	for profile_index: int in range(fired_barrel_count):
+		fired_profiles.append(profiles[profile_index])
+	var profile: Dictionary = fired_profiles[0]
 
-	entry["instance_state"] = definition.consume_round(state)
+	entry["instance_state"] = definition.consume_rounds(
+		state,
+		fired_barrel_count
+	)
 	inventory_entries[selected_inventory_slot] = entry
 	weapon_fire_cooldown_remaining = (
 		1.0 / maxf(float(profile.get("rounds_per_second", 1.0)), 0.1)
@@ -409,7 +568,11 @@ func try_fire_selected_gun() -> Dictionary:
 		"handled": true,
 		"fired": true,
 		"profile": profile,
+		"profiles": fired_profiles,
+		"fired_barrel_count": fired_barrel_count,
+		"installed_barrel_count": profiles.size(),
 		"spread_degrees": float(profile.get("spread_degrees", 0.0)),
+		"fire_sound": build.get_fire_sound_profile(),
 	}
 
 
@@ -436,6 +599,11 @@ func begin_reload_selected_gun() -> bool:
 	weapon_reload_duration = build.get_reload_seconds()
 	weapon_reload_remaining = weapon_reload_duration
 	weapon_reload_slot = selected_inventory_slot
+	weapon_reload_insert_emitted = false
+	weapon_reload_insert_sound_id = build.get_reload_sound_id(true)
+	var reload_out_sound_id := build.get_reload_sound_id(false)
+	if not reload_out_sound_id.is_empty():
+		_emit_gameplay_sound(reload_out_sound_id, 28.0, 0.55)
 	return true
 
 
@@ -470,6 +638,18 @@ func _update_weapon_state(delta: float) -> void:
 	if weapon_reload_remaining <= 0.0:
 		return
 	weapon_reload_remaining = maxf(weapon_reload_remaining - delta, 0.0)
+	if (
+		not weapon_reload_insert_emitted
+		and weapon_reload_remaining
+		<= weapon_reload_duration * RELOAD_INSERT_SOUND_REMAINING_RATIO
+	):
+		weapon_reload_insert_emitted = true
+		if not weapon_reload_insert_sound_id.is_empty():
+			_emit_gameplay_sound(
+				weapon_reload_insert_sound_id,
+				28.0,
+				0.55
+			)
 	if weapon_reload_remaining > 0.0:
 		return
 	if (
@@ -495,6 +675,8 @@ func _cancel_weapon_reload() -> void:
 	weapon_reload_remaining = 0.0
 	weapon_reload_duration = 0.0
 	weapon_reload_slot = -1
+	weapon_reload_insert_emitted = false
+	weapon_reload_insert_sound_id = &""
 
 
 func spill_all_item_entries() -> Array[Dictionary]:
@@ -507,6 +689,7 @@ func spill_all_item_entries() -> Array[Dictionary]:
 			result.append(entry.duplicate(true))
 	inventory_entries.clear()
 	equipment_entries.clear()
+	set_wrist_interface_open(false)
 	return result
 
 
@@ -516,6 +699,20 @@ func has_equipped_eyes() -> bool:
 		{}
 	)
 	return PlayerInventoryRules.get_definition(eye_entry) is EyeDefinition
+
+
+func has_equipped_wrist_device() -> bool:
+	var wrist_entry: Dictionary = equipment_entries.get(
+		PlayerInventoryRules.WRIST_DEVICE_SLOT,
+		{}
+	)
+	var definition := PlayerInventoryRules.get_equippable_definition(
+		wrist_entry
+	)
+	return (
+		definition != null
+		and definition.equipment_slot == &"wrist_device"
+	)
 
 
 func has_special_sight(effect_id: StringName) -> bool:
@@ -699,22 +896,39 @@ func server_physics_tick(delta: float) -> void:
 	_update_vision_distortion(delta)
 	_update_weapon_state(delta)
 
-	if has_move_input:
-		var basis := Basis(Vector3.UP, look_yaw)
-		var direction := (
-			basis.x * move_input.x +
-			basis.z * move_input.y
-		).normalized()
+	var jump_velocity := (
+		JUMP_VELOCITY
+		* grab_movement_multiplier
+		* body_jump_multiplier
+	)
+	var is_launching := (
+		was_on_floor
+		and wants_jump
+		and jump_velocity > 0.0
+	)
+	var can_air_run := (
+		not was_on_floor
+		and wants_run
+		and stamina > STAMINA_EMPTY_THRESHOLD
+	)
+	var movement_speed := (
+		RUN_SPEED
+		if is_actually_running or can_air_run
+		else WALK_SPEED
+	)
+	movement_speed *= grab_movement_multiplier
+	movement_speed *= body_movement_multiplier
 
-		var speed := RUN_SPEED if is_actually_running else WALK_SPEED
-		speed *= grab_movement_multiplier
-		speed *= body_movement_multiplier
-
-		velocity.x = direction.x * speed
-		velocity.z = direction.z * speed
-	else:
-		velocity.x = 0.0
-		velocity.z = 0.0
+	var direction := _movement_direction(move_input, look_yaw)
+	var horizontal_velocity := calculate_horizontal_velocity(
+		velocity,
+		direction,
+		movement_speed,
+		was_on_floor and not is_launching,
+		delta
+	)
+	velocity.x = horizontal_velocity.x
+	velocity.z = horizontal_velocity.z
 
 	var constrained_velocity := grabber.constrain_horizontal_velocity(
 		Vector3(velocity.x, 0.0, velocity.z)
@@ -725,27 +939,32 @@ func server_physics_tick(delta: float) -> void:
 	if was_on_floor:
 		air_time = 0.0
 
-		if wants_jump:
-			velocity.y = (
-				JUMP_VELOCITY
-				* grab_movement_multiplier
-				* body_jump_multiplier
-			)
+		if is_launching:
+			velocity.y = jump_velocity
+			if jump_velocity > LANDING_MIN_IMPACT_SPEED:
+				_emit_gameplay_sound(
+					_jump_sound_id(footstep_surface),
+					JUMP_SOUND_MAX_DISTANCE,
+					JUMP_SOUND_PRIORITY
+				)
 		else:
 			velocity.y = FLOOR_STICK_VELOCITY
 	else:
 		air_time += delta
-
-		var gravity_mult := 1.0 + air_time * FALL_GRAVITY_RAMP
-		gravity_mult = min(gravity_mult, MAX_GRAVITY_MULT)
-
-		velocity.y -= GRAVITY * gravity_mult * delta
+		velocity.y = maxf(
+			velocity.y - GRAVITY * delta,
+			-MAX_FALL_SPEED
+		)
 
 	wants_jump = false
 
 	var horizontal_motion := Vector3(velocity.x, 0.0, velocity.z) * delta
-	_move_and_collide_with_slide(horizontal_motion)
+	_move_and_collide_with_slide(
+		horizontal_motion,
+		was_on_floor and not is_launching
+	)
 
+	var landing_impact_speed := maxf(-velocity.y, 0.0)
 	var vertical_motion := Vector3(0.0, velocity.y, 0.0) * delta
 	var vertical_col := move_and_collide(vertical_motion)
 
@@ -754,10 +973,176 @@ func server_physics_tick(delta: float) -> void:
 
 		if normal.y > FLOOR_CONTACT_NORMAL_Y:
 			on_floor = true
+			footstep_surface = _get_footstep_surface(vertical_col.get_collider())
+			if (
+				not was_on_floor
+				and air_time >= LANDING_MIN_AIR_TIME
+				and landing_impact_speed >= LANDING_MIN_IMPACT_SPEED
+			):
+				_emit_gameplay_sound(
+					_landing_sound_id(footstep_surface),
+					LANDING_SOUND_MAX_DISTANCE,
+					LANDING_SOUND_PRIORITY
+				)
 			if velocity.y < 0.0:
 				velocity.y = 0.0
 
 		_try_push_body(vertical_col)
+	_update_footsteps(delta)
+
+
+static func _movement_direction(input: Vector2, yaw: float) -> Vector3:
+	if input.length_squared() <= MOVEMENT_INPUT_THRESHOLD_SQUARED:
+		return Vector3.ZERO
+	var basis := Basis(Vector3.UP, yaw)
+	return (
+		basis.x * input.x
+		+ basis.z * input.y
+	).normalized()
+
+
+static func calculate_horizontal_velocity(
+	current_velocity: Vector3,
+	wish_direction: Vector3,
+	wish_speed: float,
+	grounded: bool,
+	delta: float
+) -> Vector3:
+	var horizontal := Vector3(
+		current_velocity.x,
+		0.0,
+		current_velocity.z
+	)
+	var direction := Vector3(wish_direction.x, 0.0, wish_direction.z)
+	if direction.length_squared() > MOVEMENT_INPUT_THRESHOLD_SQUARED:
+		direction = direction.normalized()
+	else:
+		direction = Vector3.ZERO
+
+	var bounded_delta := maxf(delta, 0.0)
+	var bounded_speed := maxf(wish_speed, 0.0)
+	if grounded:
+		var target_velocity := direction * bounded_speed
+		var acceleration := (
+			GROUND_DECELERATION
+			if direction == Vector3.ZERO
+			else GROUND_ACCELERATION
+		)
+		return horizontal.move_toward(
+			target_velocity,
+			acceleration * bounded_delta
+		)
+
+	# Air input can redirect momentum or build only as far as ordinary movement
+	# speed. Faster takeoff momentum cannot be increased further, and releasing the
+	# controls preserves horizontal velocity exactly.
+	if direction == Vector3.ZERO or bounded_speed <= 0.0:
+		return horizontal
+	var original_speed := horizontal.length()
+	var projected_speed := horizontal.dot(direction)
+	var available_speed := bounded_speed - projected_speed
+	if available_speed <= 0.0:
+		return horizontal
+	var control_delta := minf(
+		available_speed,
+		AIR_CONTROL_ACCELERATION * bounded_delta
+	)
+	var controlled := horizontal + direction * control_delta
+	var maximum_speed := maxf(original_speed, bounded_speed)
+	if controlled.length_squared() > maximum_speed * maximum_speed:
+		controlled = controlled.normalized() * maximum_speed
+	return controlled
+
+
+func _update_footsteps(delta: float) -> void:
+	var horizontal_speed_squared := velocity.x * velocity.x + velocity.z * velocity.z
+	var completed_steps := gait.advance(
+		sqrt(horizontal_speed_squared),
+		on_floor,
+		is_actually_running,
+		delta
+	)
+	if completed_steps <= 0:
+		return
+	_emit_gameplay_sound(
+		_footstep_sound_id(footstep_surface),
+		FOOTSTEP_MAX_DISTANCE,
+		FOOTSTEP_PRIORITY
+	)
+
+
+static func _get_footstep_surface(collider: Object) -> StringName:
+	return PHYSICAL_SURFACE.from_collider(collider)
+
+
+static func _footstep_sound_id(surface: StringName) -> StringName:
+	return PHYSICAL_SURFACE.footstep_sound_id(surface)
+
+
+static func _jump_sound_id(surface: StringName) -> StringName:
+	return PHYSICAL_SURFACE.jump_sound_id(surface)
+
+
+static func _landing_sound_id(surface: StringName) -> StringName:
+	return PHYSICAL_SURFACE.landing_sound_id(surface)
+
+
+func _emit_gameplay_sound(
+	sound_id: StringName,
+	max_distance: float,
+	priority: float
+) -> void:
+	if not multiplayer.is_server():
+		return
+	var server := get_node_or_null("/root/Server")
+	if server == null or not server.has_method("emit_spatial_sound"):
+		return
+	server.call(
+		"emit_spatial_sound",
+		sound_id,
+		global_position + Vector3.UP * 0.35,
+		max_distance,
+		0.0,
+		null,
+		priority
+	)
+
+
+func _emit_wrist_device_sound(sound_id: StringName) -> void:
+	if not multiplayer.is_server():
+		return
+	var server := get_node_or_null("/root/Server")
+	if server == null or not server.has_method("emit_spatial_sound"):
+		return
+	var max_distance := 16.0
+	var priority := 0.4
+	var pressure_strength := 0.06
+	match sound_id:
+		&"fieldlink_open", &"fieldlink_close":
+			max_distance = 20.0
+			priority = 0.45
+			pressure_strength = 0.12
+		&"fieldlink_hover":
+			max_distance = 8.0
+			priority = 0.22
+			# Tiny cursor ticks still receive path/room DSP, but do not need an
+			# additional baked pressure wavefront on every hover.
+			pressure_strength = 0.0
+		&"fieldlink_click":
+			max_distance = 12.0
+			priority = 0.32
+			pressure_strength = 0.035
+	server.call(
+		"emit_spatial_sound",
+		sound_id,
+		get_audio_listener_position()
+		+ Vector3.UP * WRIST_SOUND_SOURCE_HEIGHT_OFFSET,
+		max_distance,
+		WRIST_SOUND_OUTPUT_GAIN_DB,
+		null,
+		priority,
+		pressure_strength
+	)
 
 func _try_push_body(col: KinematicCollision3D) -> void:
 	var body := col.get_collider()
@@ -771,7 +1156,10 @@ func _try_push_body(col: KinematicCollision3D) -> void:
 
 			body.apply_central_impulse(push_dir.normalized() * impulse_strength)
 
-func _move_and_collide_with_slide(motion: Vector3) -> void:
+func _move_and_collide_with_slide(
+	motion: Vector3,
+	allow_step_up := false
+) -> void:
 	if motion.length_squared() < MOTION_THRESHOLD_SQUARED:
 		return
 
@@ -779,8 +1167,14 @@ func _move_and_collide_with_slide(motion: Vector3) -> void:
 
 	if col == null:
 		return
+	if allow_step_up and _try_step_up(col):
+		return
 
 	_try_push_body(col)
+	velocity = horizontal_velocity_after_wall_collision(
+		velocity,
+		col.get_normal()
+	)
 
 	var remainder := col.get_remainder()
 	var slide_motion := remainder.slide(col.get_normal())
@@ -789,6 +1183,87 @@ func _move_and_collide_with_slide(motion: Vector3) -> void:
 		var col2 := move_and_collide(slide_motion)
 		if col2:
 			_try_push_body(col2)
+			velocity = horizontal_velocity_after_wall_collision(
+				velocity,
+				col2.get_normal()
+			)
+
+
+func _try_step_up(blocking_collision: KinematicCollision3D) -> bool:
+	if (
+		blocking_collision == null
+		or blocking_collision.get_normal().y > FLOOR_CONTACT_NORMAL_Y
+	):
+		return false
+	var blocking_collider := blocking_collision.get_collider()
+	if blocking_collider is RigidBody3D or blocking_collider is CharacterBody3D:
+		return false
+	var remainder := blocking_collision.get_remainder()
+	remainder.y = 0.0
+	if remainder.length_squared() < MOTION_THRESHOLD_SQUARED:
+		return false
+
+	# The original horizontal move has already advanced to the obstruction. Try
+	# the remaining motion from one bounded step higher, then probe back down for
+	# a real walkable top. Any failed branch restores the exact blocked pose.
+	var blocked_transform := global_transform
+	var blocked_height := global_position.y
+	var up_collision := move_and_collide(Vector3.UP * MAX_STEP_HEIGHT)
+	if up_collision != null:
+		global_transform = blocked_transform
+		return false
+
+	var raised_position := global_position
+	var forward_collision := move_and_collide(remainder)
+	var forward_delta := global_position - raised_position
+	forward_delta.y = 0.0
+	if forward_delta.length_squared() < MIN_STEP_FORWARD_PROGRESS_SQUARED:
+		global_transform = blocked_transform
+		return false
+
+	var down_collision := move_and_collide(
+		Vector3.DOWN * (MAX_STEP_HEIGHT + STEP_DOWN_PROBE_DISTANCE)
+	)
+	if (
+		down_collision == null
+		or down_collision.get_normal().y <= FLOOR_CONTACT_NORMAL_Y
+		or down_collision.get_collider() is RigidBody3D
+		or down_collision.get_collider() is CharacterBody3D
+		or global_position.y - blocked_height < MIN_STEP_RISE
+	):
+		global_transform = blocked_transform
+		return false
+
+	on_floor = true
+	footstep_surface = _get_footstep_surface(down_collision.get_collider())
+	if forward_collision != null:
+		_try_push_body(forward_collision)
+		velocity = horizontal_velocity_after_wall_collision(
+			velocity,
+			forward_collision.get_normal()
+		)
+	return true
+
+
+static func horizontal_velocity_after_wall_collision(
+	current_velocity: Vector3,
+	collision_normal: Vector3
+) -> Vector3:
+	if absf(collision_normal.y) >= FLOOR_CONTACT_NORMAL_Y:
+		return current_velocity
+	var wall_normal := Vector3(
+		collision_normal.x,
+		0.0,
+		collision_normal.z
+	)
+	if wall_normal.length_squared() <= MOTION_THRESHOLD_SQUARED:
+		return current_velocity
+	wall_normal = wall_normal.normalized()
+	var inward_speed := current_velocity.dot(wall_normal)
+	if inward_speed >= 0.0:
+		return current_velocity
+	return current_velocity - wall_normal * inward_speed
+
 
 func to_state_dict() -> Dictionary:
 	return {
@@ -797,6 +1272,9 @@ func to_state_dict() -> Dictionary:
 		"rot": global_rotation,
 		"vel": velocity,
 		"on_floor": on_floor,
+		"gait_cycle": gait.get_cycle(),
+		"gait_stride_distance": gait.stride_distance,
+		"gait_active": gait.active,
 		"health_ratio": health / MAX_HEALTH,
 		"stamina_ratio": stamina / MAX_STAMINA,
 		"inventory": _get_public_inventory_state(),
@@ -813,4 +1291,6 @@ func to_state_dict() -> Dictionary:
 		"edit_aim_hit": edit_aim_hit,
 		"edit_aim_color": edit_aim_color,
 		"faction_id": faction_id,
+		"wrist_interface_open": wrist_interface_open,
+		"wrist_display_page": wrist_display_page,
 	}

@@ -8,12 +8,17 @@ extends RefCounted
 #######################################################
 
 const DRONE_QUAD: StringName = &"drone_quad"
+const DRONE_HEX: StringName = &"drone_hex"
 const DRONE_QUAD_GRABBER: StringName = &"drone_quad_grabber"
+const TINY_HUMANOID: StringName = &"tiny_humanoid"
 const FOUR_LIMB_WALKER: StringName = &"four_limb_walker"
 const STATIONARY_TURRET: StringName = &"stationary_turret"
 
 const DRONE_QUAD_LOADOUT_PATH = "res://resources/ml_body_presets/drone_quad.tres"
+const DRONE_HEX_LOADOUT_PATH = "res://resources/ml_body_presets/drone_hex.tres"
+const DRONE_HEX_CORE_PATH = "res://resources/drones/cores/hex_training_core.tres"
 const DRONE_QUAD_GRABBER_LOADOUT_PATH = "res://resources/ml_body_presets/drone_quad_grabber.tres"
+const TINY_HUMANOID_DEFINITION_PATH = "res://resources/ml_body_presets/tiny_humanoid.tres"
 const FOUR_LIMB_WALKER_DEFINITION_PATH = "res://resources/ml_body_presets/four_limb_walker.tres"
 const STATIONARY_TURRET_LOADOUT_PATH = "res://resources/ml_body_presets/stationary_turret.tres"
 
@@ -22,8 +27,26 @@ static func built_in_presets() -> Array[MLBodyPreset]:
 	var result: Array[MLBodyPreset] = []
 	for preset_id: StringName in [
 		DRONE_QUAD,
+		DRONE_HEX,
+		TINY_HUMANOID,
 		FOUR_LIMB_WALKER,
 		STATIONARY_TURRET,
+	]:
+		var preset: MLBodyPreset = preset_by_id(preset_id)
+		if preset != null:
+			result.append(preset)
+	return result
+
+
+static func worker_start_presets() -> Array[MLBodyPreset]:
+	# These are the four one-click starting bodies shown by Worker Groups +. The turret remains a
+	# valid creator preset/runtime, but is intentionally not one of the requested worker defaults.
+	var result: Array[MLBodyPreset] = []
+	for preset_id: StringName in [
+		DRONE_QUAD,
+		DRONE_HEX,
+		TINY_HUMANOID,
+		FOUR_LIMB_WALKER,
 	]:
 		var preset: MLBodyPreset = preset_by_id(preset_id)
 		if preset != null:
@@ -38,14 +61,56 @@ static func ui_records() -> Array[Dictionary]:
 	return result
 
 
+static func worker_start_ui_records() -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for preset: MLBodyPreset in worker_start_presets():
+		var record: Dictionary = preset.ui_record()
+		record["algorithm_hint"] = (
+			"PPO or SAC-HER"
+			if preset.preset_id == DRONE_QUAD
+			else "PPO"
+		)
+		result.append(record)
+	return result
+
+
 static func preset_by_id(preset_id: StringName) -> MLBodyPreset:
 	match preset_id:
 		DRONE_QUAD:
-			return _drone_preset(false)
+			return _drone_preset(
+				DRONE_QUAD,
+				DRONE_QUAD_LOADOUT_PATH,
+				"4-Propeller Drone",
+				"Balanced stock flight worker. Its standard geometry supports PPO or SAC-HER."
+			)
+		DRONE_HEX:
+			return _drone_preset(
+				DRONE_HEX,
+				DRONE_HEX_LOADOUT_PATH,
+				"6-Propeller Drone",
+				"Six-rotor flight worker with a wider stable frame and six independent PPO controls."
+			)
 		DRONE_QUAD_GRABBER:
-			return _drone_preset(true)
+			return _drone_preset(
+				DRONE_QUAD_GRABBER,
+				DRONE_QUAD_GRABBER_LOADOUT_PATH,
+				"Quad Drone + Grabber Limb",
+				"Four independent propellers plus a regular articulated belly limb with shoulder, elbow, and controlled grip."
+			)
+		TINY_HUMANOID:
+			return _four_limb_preset(
+				TINY_HUMANOID,
+				TINY_HUMANOID_DEFINITION_PATH,
+				"Tiny Humanoid",
+				"Small upright worker with two articulated arms, controlled grabbing hands, two legs, and physical feet."
+			)
 		FOUR_LIMB_WALKER:
-			return _four_limb_preset()
+			return _four_limb_preset(
+				FOUR_LIMB_WALKER,
+				FOUR_LIMB_WALKER_DEFINITION_PATH,
+				"Robo-Dog Quadruped",
+				"Low four-legged worker using the established articulated quadruped physics and PPO controller."
+			)
 		STATIONARY_TURRET:
 			return _turret_preset()
 	return null
@@ -71,6 +136,14 @@ static func drone_quad_loadout(with_grabber: bool = false) -> DroneLoadout:
 	return instantiate_runtime_template(preset_id) as DroneLoadout
 
 
+static func drone_hex_loadout() -> DroneLoadout:
+	return instantiate_runtime_template(DRONE_HEX) as DroneLoadout
+
+
+static func tiny_humanoid_definition() -> FourLimbBodyDefinition:
+	return instantiate_runtime_template(TINY_HUMANOID) as FourLimbBodyDefinition
+
+
 static func four_limb_walker_definition() -> FourLimbBodyDefinition:
 	return instantiate_runtime_template(FOUR_LIMB_WALKER) as FourLimbBodyDefinition
 
@@ -79,10 +152,12 @@ static func stationary_turret_loadout() -> TurretLoadout:
 	return instantiate_runtime_template(STATIONARY_TURRET) as TurretLoadout
 
 
-static func _drone_preset(with_grabber: bool) -> MLBodyPreset:
-	var source_path: String = (
-		DRONE_QUAD_GRABBER_LOADOUT_PATH if with_grabber else DRONE_QUAD_LOADOUT_PATH
-	)
+static func _drone_preset(
+	preset_id: StringName,
+	source_path: String,
+	name_value: String,
+	description_value: String
+) -> MLBodyPreset:
 	var source: DroneLoadout = load(source_path) as DroneLoadout
 	if source == null or source.core == null:
 		return null
@@ -93,20 +168,18 @@ static func _drone_preset(with_grabber: bool) -> MLBodyPreset:
 	if loadout == null or loadout.core == null:
 		return null
 	var preset = MLBodyPreset.new()
-	var preset_id: StringName = DRONE_QUAD_GRABBER if with_grabber else DRONE_QUAD
-	var name_value: String = "Quad Drone + Grabber Limb" if with_grabber else "Quad Drone"
-	var description_value: String = (
-		"Four independent propellers plus a regular articulated belly limb with shoulder, elbow, and controlled grip."
-		if with_grabber
-		else "Stock four-propeller drone body using the normal gameplay Core and slots."
-	)
 	if not preset.configure(preset_id, name_value, description_value, &"drone", draft, loadout):
 		return null
 	return preset
 
 
-static func _four_limb_preset() -> MLBodyPreset:
-	var source: FourLimbBodyDefinition = load(FOUR_LIMB_WALKER_DEFINITION_PATH) as FourLimbBodyDefinition
+static func _four_limb_preset(
+	preset_id: StringName,
+	source_path: String,
+	name_value: String,
+	description_value: String
+) -> MLBodyPreset:
+	var source: FourLimbBodyDefinition = load(source_path) as FourLimbBodyDefinition
 	if source == null:
 		return null
 	var draft: MLBodyBuildDraft = FourLimbMLBodyInterfaceFactory.create_definition_draft(source)
@@ -117,9 +190,9 @@ static func _four_limb_preset() -> MLBodyPreset:
 		return null
 	var preset = MLBodyPreset.new()
 	if not preset.configure(
-		FOUR_LIMB_WALKER,
-		"Four-Limb Walker",
-		"Current four-legged articulated training body expressed as ordinary generic limb slots.",
+		preset_id,
+		name_value,
+		description_value,
 		&"articulated_body",
 		draft,
 		definition

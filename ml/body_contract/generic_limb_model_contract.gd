@@ -211,7 +211,11 @@ static func encode_runtime_assembly(
 	if not is_instance_valid(assembly) or not is_instance_valid(assembly.host_body):
 		return PackedFloat64Array()
 	var host_body: RigidBody3D = assembly.host_body
-	var host_transform: Transform3D = host_body.global_transform
+	var host_transform: Transform3D = (
+		host_body.call("model_transform_world") as Transform3D
+		if host_body.has_method("model_transform_world")
+		else host_body.global_transform
+	)
 	var host_inverse_basis: Basis = host_transform.basis.transposed()
 	var host_linear: Vector3 = host_body.linear_velocity
 	var host_angular: Vector3 = host_body.angular_velocity

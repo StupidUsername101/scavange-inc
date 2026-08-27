@@ -1,0 +1,57 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/server/weapon_crafting_station.gd" id="1_station"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_probe_3d.gd" id="2_probe"]
+
+[sub_resource type="BoxShape3D" id="Shape_cabinet"]
+size = Vector3(4.25, 2.85, 0.62)
+
+[sub_resource type="BoxShape3D" id="Shape_base"]
+size = Vector3(4.55, 0.18, 1.42)
+
+[sub_resource type="BoxShape3D" id="Shape_payout"]
+size = Vector3(2.1, 0.09, 0.9)
+
+[node name="WeaponCraftingStation" type="StaticBody3D"]
+script = ExtResource("1_station")
+station_id = 3
+
+[node name="CabinetCollision" type="CollisionShape3D" parent="."]
+position = Vector3(0, 1.43, -0.72)
+shape = SubResource("Shape_cabinet")
+
+[node name="BaseCollision" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.09, -0.54)
+shape = SubResource("Shape_base")
+
+[node name="PayoutTrayCollision" type="CollisionShape3D" parent="."]
+position = Vector3(1.43, 0.42, -1.15)
+shape = SubResource("Shape_payout")
+
+[node name="AcousticBackLeft" type="Marker3D" parent="."]
+position = Vector3(-2.7, 1.45, -1.8)
+script = ExtResource("2_probe")
+auto_connect_radius = 6.0
+sample_reflections = false
+environment_influence_radius = 4.0
+
+[node name="AcousticBackRight" type="Marker3D" parent="."]
+position = Vector3(2.7, 1.45, -1.8)
+script = ExtResource("2_probe")
+auto_connect_radius = 6.0
+sample_reflections = false
+environment_influence_radius = 4.0
+
+[node name="AcousticFrontLeft" type="Marker3D" parent="."]
+position = Vector3(-2.7, 1.45, 0.4)
+script = ExtResource("2_probe")
+auto_connect_radius = 6.0
+sample_reflections = false
+environment_influence_radius = 4.0
+
+[node name="AcousticFrontRight" type="Marker3D" parent="."]
+position = Vector3(2.7, 1.45, 0.4)
+script = ExtResource("2_probe")
+auto_connect_radius = 6.0
+sample_reflections = false
+environment_influence_radius = 4.0

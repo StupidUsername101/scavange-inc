@@ -12,6 +12,8 @@ const DEFAULT_AIR_DENSITY_KG_M3 := 1.225
 const MINIMUM_DENOMINATOR := 0.000001
 const INITIAL_HOVER_LIFT_MARGIN: float = 1.12
 const MINIMUM_USEFUL_UP_COMPONENT: float = 0.05
+const INITIAL_NON_LIFT_PROPELLER_COMMAND: float = 0.5
+const MINIMUM_NOMINAL_FLIGHT_LIFT_TO_WEIGHT: float = 1.0
 
 #######################################################
 # Owns training-room hardware templates without mutating the shared gameplay resources.
@@ -26,9 +28,8 @@ static func duplicate_loadout(source: DroneLoadout) -> DroneLoadout:
 		return result
 	result.core = _duplicate_core(source.core)
 	result.battery = _duplicate_battery(source.battery)
-	# Copy the physical Core topology exactly. The current training room may still choose to
-	# constrain a particular algorithm/profile to four rotors, but the loadout/preset layer must not
-	# destroy additional creator-authored slots while cloning or serializing a body.
+	# Copy the physical Core topology exactly. PPO accepts the resulting variable rotor count; a
+	# specialized algorithm may still reject an incompatible body without destroying its slots.
 	for slot_index in range(_propeller_slot_count(source)):
 		result.propellers.append(_duplicate_propeller(source.get_propeller(slot_index)))
 	var source_propeller_mounts: Array[Transform3D] = source.get_propeller_slot_transforms()
@@ -603,7 +604,11 @@ static func physical_summary(
 		"nominal_rotor_power_w": nominal_rotor_power,
 		"maximum_rotor_power_w": maximum_rotor_power,
 		"hover_power_w": hover_power,
-		"nominal_hover_power_margin": nominal_rotor_power / maxf(hover_power, MINIMUM_DENOMINATOR),
+		"nominal_hover_power_margin": (
+			nominal_rotor_power / hover_power
+			if hover_power > MINIMUM_DENOMINATOR
+			else 0.0
+		),
 		"nominal_static_thrust_n": nominal_static_thrust,
 		"maximum_static_thrust_n": maximum_static_thrust,
 		"nominal_upward_thrust_n": nominal_upward_thrust,
@@ -647,10 +652,45 @@ static func recommended_initial_control_values(
 		var normalized_command: float = (
 			command
 			if _propeller_up_component(loadout, slot_index) >= MINIMUM_USEFUL_UP_COMPONENT
-			else 0.0
+			# A sigmoid policy initialized at exact physical idle is clamped to 0.001 before
+			# conversion to logit space. Its Gaussian exploration then remains effectively
+			# pinned there, so a valid lateral/tilted creator rotor never produces enough
+			# thrust for PPO to discover what it does. Non-lift rotors start at mid-range;
+			# upward rotors retain the mass/power-aware hover bias computed above.
+			else INITIAL_NON_LIFT_PROPELLER_COMMAND
 		)
 		result[control_index] = minimum + (maximum - minimum) * normalized_command
 	return result
+
+
+static func training_readiness_error(
+	loadout: DroneLoadout,
+	manifest: MLBodyInterfaceManifest
+) -> String:
+	if loadout == null or manifest == null or not manifest.finalized:
+		return "The accepted drone body is incomplete."
+	var propeller_control_count: int = 0
+	var other_control_count: int = 0
+	for descriptor: Dictionary in manifest.control_descriptors:
+		if str(descriptor.get("kind", "")) == "propeller_throttle":
+			propeller_control_count += 1
+		else:
+			other_control_count += 1
+	# Bodies with articulated/tool controls may intentionally operate on the ground. A body whose
+	# only controls are rotors is a flight body, and accepting one that cannot counter gravity only
+	# creates an apparently running group whose learning task is physically impossible.
+	if propeller_control_count <= 0 or other_control_count > 0:
+		return ""
+	var summary: Dictionary = physical_summary(loadout)
+	if summary.is_empty():
+		return "The propeller-only body has incomplete flight hardware."
+	var lift_to_weight: float = float(summary.get("nominal_lift_to_weight", 0.0))
+	if lift_to_weight > MINIMUM_NOMINAL_FLIGHT_LIFT_TO_WEIGHT:
+		return ""
+	return (
+		"This propeller-only body has %.2fx nominal upward lift; flight training needs more than %.2fx. "
+		+ "Point rotor thrust axes toward worker up (the green Core arrow) or choose stronger flight hardware."
+	) % [lift_to_weight, MINIMUM_NOMINAL_FLIGHT_LIFT_TO_WEIGHT]
 
 
 static func _attachment_idle_power(loadout: DroneLoadout) -> float:
@@ -670,7 +710,15 @@ static func _propeller_up_component(loadout: DroneLoadout, slot_index: int) -> f
 	var axis: Vector3 = loadout.get_propeller_slot_transform(slot_index).basis.y
 	if axis.length_squared() <= MINIMUM_DENOMINATOR:
 		return 0.0
-	return maxf(axis.normalized().dot(Vector3.UP), 0.0)
+	# Both vectors already live in Core-local space. Dotting them directly is the exact scalar
+	# projection that the old inverse-basis conversion eventually computed, without constructing a
+	# temporary transposed Basis for every rotor in every summary/hover-search iteration.
+	var worker_up_core: Vector3 = (
+		loadout.core.model_orientation_basis_local().y
+		if loadout.core != null
+		else Vector3.UP
+	)
+	return maxf(axis.normalized().dot(worker_up_core.normalized()), 0.0)
 
 
 static func _requested_power_for_uniform_upward_command(

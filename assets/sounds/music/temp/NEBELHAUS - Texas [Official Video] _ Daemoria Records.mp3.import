@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://dwvdffgdv2e4u"
+path="res://.godot/imported/NEBELHAUS - Texas [Official Video] _ Daemoria Records.mp3-737b064e8ea8b01968871f8a45cebb26.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/temp/NEBELHAUS - Texas [Official Video] _ Daemoria Records.mp3"
+dest_files=["res://.godot/imported/NEBELHAUS - Texas [Official Video] _ Daemoria Records.mp3-737b064e8ea8b01968871f8a45cebb26.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

@@ -1,0 +1,38 @@
+[gd_resource type="Resource" script_class="DroneCoreDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/drones/drone_core_definition.gd" id="1_core"]
+
+[resource]
+script = ExtResource("1_core")
+display_name = "Hex Survey Core"
+visual_color = Color(0.08, 0.18, 0.25, 1)
+mass = 1.05
+quality = 1
+rated_voltage_v = 12.0
+max_health = 125.0
+max_power_throughput = 220.0
+propeller_slot_count = 6
+ai_chip_slot_count = 2
+attachment_slot_count = 2
+body_size = Vector3(0.78, 0.24, 0.65)
+ai_max_horizontal_speed = 9.5
+ai_max_horizontal_acceleration = 5.5
+ai_max_vertical_speed = 4.5
+ai_max_vertical_acceleration = 7.0
+ai_max_tilt_degrees = 26.0
+ai_horizontal_position_gain = 0.9
+ai_horizontal_velocity_gain = 2.25
+ai_altitude_position_gain = 1.8
+ai_altitude_velocity_gain = 2.8
+ai_attitude_response = 18.0
+ai_angular_velocity_damping = 5.5
+ai_motor_mix_authority = 0.42
+ai_emergency_upright_torque = 1.25
+ai_altitude_authority = 0.24
+spool_up_response = 1.8
+spool_down_response = 2.5
+power_output_consistency = 0.985
+fluctuation_rate = 0.35
+drag_area = 0.19
+drag_coefficient = 1.05
+angular_drag_coefficient = 0.62

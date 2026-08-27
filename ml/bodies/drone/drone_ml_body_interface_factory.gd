@@ -73,7 +73,10 @@ static func is_legacy_stock_quad_manifest(manifest: MLBodyInterfaceManifest) -> 
 	# are therefore not a legacy quad merely because the tensor width happens to be four.
 	if manifest == null or not manifest.finalized or manifest.control_count() != 4:
 		return false
-	var core: DroneCoreDefinition = manifest.core_record.get("part") as DroneCoreDefinition
+	var core_part: Resource = manifest.core_record.get("part") as Resource
+	var core: DroneCoreDefinition = core_part as DroneCoreDefinition
+	if core == null and core_part is MLBodyCoreDefinition:
+		core = (core_part as MLBodyCoreDefinition).physical_core as DroneCoreDefinition
 	if core == null or core.propeller_slot_count != 4:
 		return false
 	var propeller_controls: int = 0
@@ -144,7 +147,7 @@ static func host_state(drone: ServerDrone) -> Dictionary:
 	if not is_instance_valid(drone):
 		return {}
 	return {
-		"transform_world": drone.global_transform,
+		"transform_world": drone.model_transform_world(),
 		"linear_velocity_world": drone.linear_velocity,
 		"angular_velocity_world": drone.angular_velocity,
 	}
@@ -298,6 +301,9 @@ static func _descriptor_topology_matches(expected: Array[Dictionary], actual: Ar
 
 static func _core_contract(loadout: DroneLoadout) -> Dictionary:
 	var core: DroneCoreDefinition = loadout.core
+	var model_basis: Basis = (
+		core.model_orientation_basis_local() if core != null else Basis.IDENTITY
+	)
 	return {
 		"body_kind": "drone",
 		"core_resource_path": MLBodyPartContract.resource_source_path(core),
@@ -309,5 +315,7 @@ static func _core_contract(loadout: DroneLoadout) -> Dictionary:
 		),
 		"propeller_slot_count": core.propeller_slot_count if core != null else 0,
 		"attachment_slot_count": core.attachment_slot_count if core != null else 0,
+		"model_forward_local": [(-model_basis.z).x, (-model_basis.z).y, (-model_basis.z).z],
+		"model_up_local": [model_basis.y.x, model_basis.y.y, model_basis.y.z],
 		"battery_resource_path": MLBodyPartContract.resource_source_path(loadout.battery),
 	}

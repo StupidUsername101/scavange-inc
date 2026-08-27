@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://dk3x4wtc2u5md"
+path="res://.godot/imported/Hässlich.mp3-354760f4c7bd24c1c7755e287d22f58f.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/NDH/Hässlich.mp3"
+dest_files=["res://.godot/imported/Hässlich.mp3-354760f4c7bd24c1c7755e287d22f58f.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://ds1apb33bmant"
+path="res://.godot/imported/Was geh'n euch meine Lumpen an • Sad German Song [+GER & ENG Lyrics].mp3-aeb58d083110c728484bda60bff87b87.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Vor der Runde/Was geh'n euch meine Lumpen an • Sad German Song [+GER & ENG Lyrics].mp3"
+dest_files=["res://.godot/imported/Was geh'n euch meine Lumpen an • Sad German Song [+GER & ENG Lyrics].mp3-aeb58d083110c728484bda60bff87b87.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

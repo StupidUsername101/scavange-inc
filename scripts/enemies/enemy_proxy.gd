@@ -63,7 +63,12 @@ func apply_server_state(state: Dictionary) -> void:
 
 func _process(delta: float) -> void:
 	if multiplayer.is_server():
-		var server_enemy := Server.get_server_enemy(enemy_id)
+		var server := get_node_or_null("/root/Server")
+		var server_enemy := (
+			server.call("get_server_enemy", enemy_id) as ServerEnemy
+			if server != null
+			else null
+		)
 		if is_instance_valid(server_enemy):
 			global_transform = server_enemy.global_transform
 			_apply_limb_visual_state(server_enemy.get_limb_state())

@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://ct8q320vl8x2o"
+path="res://.godot/imported/NACHTMAHR - Beweg dich! (official video).mp3-5f13c1d452f8e42d58b2dbcc65a1d957.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/not so legally downloaded music/Nachtmahr/NACHTMAHR - Beweg dich! (official video).mp3"
+dest_files=["res://.godot/imported/NACHTMAHR - Beweg dich! (official video).mp3-5f13c1d452f8e42d58b2dbcc65a1d957.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

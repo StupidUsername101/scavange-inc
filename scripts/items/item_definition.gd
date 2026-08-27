@@ -17,6 +17,27 @@ class_name ItemDefinition
 	set(value):
 		inventory_code = value.left(3).to_upper()
 		emit_changed()
+
+@export_group("Fieldlink")
+@export var fieldlink_detectable := false:
+	set(value):
+		fieldlink_detectable = value
+		emit_changed()
+
+@export var fieldlink_device_class: StringName = &"DEVICE":
+	set(value):
+		fieldlink_device_class = value
+		emit_changed()
+
+@export var fieldlink_control_type: StringName = &"":
+	set(value):
+		fieldlink_control_type = value
+		emit_changed()
+
+@export_range(0.0, 4.0, 0.05) var fieldlink_signal_strength := 1.0:
+	set(value):
+		fieldlink_signal_strength = maxf(value, 0.0)
+		emit_changed()
 		
 @export_group("Sizing")
 @export var sync_size_sliders := true
@@ -34,6 +55,11 @@ var _syncing_shape_size := false
 		mass = value
 		emit_changed()
 
+@export var physical_surface: StringName = &"metal":
+	set(value):
+		physical_surface = value
+		emit_changed()
+
 @export_group("Grip")
 @export var grippable := true:
 	set(value):
@@ -43,6 +69,12 @@ var _syncing_shape_size := false
 @export var grip_surface_tags: PackedStringArray = PackedStringArray(["carryable"]):
 	set(value):
 		grip_surface_tags = _sanitized_grip_surface_tags(value)
+		emit_changed()
+
+@export_subgroup("Hold Pose")
+@export var default_grab_rotation_degrees := Vector3.ZERO:
+	set(value):
+		default_grab_rotation_degrees = value if value.is_finite() else Vector3.ZERO
 		emit_changed()
 
 @export_group("Mesh")
@@ -181,6 +213,14 @@ var _syncing_shape_size := false
 
 func get_grip_surface_tags() -> PackedStringArray:
 	return _sanitized_grip_surface_tags(grip_surface_tags) if grippable else PackedStringArray()
+
+
+func get_default_grab_basis() -> Basis:
+	return Basis.from_euler(Vector3(
+		deg_to_rad(default_grab_rotation_degrees.x),
+		deg_to_rad(default_grab_rotation_degrees.y),
+		deg_to_rad(default_grab_rotation_degrees.z)
+	)).orthonormalized()
 
 
 static func _sanitized_grip_surface_tags(value: PackedStringArray) -> PackedStringArray:

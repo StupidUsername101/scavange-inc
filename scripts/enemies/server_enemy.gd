@@ -22,6 +22,16 @@ var target_player_id := -1
 var activation_player_ids: Dictionary[int, bool] = {}
 var behavior_controller := EnemyBehaviorController.new()
 var physical_limb_rig: EnemyPhysicalLimbRig3D
+var cached_server_service: Node
+
+
+func _server_service() -> Node:
+	if is_instance_valid(cached_server_service):
+		return cached_server_service
+	var tree := get_tree()
+	if tree != null:
+		cached_server_service = tree.root.get_node_or_null("Server")
+	return cached_server_service
 
 
 func _ready() -> void:
@@ -34,12 +44,18 @@ func _ready() -> void:
 		return
 	current_health = definition.max_health
 	roam_center = global_position
-	enemy_id = Server.register_enemy(self)
+	var server_service := _server_service()
+	if server_service == null:
+		push_error("ServerEnemy requires the Server autoload")
+		return
+	enemy_id = int(server_service.call("register_enemy", self))
 
 
 func _exit_tree() -> void:
 	if enemy_id >= 0:
-		Server.unregister_enemy(enemy_id)
+		var server_service := _server_service()
+		if server_service != null:
+			server_service.call("unregister_enemy", enemy_id)
 		enemy_id = -1
 
 
@@ -91,7 +107,9 @@ func set_active(value: bool) -> void:
 	if physical_limb_rig != null:
 		physical_limb_rig.set_runtime_active(active)
 	if enemy_id >= 0:
-		Server.set_enemy_spatial_active(enemy_id, active)
+		var server_service := _server_service()
+		if server_service != null:
+			server_service.call("set_enemy_spatial_active", enemy_id, active)
 
 
 func add_activation_player(player_id: int) -> void:
@@ -202,9 +220,12 @@ func _apply_attack(intent: Dictionary) -> void:
 
 func _build_behavior_candidates() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
+	var server_service := _server_service()
+	if server_service == null:
+		return result
 	var stale_ids: Array[int] = []
 	for player_id: int in activation_player_ids.keys():
-		var player := Server.get_server_player(player_id)
+		var player := server_service.call("get_server_player", player_id) as ServerPlayer
 		if not is_instance_valid(player):
 			stale_ids.append(player_id)
 			continue
@@ -227,7 +248,9 @@ func _die() -> void:
 	velocity = Vector3.ZERO
 	target_player_id = -1
 	if enemy_id >= 0:
-		Server.set_enemy_spatial_active(enemy_id, false)
+		var server_service := _server_service()
+		if server_service != null:
+			server_service.call("set_enemy_spatial_active", enemy_id, false)
 	if physical_limb_rig != null:
 		physical_limb_rig.set_ragdoll(true)
 	var linger: float = (

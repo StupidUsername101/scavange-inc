@@ -870,7 +870,7 @@ static func _command_change_norm(previous: PackedFloat64Array, current: PackedFl
 	return sqrt(sum_value / float(maxi(joint_sample_count, 1)))
 
 
-static func _fail_start(reason: String) -> bool:
+func _fail_start(reason: String) -> bool:
 	_fail(reason)
 	return false
 

@@ -1,6 +1,39 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/server/dev_warehouse.gd" id="1_warehouse"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_probe_3d.gd" id="2_probe"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_portal_3d.gd" id="3_portal"]
+[ext_resource type="Script" path="res://scripts/audio/acoustic_material.gd" id="4_material"]
+
+[sub_resource type="Resource" id="AcousticMaterial_steel_backboard"]
+script = ExtResource("4_material")
+material_id = &"steel_backboard"
+transmission_gain = Vector3(0.58, 0.16, 0.035)
+absorption = Vector3(0.08, 0.12, 0.22)
+scattering = 0.14
+transmission_volume_db = -5.0
+transmission_lowpass_hz = 2600.0
+resonance = 0.35
+reverb_send = 0.22
 
 [node name="DevWarehouse" type="StaticBody3D"]
 script = ExtResource("1_warehouse")
+acoustic_material = SubResource("AcousticMaterial_steel_backboard")
+
+[node name="FrontAcousticProbe" type="Marker3D" parent="."]
+position = Vector3(0, 1.4, 1.1)
+script = ExtResource("2_probe")
+probe_id = &"dev_warehouse_front"
+auto_connect_radius = 8.0
+
+[node name="BackAcousticProbe" type="Marker3D" parent="."]
+position = Vector3(0, 1.4, -1.1)
+script = ExtResource("2_probe")
+probe_id = &"dev_warehouse_back"
+auto_connect_radius = 8.0
+
+[node name="BackboardAcousticTransmission" type="Node3D" parent="."]
+script = ExtResource("3_portal")
+probe_a_path = NodePath("../FrontAcousticProbe")
+probe_b_path = NodePath("../BackAcousticProbe")
+material = SubResource("AcousticMaterial_steel_backboard")
