@@ -74,8 +74,8 @@ func _test_four_player_limit() -> void:
 
 func _test_lobby_compatibility() -> void:
 	_expect(
-		LobbyRules.PROTOCOL_VERSION == "2",
-		"the audio-prediction and procedural-character RPC revision has its own lobby protocol"
+		LobbyRules.PROTOCOL_VERSION == "3",
+		"the compact continuous-audio RPC revision has its own lobby protocol"
 	)
 	_expect(
 		LobbyRules.is_compatible_lobby(
@@ -485,8 +485,11 @@ func _test_transfer_channel_capacity() -> void:
 		and client_source.contains(
 			'@rpc("authority", "unreliable_ordered", "call_local", %d)\nfunc on_radio_states_received'
 			% MULTIPLAYER_CHANNELS.CONTINUOUS_AUDIO_CHANNEL
+		)
+		and client_source.contains(
+			'@rpc("authority", "reliable", "call_local", 3)\nfunc on_radio_state_keyframe_received'
 		),
-		"remote one-shots and continuous programs use their contracted lanes"
+		"remote one-shots, continuous updates, and reliable program keyframes use their contracted lanes"
 	)
 	var highest_declared_channel := _highest_rpc_channel_in("res://scripts")
 	_expect(

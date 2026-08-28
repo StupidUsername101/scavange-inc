@@ -11,6 +11,9 @@ const INDUSTRIAL_LAYOUT := preload(
 	"res://scripts/world/industrial_acoustic_complex_layout.gd"
 )
 const SERVER_PLAYER_SCENE := preload("res://scenes/server/server_player.tscn")
+const RADIO_STATE_SNAPSHOT_CODEC := preload(
+	"res://scripts/audio/radio_state_snapshot_codec.gd"
+)
 
 var assertion_count := 0
 var failure_count := 0
@@ -128,6 +131,9 @@ func _test_generic_array_composition() -> void:
 		acoustic_service
 	)
 	var ids := server_array.get_emitter_ids()
+	var wire_payload := RADIO_STATE_SNAPSHOT_CODEC.encode(listener_states)
+	var decoded_states := RADIO_STATE_SNAPSHOT_CODEC.decode(wire_payload)
+	var verbose_wire_size := var_to_bytes(listener_states).size()
 	var ids_are_sequential := ids.size() == 12
 	for speaker_index: int in range(ids.size()):
 		ids_are_sequential = (
@@ -151,7 +157,10 @@ func _test_generic_array_composition() -> void:
 			"MeshInstance3D",
 			true,
 			false
-		).size() == 12,
+		).size() == 12
+		and decoded_states.size() == 12
+		and wire_payload.size() < 4096
+		and wire_payload.size() * 4 < verbose_wire_size,
 		"one marker-driven controller discovers, IDs, collides, and renders an arbitrary twelve-speaker installation"
 	)
 	server_array.set_powered(false)

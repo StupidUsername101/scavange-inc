@@ -93,6 +93,10 @@ or extending audio:
     a bounded 50 ms reconciliation window. Same-frame prediction consumes it; absent prediction, the
     original authoritative packet falls through unchanged. Unkeyed remote/world sounds never enter
     this window.
+32. Continuous-source transport carries one bounded, compressed, client-sanitized snapshot per
+    listener. High-rate position/DSP changes remain replaceable and unreliable-ordered; only a
+    start, stop, track revision, or audible-source-set transition emits one reliable keyframe.
+    Reliable movement snapshots are forbidden because their backlog reproduces stale-room audio.
 
 ## Static propagation bake and rollback
 
@@ -396,7 +400,11 @@ Continuous radios use a separate state stream because they must preserve track p
 movement and late joins. `ServerRadio` chooses tracks from `assets/sounds/music`, and the server
 sends each listener a current playback offset plus the same acoustic path result used above.
 `RadioStatePacket` only permits audio paths beneath that music folder. Clients render at most
-eight audible radios through persistent distortion/EQ/filter buses. Devices that explicitly author
+eight audible radios through persistent distortion/EQ/filter buses. Repeated dictionary keys are
+serialized once and DEFLATE-compressed by `RadioStateSnapshotCodec`; a twelve-cabinet regression
+must remain below 4 KiB and at least four times smaller than the verbose Variant form. A reliable
+keyframe guarantees program changes, while 20 Hz listener acoustics stay on their independent
+unreliable-ordered lane so packet loss drops old positions instead of queueing them. Devices that explicitly author
 receiver noise also mix the same small, pre-generated hiss/crackle loop before those effects, so
 static follows the device's position and server-derived propagation without runtime noise synthesis
 or per-voice sample buffers. Clean PA profiles do not start a static player at all; a low gain is not

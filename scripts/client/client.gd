@@ -6,6 +6,9 @@ const FIELDLINK_DISPLAY_STATE := preload(
 const LOCAL_AUDIO_PREDICTION_RUNTIME := preload(
 	"res://scripts/audio/local_audio_prediction_runtime.gd"
 )
+const RADIO_STATE_SNAPSHOT_CODEC := preload(
+	"res://scripts/audio/radio_state_snapshot_codec.gd"
+)
 
 const HOST_RPC_ID = 1
 const PLAYER_PROXY_SCENE := preload("res://scenes/proxy/player_proxy.tscn")
@@ -786,7 +789,17 @@ func on_local_audio_prediction_rejected(prediction_key: int) -> void:
 
 
 @rpc("authority", "unreliable_ordered", "call_local", 6)
-func on_radio_states_received(states: Dictionary) -> void:
+func on_radio_states_received(payload: PackedByteArray) -> void:
+	_apply_radio_state_payload(payload)
+
+
+@rpc("authority", "reliable", "call_local", 3)
+func on_radio_state_keyframe_received(payload: PackedByteArray) -> void:
+	_apply_radio_state_payload(payload)
+
+
+func _apply_radio_state_payload(payload: PackedByteArray) -> void:
+	var states := RADIO_STATE_SNAPSHOT_CODEC.decode(payload)
 	if states.is_empty() and not is_instance_valid(radio_audio_renderer):
 		return
 	_ensure_radio_audio_renderer()
