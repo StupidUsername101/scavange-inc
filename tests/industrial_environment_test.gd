@@ -57,7 +57,11 @@ func _test_shared_layout_contract() -> void:
 		tread_descriptors.size()
 		== (LAYOUT.STOREY_COUNT - 1) * LAYOUT.STAIR_TREAD_COUNT
 		and LAYOUT.foot_contact_boxes().size()
-		== descriptors.size() + tread_descriptors.size()
+		== (
+			descriptors.size()
+			+ tread_descriptors.size()
+			+ LAYOUT.parkour_contact_detail_boxes().size()
+		)
 		and treads_are_horizontal,
 		"smooth movement ramps expose generated horizontal presentation treads for procedural feet"
 	)
@@ -159,11 +163,29 @@ func _test_shared_layout_contract() -> void:
 	var hall_world_center := Vector2(hall_world_center_3d.x, hall_world_center_3d.z)
 	var valve_world_center_3d := LAYOUT.WORLD_POSITION + LAYOUT.VALVE_BUNKER_CENTER
 	var valve_world_center := Vector2(valve_world_center_3d.x, valve_world_center_3d.z)
+	var parkour_world_center_3d := (
+		LAYOUT.WORLD_POSITION + LAYOUT.MOVEMENT_PARKOUR_LAYOUT.CENTER
+	)
+	var parkour_world_center := Vector2(
+		parkour_world_center_3d.x,
+		parkour_world_center_3d.z
+	)
 	var nature_clear := true
+	var parkour_nature_clear := true
 	for descriptor: Dictionary in NATURE_LAYOUT.visual_descriptors():
 		var nature_position: Vector3 = descriptor.get("position", Vector3.ZERO)
 		var hall_delta := Vector2(nature_position.x, nature_position.z) - hall_world_center
 		var valve_delta := Vector2(nature_position.x, nature_position.z) - valve_world_center
+		var parkour_delta := (
+			Vector2(nature_position.x, nature_position.z) - parkour_world_center
+		)
+		if (
+			absf(parkour_delta.x)
+			<= LAYOUT.MOVEMENT_PARKOUR_LAYOUT.CLEAR_HALF_EXTENTS.x
+			and absf(parkour_delta.y)
+			<= LAYOUT.MOVEMENT_PARKOUR_LAYOUT.CLEAR_HALF_EXTENTS.y
+		):
+			parkour_nature_clear = false
 		if (
 			absf(hall_delta.x) <= LAYOUT.LARGE_BUNKER_WIDTH * 0.5 + 1.0
 			and absf(hall_delta.y) <= LAYOUT.LARGE_BUNKER_DEPTH * 0.5 + 1.0
@@ -179,6 +201,10 @@ func _test_shared_layout_contract() -> void:
 	_expect(
 		nature_clear,
 		"procedural nature leaves both A/B bunker shells and acoustic perimeters clear"
+	)
+	_expect(
+		parkour_nature_clear,
+		"procedural nature leaves the complete movement-lab clearance free"
 	)
 	var tunnel_acoustic_descriptors := LAYOUT.tunnel_acoustic_probe_descriptors()
 	var acoustic_counts_by_run: Dictionary[StringName, Dictionary] = {}

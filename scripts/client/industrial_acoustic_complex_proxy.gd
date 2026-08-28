@@ -57,6 +57,7 @@ func _ready() -> void:
 	_build_tunnel_details()
 	_build_large_bunker_details()
 	_build_valve_bunker_details()
+	_build_movement_parkour_details()
 	_build_props()
 	_build_foot_contact_geometry()
 
@@ -81,6 +82,7 @@ func _build_materials() -> void:
 	_materials[&"floor"] = VisualMaterialFactory.standard(Color("252d31"), 0.08, 0.82)
 	_materials[&"roof"] = VisualMaterialFactory.standard(Color("1b2328"), 0.26, 0.72)
 	_materials[&"ramp"] = VisualMaterialFactory.standard(Color("465159"), 0.58, 0.48)
+	_materials[&"parkour"] = VisualMaterialFactory.standard(Color("59636a"), 0.36, 0.7)
 	_materials[&"rail"] = VisualMaterialFactory.standard(Color("171d21"), 0.72, 0.34)
 	_light_material = VisualMaterialFactory.unshaded_emissive(
 		Color("ffc36c"),
@@ -185,6 +187,48 @@ func _build_valve_bunker_details() -> void:
 		"ValveBunker",
 		"VALVE REFERENCE  //  CONCRETE 0.05 0.07 0.08",
 		"SCATTER 0.05  //  HYBRID EARLY + LATE"
+	)
+
+
+func _build_movement_parkour_details() -> void:
+	for descriptor: Dictionary in LAYOUT.parkour_contact_detail_boxes():
+		_add_box(
+			str(descriptor.get("name", &"ParkourTread")),
+			descriptor.get("position", Vector3.ZERO),
+			descriptor.get("size", Vector3.ONE),
+			Vector3.ZERO,
+			_materials[&"ramp"]
+		)
+	for descriptor: Dictionary in LAYOUT.MOVEMENT_PARKOUR_LAYOUT.jump_edge_markers():
+		_add_box(
+			str(descriptor.get("name", &"ParkourJumpEdge")),
+			descriptor.get("position", Vector3.ZERO),
+			descriptor.get("size", Vector3.ONE),
+			Vector3.ZERO,
+			_light_material
+		)
+	var center: Vector3 = LAYOUT.MOVEMENT_PARKOUR_LAYOUT.CENTER
+	_add_label(
+		"MOVEMENT LAB  //  CONTACT COURSE",
+		center + Vector3(-15.6, 1.1, 0.0),
+		34,
+		Color("ffb451")
+	)
+	_add_label(
+		"MOVEMENT LAB  //  EAST >>",
+		center + Vector3(-28.0, 1.35, 0.0),
+		28,
+		Color("ffb451")
+	)
+	_add_label(
+		"SPRINT COMMIT  //  9.0 M",
+		center + Vector3(
+			0.0,
+			LAYOUT.MOVEMENT_PARKOUR_LAYOUT.mirror_platform_top_y() + 0.62,
+			LAYOUT.MOVEMENT_PARKOUR_LAYOUT.MIRROR_Z_OFFSET
+		),
+		28,
+		Color("ffc36c")
 	)
 
 

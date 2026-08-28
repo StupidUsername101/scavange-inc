@@ -295,6 +295,14 @@ static func _is_excluded(position: Vector2) -> bool:
 	var valve_access_half_width := (
 		absf(valve_bunker_east_x - large_bunker_access_yard_x) * 0.5 + 1.5
 	)
+	var parkour_world_center_3d: Vector3 = (
+		INDUSTRIAL_LAYOUT.WORLD_POSITION
+		+ INDUSTRIAL_LAYOUT.MOVEMENT_PARKOUR_LAYOUT.CENTER
+	)
+	var parkour_world_center := Vector2(
+		parkour_world_center_3d.x,
+		parkour_world_center_3d.z
+	)
 	# Central interaction yard and its connection to the PA bunker.
 	return (
 		_inside_rect(position, Vector2(2.0, -9.0), Vector2(22.0, 25.0))
@@ -334,6 +342,12 @@ static func _is_excluded(position: Vector2) -> bool:
 			position,
 			Vector2(valve_access_center_x, valve_bunker_world_center.y),
 			Vector2(valve_access_half_width, 4.0)
+		)
+		# Dedicated movement lab: keep every tread, landing deck, and run-up readable.
+		or _inside_rect(
+			position,
+			parkour_world_center,
+			INDUSTRIAL_LAYOUT.MOVEMENT_PARKOUR_LAYOUT.CLEAR_HALF_EXTENTS
 		)
 	)
 

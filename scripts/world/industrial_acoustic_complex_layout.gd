@@ -26,6 +26,9 @@ const VALVE_BUNKER_ARRAY_DEFINITION: SpeakerArrayDefinition = preload(
 const VALVE_REFERENCE_CONCRETE: AcousticMaterial = preload(
 	"res://resources/world/acoustic_materials/valve_reference_concrete.tres"
 )
+const MOVEMENT_PARKOUR_LAYOUT := preload(
+	"res://scripts/world/movement_parkour_layout.gd"
+)
 
 const BUILDING_CENTER := Vector3(-8.0, 0.0, 8.0)
 const BUILDING_WIDTH := 13.0
@@ -134,6 +137,7 @@ static func structural_boxes() -> Array[Dictionary]:
 		&"valve_concrete",
 		VALVE_REFERENCE_CONCRETE
 	)
+	boxes.append_array(MOVEMENT_PARKOUR_LAYOUT.structural_boxes())
 	return boxes
 
 
@@ -143,7 +147,12 @@ static func structural_boxes() -> Array[Dictionary]:
 static func foot_contact_boxes() -> Array[Dictionary]:
 	var boxes := structural_boxes()
 	boxes.append_array(stair_tread_boxes())
+	boxes.append_array(MOVEMENT_PARKOUR_LAYOUT.contact_detail_boxes())
 	return boxes
+
+
+static func parkour_contact_detail_boxes() -> Array[Dictionary]:
+	return MOVEMENT_PARKOUR_LAYOUT.contact_detail_boxes()
 
 
 static func stair_tread_boxes() -> Array[Dictionary]:
