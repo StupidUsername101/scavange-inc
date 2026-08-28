@@ -7,6 +7,10 @@ extends RefCounted
 #######################################################
 
 
+static func is_newer_motion_sequence(candidate: int, latest: int) -> bool:
+	return candidate < 0 or candidate > latest
+
+
 static func decode_rigid_state(
 	state: Dictionary,
 	fallback_position: Vector3,

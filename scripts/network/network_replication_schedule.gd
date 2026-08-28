@@ -2,9 +2,10 @@ class_name NetworkReplicationSchedule
 extends RefCounted
 
 ## Full snapshots replace older snapshots; only their cadence differs. Player/combat state remains
-## at the server's 20 Hz network tick, including player-interactive items. Loose drone parts and
-## secondary simulation use 10 Hz with extrapolation, while mostly static station panels refresh
-## at 2 Hz. Reliable commands and transactions are not scheduled here.
+## at the server's 20 Hz network tick, including complete player-interactive item lifecycle state.
+## Actively grabbed items add a tiny physics-rate motion delta on the same item lane. Loose drone
+## parts and secondary simulation use 10 Hz with extrapolation, while mostly static station panels
+## refresh at 2 Hz. Reliable commands and transactions are not scheduled here.
 
 const REALTIME_INTERVAL_TICKS := 1
 const BULK_PHYSICS_INTERVAL_TICKS := 2

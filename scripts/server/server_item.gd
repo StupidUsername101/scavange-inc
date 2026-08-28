@@ -156,3 +156,13 @@ func to_state_dict() -> Dictionary:
 			""
 		)),
 	}
+
+
+func to_motion_state_dict() -> Dictionary:
+	return {
+		"item_id": item_id,
+		"pos": global_position,
+		"rot": global_rotation,
+		"linear_velocity": linear_velocity,
+		"angular_velocity": angular_velocity,
+	}

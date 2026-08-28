@@ -86,9 +86,10 @@ partial-search timeout preservation, Steam Join Game/rich presence, the invite o
 complete leave-session teardown, and sufficient SteamNetworkingSockets lanes for every
 declared RPC channel so remote audio cannot silently collapse onto the world-state lane.
 It also locks the latency contract: replaceable player/world snapshots must use loss-tolerant
-transport, player poses own an independent lane, late packets cannot rewind newer state, and the
-20 Hz realtime and interactive-item / 10 Hz secondary-physics / 2 Hz station schedule cannot
-silently regress into a single reliable full-world queue.
+transport, player poses and interactive items own independent lanes, late packets cannot rewind
+newer state, actively grabbed items receive lightweight physics-rate deltas, and the 20 Hz full
+realtime / 10 Hz secondary-physics / 2 Hz station schedule cannot silently regress into a single
+reliable full-world queue.
 
 The ML evaluation-contract suite checks deterministic benchmark scenario coverage, frozen
 environment-contract hashing, task-routed scenario plans, cross-contract promotion rejection,

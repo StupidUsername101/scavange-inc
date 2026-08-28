@@ -150,10 +150,10 @@ func _spawn_exit_radio() -> void:
 		push_warning("Acoustic maze could not spawn its exit radio")
 		return
 	exit_radio.name = "MazeExitBeaconRadio"
-	exit_radio.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
-	exit_radio.freeze = true
-	exit_radio.gravity_scale = 0.0
-	exit_radio.set_meta(&"grip_surface_disabled", true)
+	# The beacon is an ordinary physical radio after placement. Freezing it here silently overrode
+	# the definition's grippable contract and made a successful player grab look like a failed one.
+	exit_radio.freeze = false
+	exit_radio.gravity_scale = 1.0
 	exit_radio.set_meta(&"maze_exit_beacon", true)
 	exit_radio.call("set_control_volume_ratio", 1.0)
 	# Installed sources follow the same contract as portable radios: the world may place and

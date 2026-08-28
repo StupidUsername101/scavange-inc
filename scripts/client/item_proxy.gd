@@ -1,8 +1,11 @@
 extends Node3D
 class_name ItemProxy
 
-const INTERP_SPEED := 12.0
-const MAX_EXTRAPOLATION_TIME := 0.25
+const INTERP_SPEED := 20.0
+const GRABBED_INTERP_SPEED := 30.0
+const MAX_EXTRAPOLATION_TIME := 0.20
+const NETWORK_LEAD_SECONDS := 0.035
+const GRABBED_NETWORK_LEAD_SECONDS := 0.055
 
 #######################################################
 # Mirrors authoritative item state on clients and updates its local visual presentation.
@@ -14,6 +17,8 @@ var target_rotation := Quaternion.IDENTITY
 var target_linear_velocity := Vector3.ZERO
 var target_angular_velocity := Vector3.ZERO
 var time_since_last_state := 0.0
+var last_motion_sequence := -1
+var grabbed_by_player_id := -1
 
 var definition_path := ""
 var item_definition: ItemDefinition
@@ -50,15 +55,7 @@ func from_server_state(state: Dictionary) -> void:
 			else ("TRANSMITTING" if radio_powered else "STANDBY")
 		)
 
-	var rigid_state: Dictionary = ClientProxyMotion.decode_rigid_state(
-		state,
-		global_position,
-		global_rotation
-	)
-	target_position = rigid_state["position"]
-	target_rotation = rigid_state["rotation"]
-	target_linear_velocity = rigid_state["linear_velocity"]
-	target_angular_velocity = rigid_state["angular_velocity"]
+	_apply_motion_state(state)
 	WarehouseNameLabel.set_display_name(
 		warehouse_label,
 		str(state.get("warehouse_display_name", "")),
@@ -72,7 +69,45 @@ func from_server_state(state: Dictionary) -> void:
 			false
 		)
 
+
+
+func from_server_motion_state(state: Dictionary) -> void:
+	var state_item_id := SafeVariant.integral_int_or(
+		state.get("item_id", -1),
+		-1
+	)
+	if state_item_id != item_id:
+		return
+	_apply_motion_state(state)
+
+
+func _apply_motion_state(state: Dictionary) -> bool:
+	var motion_sequence := SafeVariant.integral_int_or(
+		state.get("item_motion_sequence", -1),
+		-1
+	)
+	if not ClientProxyMotion.is_newer_motion_sequence(
+		motion_sequence,
+		last_motion_sequence
+	):
+		return false
+	if motion_sequence >= 0:
+		last_motion_sequence = motion_sequence
+	grabbed_by_player_id = SafeVariant.integral_int_or(
+		state.get("grabber_player_id", grabbed_by_player_id),
+		grabbed_by_player_id
+	)
+	var rigid_state: Dictionary = ClientProxyMotion.decode_rigid_state(
+		state,
+		global_position,
+		global_rotation
+	)
+	target_position = rigid_state["position"]
+	target_rotation = rigid_state["rotation"]
+	target_linear_velocity = rigid_state["linear_velocity"]
+	target_angular_velocity = rigid_state["angular_velocity"]
 	time_since_last_state = 0.0
+	return true
 
 
 func _process(delta: float) -> void:
@@ -88,16 +123,21 @@ func _process(delta: float) -> void:
 			return
 
 	time_since_last_state += delta
+	var is_grabbed := grabbed_by_player_id >= 0
 	ClientProxyMotion.apply_smoothed_motion(
 		self,
 		delta,
-		time_since_last_state,
+		time_since_last_state + (
+			GRABBED_NETWORK_LEAD_SECONDS
+			if is_grabbed
+			else NETWORK_LEAD_SECONDS
+		),
 		target_position,
 		target_rotation,
 		target_linear_velocity,
 		target_angular_velocity,
 		MAX_EXTRAPOLATION_TIME,
-		INTERP_SPEED
+		GRABBED_INTERP_SPEED if is_grabbed else INTERP_SPEED
 	)
 	WarehouseNameLabel.update_position(warehouse_label, global_position, 0.52)
 

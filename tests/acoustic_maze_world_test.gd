@@ -51,7 +51,7 @@ func _test_active_world_wiring() -> void:
 		)
 		_expect(
 			bool(server_maze.get("spawn_exit_radio")),
-			"the active authoritative maze schedules its fixed exit radio"
+			"the active authoritative maze schedules its placed exit radio"
 		)
 
 	var bounds := LAYOUT.local_bounds()
@@ -111,10 +111,12 @@ func _test_live_exit_radio() -> void:
 		expected_local.y = 0.05
 		var expected_position := maze.global_transform * expected_local
 		_expect(
-			beacon.global_position.distance_to(expected_position) <= 0.01
-			and beacon.freeze
+			beacon.global_position.distance_to(expected_position) <= 0.08
+			and not beacon.freeze
+			and not bool(beacon.get_meta(&"grip_surface_disabled", false))
+			and (beacon.get_meta(&"grip_surface_tags", PackedStringArray()) as PackedStringArray).has("carryable")
 			and not bool(beacon.get("powered")),
-			"the beacon is fixed to the marked exit cell without auto-starting music"
+			"the beacon starts at the marked exit cell as an ordinary grabbable radio without auto-starting music"
 		)
 	server.call("_clear_runtime_session")
 	await process_frame
@@ -212,7 +214,7 @@ func _test_shared_runtime_geometry() -> void:
 		exit_radio != null
 		and exit_radio.maximum_hearing_distance
 		>= float(LAYOUT.entrance_route_distance_cells()) * LAYOUT.CELL_SIZE,
-		"the fixed exit radio has enough authored reach for the complete maze route"
+		"the exit radio has enough authored reach for the complete maze route"
 	)
 
 	server_maze.queue_free()

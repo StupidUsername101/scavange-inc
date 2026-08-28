@@ -37,6 +37,16 @@ func _init() -> void:
 		decoded.get("angular_velocity", Vector3.ONE) == Vector3.ZERO,
 		"non-finite proxy angular velocity fails closed"
 	)
+	_expect(
+		ClientProxyMotion.is_newer_motion_sequence(12, 11)
+		and not ClientProxyMotion.is_newer_motion_sequence(11, 12)
+		and not ClientProxyMotion.is_newer_motion_sequence(12, 12),
+		"a late full or high-rate item packet cannot rewind newer held-item motion"
+	)
+	_expect(
+		ClientProxyMotion.is_newer_motion_sequence(-1, 12),
+		"legacy unsequenced item motion remains compatible at the proxy boundary"
+	)
 	quit(0 if failure_count == 0 else 1)
 
 

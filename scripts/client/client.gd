@@ -843,7 +843,7 @@ func on_fieldlink_device_control_failed(
 			message.left(80)
 		)
 
-@rpc("authority", "unreliable", "call_local")
+@rpc("authority", "unreliable", "call_local", 8)
 func on_item_states_received(states: Dictionary) -> void:
 	if not _accept_network_snapshot(&"items", states):
 		return
@@ -870,6 +870,19 @@ func on_item_states_received(states: Dictionary) -> void:
 
 		item_proxies_by_item_id.erase(item_id)
 		proxy.queue_free()
+
+
+@rpc("authority", "unreliable", "call_local", 8)
+func on_grabbed_item_motion_states_received(states: Dictionary) -> void:
+	# This is a high-rate delta stream for already-known interactive items. Full 20 Hz item
+	# snapshots remain the sole lifecycle authority, so a lost delta can neither spawn nor delete.
+	for item_id: Variant in states:
+		var proxy := item_proxies_by_item_id.get(item_id) as ItemProxy
+		if proxy == null:
+			continue
+		var state := _public_state_dictionary(states, item_id)
+		if not state.is_empty():
+			proxy.from_server_motion_state(state)
 
 @rpc("authority", "unreliable", "call_local", 1)
 func on_player_states_received(states: Dictionary) -> void:

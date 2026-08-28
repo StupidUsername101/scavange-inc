@@ -33,7 +33,40 @@ func _run() -> void:
 	await _test_physical_pose_control()
 	await _test_physical_mouse_pitch_control()
 	await _test_portable_radio_full_turn()
+	await _test_narrow_assisted_item_acquisition()
 	_finish()
+
+
+func _test_narrow_assisted_item_acquisition() -> void:
+	var server := root.get_node_or_null("Server")
+	var grabber := GrabberComponent.new()
+	grabber.capability = GrabCapability.new()
+	grabber.capability.max_distance = 3.0
+	root.add_child(grabber)
+	var item := RigidBody3D.new()
+	item.gravity_scale = 0.0
+	item.position = Vector3(0.15, 0.0, -2.0)
+	var collision := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(0.18, 0.3, 0.3)
+	collision.shape = shape
+	item.add_child(collision)
+	root.add_child(item)
+	await physics_frame
+	server.call("try_begin_grab", grabber)
+	_expect(
+		server.call("get_grabbed_body", grabber) == item,
+		"a narrow visible item just beside the exact aim ray is acquired through bounded line-of-sight assistance"
+	)
+	server.call("end_grab", grabber)
+	item.set_meta("grip_surface_disabled", true)
+	server.call("try_begin_grab", grabber)
+	_expect(
+		server.call("get_grabbed_body", grabber) == null,
+		"the same assisted query still rejects an explicitly non-grippable item"
+	)
+	item.free()
+	grabber.free()
 
 
 func _test_authored_item_pose() -> void:

@@ -9,9 +9,9 @@ extends RefCounted
 ## receiving build was authored with a smaller outgoing lane count.
 
 const STEAM_MAX_CHANNELS_SETTING := &"steam/multiplayer_peer/max_channels"
-const HIGHEST_APPLICATION_CHANNEL := 7
+const HIGHEST_APPLICATION_CHANNEL := 8
 const GODOTSTEAM_RESERVED_LANE_COUNT := 1
-const CONFIGURED_STEAM_LANE_COUNT := 9
+const CONFIGURED_STEAM_LANE_COUNT := 10
 const MINIMUM_STEAM_LANE_COUNT := (
 	HIGHEST_APPLICATION_CHANNEL + GODOTSTEAM_RESERVED_LANE_COUNT + 1
 )
@@ -20,6 +20,7 @@ const SPATIAL_ONE_SHOT_CHANNEL := 5
 const CONTINUOUS_AUDIO_CHANNEL := 6
 const LOCAL_AUDIO_CONTEXT_CHANNEL := 7
 const PLAYER_SNAPSHOT_CHANNEL := 1
+const ITEM_SNAPSHOT_CHANNEL := 8
 
 
 static func has_capacity_for(channel: int, configured_lane_count: int) -> bool:

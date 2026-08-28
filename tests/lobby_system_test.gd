@@ -74,8 +74,8 @@ func _test_four_player_limit() -> void:
 
 func _test_lobby_compatibility() -> void:
 	_expect(
-		LobbyRules.PROTOCOL_VERSION == "4",
-		"the single-lane compact continuous-audio RPC revision has its own lobby protocol"
+		LobbyRules.PROTOCOL_VERSION == "5",
+		"the dedicated interactive-item stream revision has its own lobby protocol"
 	)
 	_expect(
 		LobbyRules.is_compatible_lobby(
@@ -474,8 +474,12 @@ func _test_transfer_channel_capacity() -> void:
 		and MULTIPLAYER_CHANNELS.has_capacity_for(
 			MULTIPLAYER_CHANNELS.CONTINUOUS_AUDIO_CHANNEL,
 			configured_lane_count
+		)
+		and MULTIPLAYER_CHANNELS.has_capacity_for(
+			MULTIPLAYER_CHANNELS.ITEM_SNAPSHOT_CHANNEL,
+			configured_lane_count
 		),
-		"one-shot and continuous world audio own valid Steam lanes"
+		"one-shot audio, continuous audio, and interactive items own valid Steam lanes"
 	)
 	_expect(
 		client_source.contains(
@@ -529,8 +533,21 @@ func _test_replaceable_snapshot_transport() -> void:
 		),
 		"player poses use their own loss-tolerant Steam lane"
 	)
+	_expect(
+		client_source.contains(
+			'@rpc("authority", "unreliable", "call_local", %d)\nfunc on_item_states_received'
+			% MULTIPLAYER_CHANNELS.ITEM_SNAPSHOT_CHANNEL
+		)
+		and client_source.contains(
+			'@rpc("authority", "unreliable", "call_local", %d)\nfunc on_grabbed_item_motion_states_received'
+			% MULTIPLAYER_CHANNELS.ITEM_SNAPSHOT_CHANNEL
+		)
+		and server_source.contains('"on_grabbed_item_motion_states_received"'),
+		"full item lifecycle and high-rate held motion share one dedicated replaceable lane"
+	)
 	for handler_name: String in [
 		"on_item_states_received",
+		"on_grabbed_item_motion_states_received",
 		"on_player_states_received",
 		"on_drone_states_received",
 		"on_projectile_states_received",

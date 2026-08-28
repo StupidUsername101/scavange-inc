@@ -22,6 +22,9 @@ const PRIORITY_INTERACTION_CHECK_DISTANCE_SQUARED := 36.0
 const FIELDLINK_CONTROL_RANGE_METERS := 36.0
 const FIELDLINK_CONTROL_RANGE_TOLERANCE_METERS := 1.5
 const FIELDLINK_COMMAND_COOLDOWN_MILLISECONDS := 40
+const GRAB_AIM_ASSIST_HALF_EXTENT := 0.18
+const GRAB_AIM_ASSIST_MAX_RESULTS := 16
+const GRAB_AIM_ASSIST_LATERAL_SCORE := 2.5
 # Independent rollback switches; each can be evaluated without removing the others.
 const ENABLE_ACOUSTIC_STATIC_BAKE_CACHE := true
 const ENABLE_ACOUSTIC_CUMULATIVE_TRANSMISSION := true
@@ -135,7 +138,9 @@ var session_teardown_active := false
 var acoustic_service: ServerAcousticService
 var next_spatial_sound_sequence := 0
 var network_snapshot_sequence := 0
+var item_motion_sequence := 0
 var fieldlink_next_command_msec_by_player_id: Dictionary[int, int] = {}
+var grab_aim_assist_shape := BoxShape3D.new()
 
 
 func _ready() -> void:
@@ -264,6 +269,8 @@ func _physics_process(delta: float) -> void:
 			rope.server_physics_tick(delta)
 
 	_apply_grab_forces(delta)
+	item_motion_sequence += 1
+	_publish_grabbed_item_motion_states(item_motion_sequence)
 
 	sync_timer -= delta
 	if sync_timer > 0.0:
@@ -315,12 +322,66 @@ func _publish_player_states(snapshot_sequence: int) -> void:
 
 func _publish_item_states(snapshot_sequence: int) -> void:
 	var states: Dictionary = {}
+	var grabber_player_ids := _grabbed_item_player_ids()
 	for item_id: int in server_items_by_item_id:
 		var item := server_items_by_item_id[item_id]
 		if not is_instance_valid(item):
 			continue
-		states[item_id] = _sequence_state(item.to_state_dict(), snapshot_sequence)
+		var state := _sequence_state(item.to_state_dict(), snapshot_sequence)
+		state["item_motion_sequence"] = item_motion_sequence
+		state["grabber_player_id"] = int(grabber_player_ids.get(item_id, -1))
+		states[item_id] = state
 	Client.rpc("on_item_states_received", states)
+
+
+func _publish_grabbed_item_motion_states(motion_sequence: int) -> void:
+	if grab_states_by_grabber_id.is_empty():
+		return
+	var states: Dictionary = {}
+	for grab_state: GrabState in grab_states_by_grabber_id.values():
+		if (
+			grab_state == null
+			or not is_instance_valid(grab_state.grabber)
+			or not is_instance_valid(grab_state.body)
+			or not grab_state.body is ServerItem
+		):
+			continue
+		var item := grab_state.body as ServerItem
+		var state := item.to_motion_state_dict()
+		state["item_motion_sequence"] = motion_sequence
+		state["grabber_player_id"] = _grabber_player_id(grab_state.grabber)
+		states[item.item_id] = state
+	if not states.is_empty():
+		# The listen-server presentation follows its authoritative body directly; only remote peers
+		# need serialized interpolation deltas.
+		for peer_id: int in multiplayer.get_peers():
+			Client.rpc_id(
+				peer_id,
+				"on_grabbed_item_motion_states_received",
+				states
+			)
+
+
+static func _grabber_player_id(grabber: GrabberComponent) -> int:
+	if grabber == null or not is_instance_valid(grabber):
+		return -1
+	var carrier := grabber.get_carrier_body() as ServerPlayer
+	return carrier.player_id if carrier != null else -1
+
+
+func _grabbed_item_player_ids() -> Dictionary[int, int]:
+	var result: Dictionary[int, int] = {}
+	for grab_state: GrabState in grab_states_by_grabber_id.values():
+		if (
+			grab_state == null
+			or not is_instance_valid(grab_state.grabber)
+			or not is_instance_valid(grab_state.body)
+			or not grab_state.body is ServerItem
+		):
+			continue
+		var item := grab_state.body as ServerItem
+		result[item.item_id] = _grabber_player_id(grab_state.grabber)
+	return result
 
 
 func _publish_drone_states(snapshot_sequence: int) -> void:
@@ -2470,35 +2531,131 @@ func try_begin_grab(grabber: GrabberComponent) -> void:
 
 	query.collide_with_areas = false
 
-	var hit := grabber.get_world_3d().direct_space_state.intersect_ray(query)
-	if hit.is_empty():
-		return
-
+	var space_state := grabber.get_world_3d().direct_space_state
+	var hit := space_state.intersect_ray(query)
 	var body := hit.get("collider") as PhysicsBody3D
-	if body == null or body is CharacterBody3D:
-		return
-	if body.is_in_group("rope_knots"):
-		return
-	if body.has_meta("inspection_station_id"):
-		return
-	if body is ServerDrone and (body as ServerDrone).is_edit_preview:
-		return
-	if body.has_meta("dev_warehouse_owner"):
-		var warehouse := body.get_meta("dev_warehouse_owner") as Node
-		var warehouse_part := body as RigidBody3D
-		if (
-			warehouse == null
-			or warehouse_part == null
-			or not warehouse.has_method("release_socketed_part")
-			or not bool(warehouse.call(
-				"release_socketed_part",
-				warehouse_part
-			))
-		):
-			return
-
 	var hit_position: Vector3 = hit.get("position", origin)
+	if not _is_grab_candidate(body):
+		var assisted := _find_assisted_grab_candidate(
+			space_state,
+			origin,
+			direction,
+			capability.max_distance,
+			query.exclude
+		)
+		body = assisted.get("body") as PhysicsBody3D
+		hit_position = assisted.get("position", origin)
+	if not _prepare_grab_candidate(body):
+		return
 	_begin_grab_body(grabber, body, hit_position)
+
+
+func _is_grab_candidate(body: PhysicsBody3D) -> bool:
+	if (
+		body == null
+		or body is CharacterBody3D
+		or body is StaticBody3D
+		or not body is RigidBody3D
+		or body.is_in_group("rope_knots")
+		or body.has_meta("inspection_station_id")
+		or bool(body.get_meta("grip_surface_disabled", false))
+	):
+		return false
+	if body is ServerDrone and (body as ServerDrone).is_edit_preview:
+		return false
+	var rigid_body := body as RigidBody3D
+	return not rigid_body.freeze or body.has_meta("dev_warehouse_owner")
+
+
+func _prepare_grab_candidate(body: PhysicsBody3D) -> bool:
+	if not _is_grab_candidate(body):
+		return false
+	if not body.has_meta("dev_warehouse_owner"):
+		return true
+	var warehouse := body.get_meta("dev_warehouse_owner") as Node
+	var warehouse_part := body as RigidBody3D
+	return (
+		warehouse != null
+		and warehouse_part != null
+		and warehouse.has_method("release_socketed_part")
+		and bool(warehouse.call("release_socketed_part", warehouse_part))
+	)
+
+
+func _find_assisted_grab_candidate(
+	space_state: PhysicsDirectSpaceState3D,
+	origin: Vector3,
+	direction: Vector3,
+	maximum_distance: float,
+	excluded_rids: Array[RID]
+) -> Dictionary:
+	if space_state == null or maximum_distance <= 0.0:
+		return {}
+	direction = direction.normalized()
+	var up := Vector3.UP
+	if absf(direction.dot(up)) > 0.96:
+		up = Vector3.FORWARD
+	grab_aim_assist_shape.size = Vector3(
+		GRAB_AIM_ASSIST_HALF_EXTENT * 2.0,
+		GRAB_AIM_ASSIST_HALF_EXTENT * 2.0,
+		maximum_distance
+	)
+	var shape_query := PhysicsShapeQueryParameters3D.new()
+	shape_query.shape = grab_aim_assist_shape
+	shape_query.transform = Transform3D(
+		Basis.looking_at(direction, up),
+		origin + direction * maximum_distance * 0.5
+	)
+	shape_query.exclude = excluded_rids
+	shape_query.collide_with_areas = false
+	shape_query.collide_with_bodies = true
+	var best_score := INF
+	var best: Dictionary = {}
+	for result: Dictionary in space_state.intersect_shape(
+		shape_query,
+		GRAB_AIM_ASSIST_MAX_RESULTS
+	):
+		var candidate := result.get("collider") as PhysicsBody3D
+		if not _is_grab_candidate(candidate):
+			continue
+		var candidate_point := _grab_candidate_world_point(candidate)
+		var offset := candidate_point - origin
+		var forward_distance := offset.dot(direction)
+		if forward_distance <= 0.0 or forward_distance > maximum_distance:
+			continue
+		var lateral_distance := (
+			offset - direction * forward_distance
+		).length()
+		var score := (
+			forward_distance
+			+ lateral_distance * GRAB_AIM_ASSIST_LATERAL_SCORE
+		)
+		if score >= best_score:
+			continue
+		var sight_query := PhysicsRayQueryParameters3D.create(
+			origin,
+			candidate_point
+		)
+		sight_query.exclude = excluded_rids
+		sight_query.collide_with_areas = false
+		var sight_hit := space_state.intersect_ray(sight_query)
+		if sight_hit.get("collider") != candidate:
+			continue
+		best_score = score
+		best = {
+			"body": candidate,
+			"position": sight_hit.get("position", candidate_point),
+		}
+	return best
+
+
+static func _grab_candidate_world_point(body: PhysicsBody3D) -> Vector3:
+	if body == null:
+		return Vector3.ZERO
+	var item_collision := body.get_node_or_null("ItemCollision") as CollisionShape3D
+	if item_collision != null and not item_collision.disabled:
+		return item_collision.global_position
+	return body.global_position
 
 
 func _begin_grab_body(
@@ -3458,6 +3615,7 @@ func _clear_runtime_session() -> void:
 	next_body_part_order_id = 0
 	next_spatial_sound_sequence = 0
 	network_snapshot_sequence = 0
+	item_motion_sequence = 0
 	GameState.reset_session()
 
 
