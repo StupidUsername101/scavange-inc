@@ -31,6 +31,7 @@ func _run() -> void:
 	_test_lobby_ui_contract()
 	_test_lobby_browser_behavior()
 	_test_transport_wiring()
+	_test_disconnect_rpc_safety()
 	_test_transfer_channel_capacity()
 	_test_replaceable_snapshot_transport()
 
@@ -450,6 +451,46 @@ func _test_transport_wiring() -> void:
 			"Steam.addRequestLobbyList"
 		),
 		"browser submits an entirely unfiltered Steam lobby request"
+	)
+
+
+func _test_disconnect_rpc_safety() -> void:
+	var server := root.get_node_or_null("Server")
+	_expect(server != null, "authoritative server autoload is available")
+	if server == null:
+		return
+	var local_peer_id := server.get_multiplayer().get_unique_id()
+	_expect(
+		bool(server.call("_is_rpc_peer_reachable", local_peer_id)),
+		"listen-server host remains a valid call-local RPC recipient"
+	)
+	_expect(
+		not bool(server.call("_is_rpc_peer_reachable", 1667114797)),
+		"a departed or unknown Steam peer cannot receive a targeted RPC"
+	)
+	var server_source := FileAccess.get_file_as_string(
+		"res://scripts/server/server.gd"
+	)
+	var disconnect_start := server_source.find(
+		"func _on_peer_disconnected(peer_id: int) -> void:"
+	)
+	var next_function := server_source.find(
+		"\nfunc _on_connected_to_server() -> void:",
+		disconnect_start
+	)
+	var disconnect_source := server_source.substr(
+		disconnect_start,
+		next_function - disconnect_start
+	)
+	var unregister_position := disconnect_source.find(
+		"GameState.unregister_peer(peer_id)"
+	)
+	var spill_position := disconnect_source.find("spill_all_item_entries()")
+	_expect(
+		unregister_position >= 0
+		and spill_position >= 0
+		and unregister_position < spill_position,
+		"disconnect routing is invalidated before inventory and PBD cleanup can emit RPCs"
 	)
 
 

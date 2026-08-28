@@ -492,7 +492,10 @@ func _publish_radio_states() -> void:
 		if not is_instance_valid(listener):
 			continue
 		var player_state := GameState.get_player_state(player_id)
-		if player_state == null or player_state.peer_id <= 0:
+		if (
+			player_state == null
+			or not _is_rpc_peer_reachable(player_state.peer_id)
+		):
 			continue
 		var radio_states: Dictionary = {}
 		var listener_position := listener.get_audio_listener_position()
@@ -546,7 +549,10 @@ func _publish_local_audio_prediction_contexts() -> void:
 		if not is_instance_valid(listener):
 			continue
 		var player_state := GameState.get_player_state(player_id)
-		if player_state == null or player_state.peer_id <= 0:
+		if (
+			player_state == null
+			or not _is_rpc_peer_reachable(player_state.peer_id)
+		):
 			continue
 		var context := acoustic_service.build_local_prediction_context(
 			player_id,
@@ -638,6 +644,16 @@ func get_sending_player() -> ServerPlayer:
 	) as ServerPlayer
 
 
+func _is_rpc_peer_reachable(peer_id: int) -> bool:
+	if peer_id <= 0 or multiplayer.multiplayer_peer == null:
+		return false
+	# MultiplayerAPI.get_peers() intentionally excludes this process. The listen-server host is
+	# nevertheless a valid call_local RPC recipient.
+	if peer_id == multiplayer.get_unique_id():
+		return true
+	return multiplayer.get_peers().has(peer_id)
+
+
 func _reject_local_audio_prediction(
 	player: ServerPlayer,
 	local_prediction_key: int
@@ -646,7 +662,10 @@ func _reject_local_audio_prediction(
 	if player == null or prediction_key == 0:
 		return
 	var player_state := GameState.get_player_state(player.player_id)
-	if player_state == null or player_state.peer_id <= 0:
+	if (
+		player_state == null
+		or not _is_rpc_peer_reachable(player_state.peer_id)
+	):
 		return
 	Client.rpc_id(
 		player_state.peer_id,
@@ -827,7 +846,10 @@ func _send_fieldlink_control_snapshot(
 		_send_fieldlink_control_error(player, contact_id, "INVALID DEVICE RESPONSE")
 		return
 	var player_state := GameState.get_player_state(player.player_id)
-	if player_state != null:
+	if (
+		player_state != null
+		and _is_rpc_peer_reachable(player_state.peer_id)
+	):
 		Client.rpc_id(
 			player_state.peer_id,
 			"on_fieldlink_device_control_received",
@@ -843,7 +865,10 @@ func _send_fieldlink_control_error(
 	if player == null:
 		return
 	var player_state := GameState.get_player_state(player.player_id)
-	if player_state != null:
+	if (
+		player_state != null
+		and _is_rpc_peer_reachable(player_state.peer_id)
+	):
 		Client.rpc_id(
 			player_state.peer_id,
 			"on_fieldlink_device_control_failed",
@@ -1044,7 +1069,10 @@ func emit_spatial_sound(
 		if not bool(result.get("audible", false)):
 			continue
 		var player_state := GameState.get_player_state(player_id)
-		if player_state == null or player_state.peer_id <= 0:
+		if (
+			player_state == null
+			or not _is_rpc_peer_reachable(player_state.peer_id)
+		):
 			continue
 		result.erase("audible")
 		result["version"] = AcousticEventPacket.VERSION
@@ -3393,6 +3421,10 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	var player_id := GameState.get_player_id(peer_id)
 	if player_id == -1:
 		return
+	# The transport has already removed this peer before emitting peer_disconnected. Invalidate its
+	# application route before cleanup can close the PBD, spill equipment, or emit other effects.
+	# Those effects may still be sent to the remaining players through the normal broadcasters.
+	GameState.unregister_peer(peer_id)
 	if acoustic_service != null:
 		acoustic_service.forget_listener(player_id)
 
@@ -3413,7 +3445,6 @@ func _on_peer_disconnected(peer_id: int) -> void:
 		server_players_by_player_id[player_id].queue_free()
 		server_players_by_player_id.erase(player_id)
 
-	GameState.unregister_peer(peer_id)
 	_sync_lobby_availability()
 
 	print("PEER DISCONNECTED: ", peer_id)
