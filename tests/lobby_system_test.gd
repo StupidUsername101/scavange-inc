@@ -75,8 +75,8 @@ func _test_four_player_limit() -> void:
 
 func _test_lobby_compatibility() -> void:
 	_expect(
-		LobbyRules.PROTOCOL_VERSION == "5",
-		"the dedicated interactive-item stream revision has its own lobby protocol"
+		LobbyRules.PROTOCOL_VERSION == "6",
+		"the Godot 4.7/GodotSteam 4.22 transport revision has its own lobby protocol"
 	)
 	_expect(
 		LobbyRules.is_compatible_lobby(
@@ -350,6 +350,16 @@ func _test_lobby_browser_behavior() -> void:
 func _test_transport_wiring() -> void:
 	var server_source := FileAccess.get_file_as_string(
 		"res://scripts/server/server.gd"
+	)
+	_expect(
+		Steam.get_godotsteam_version() == "4.22",
+		"the bundled GodotSteam bridge is the Godot 4.7-compatible 4.22 build"
+	)
+	var engine_version := Engine.get_version_info()
+	_expect(
+		int(engine_version.get("major", 0)) == 4
+		and int(engine_version.get("minor", 0)) == 7,
+		"the multiplayer contract is exercised with the authored Godot 4.7 runtime"
 	)
 	var browser_source := FileAccess.get_file_as_string(
 		"res://scripts/ui/lobby_browser.gd"

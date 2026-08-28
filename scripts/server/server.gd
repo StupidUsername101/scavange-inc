@@ -220,6 +220,14 @@ func _ready() -> void:
 			)
 
 	print("Steam init response: ", init_response)
+	print(
+		"Network runtime: Godot ",
+		Engine.get_version_info().get("string", "unknown"),
+		" | GodotSteam ",
+		Steam.get_godotsteam_version(),
+		" | game protocol ",
+		LobbyRules.PROTOCOL_VERSION
+	)
 	print("Steam running: ", steam_client_running)
 	print("Steam logged on: ", steam_user_logged_on)
 	print("Steam ID: ", steam_user_id if steam_available else 0)

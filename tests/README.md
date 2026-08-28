@@ -1,6 +1,6 @@
 # System tests
 
-Run the deterministic drone regression suite with Godot 4.6:
+Run the deterministic regression suites with Godot 4.7.2:
 
 ```sh
 godot --headless --path . --script res://tests/drone_system_test.gd
