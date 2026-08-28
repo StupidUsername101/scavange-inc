@@ -18,6 +18,7 @@ const MIN_TOTAL_GRAB_FORCE := 0.001
 const LOBBY_CREATE_TIMEOUT_SECONDS := 10.0
 const LOBBY_JOIN_TIMEOUT_SECONDS := 10.0
 const HOST_CONNECTION_TIMEOUT_SECONDS := 15.0
+const CLIENT_READY_TIMEOUT_SECONDS := 15.0
 const PRIORITY_INTERACTION_CHECK_DISTANCE_SQUARED := 36.0
 const FIELDLINK_CONTROL_RANGE_METERS := 36.0
 const FIELDLINK_CONTROL_RANGE_TOLERANCE_METERS := 1.5
@@ -140,7 +141,10 @@ var next_spatial_sound_sequence := 0
 var network_snapshot_sequence := 0
 var item_motion_sequence := 0
 var fieldlink_next_command_msec_by_player_id: Dictionary[int, int] = {}
+var pending_admission_peer_ids: Dictionary[int, bool] = {}
 var grab_aim_assist_shape := BoxShape3D.new()
+var last_steam_connection_end_reason := 0
+var last_steam_connection_end_debug := ""
 
 
 func _ready() -> void:
@@ -174,6 +178,9 @@ func _ready() -> void:
 	)
 	Steam.join_game_requested.connect(
 		_on_join_game_requested
+	)
+	Steam.network_connection_status_changed.connect(
+		_on_steam_connection_status_changed
 	)
 
 	# Give Steamworks an app identity without depending on the caller's working directory. The
@@ -592,6 +599,7 @@ func register_peer(peer_id: int) -> bool:
 		return false
 
 	if GameState.get_player_id(peer_id) != -1:
+		pending_admission_peer_ids.erase(peer_id)
 		return true
 
 	if not LobbyRules.can_register_player(GameState.get_player_count()):
@@ -607,6 +615,7 @@ func register_peer(peer_id: int) -> bool:
 
 	if player_id == -1:
 		return false
+	pending_admission_peer_ids.erase(peer_id)
 
 	if not server_players_by_player_id.has(player_id):
 		spawn_server_player(
@@ -3235,6 +3244,8 @@ func _on_lobby_created(connect_result: int, created_lobby_id: int) -> void:
 func _start_steam_host_transport() -> void:
 	steam_peer = SteamMultiplayerPeer.new()
 	steam_peer.server_relay = true
+	steam_peer.debug_level = 2
+	_clear_steam_connection_end_detail()
 
 	var err := steam_peer.create_host(0)
 	if err != OK:
@@ -3271,6 +3282,8 @@ func join_steam_host(host_steam_id: int) -> void:
 
 	steam_peer = SteamMultiplayerPeer.new()
 	steam_peer.server_relay = true
+	steam_peer.debug_level = 2
+	_clear_steam_connection_end_detail()
 
 	var err := steam_peer.create_client(host_steam_id)
 	if err != OK:
@@ -3368,7 +3381,62 @@ func _on_peer_connected(peer_id: int) -> void:
 		return
 
 	print("PEER CONNECTED: ", peer_id)
+	# Transport connection is not the same as application readiness. Do not construct gameplay state
+	# or begin the 20 Hz replication streams until the client proves that it can send an RPC using
+	# this exact protocol schema.
+	pending_admission_peer_ids[peer_id] = true
+	_schedule_client_ready_timeout(peer_id)
+
+
+@rpc("any_peer", "reliable")
+func confirm_client_session_ready(
+	protocol_version: String,
+	claimed_steam_id: int
+) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	if peer_id <= 1 or not multiplayer.get_peers().has(peer_id):
+		return
+	if protocol_version != LobbyRules.PROTOCOL_VERSION:
+		_reject_connected_peer(peer_id, "the game protocol does not match")
+		return
+	var transport_steam_id := 0
+	if steam_peer != null:
+		transport_steam_id = steam_peer.get_steam_id_for_peer_id(peer_id)
+	if claimed_steam_id <= 0 or claimed_steam_id != transport_steam_id:
+		_reject_connected_peer(peer_id, "the Steam identity does not match the transport")
+		return
+	if GameState.get_player_id(peer_id) != -1:
+		pending_admission_peer_ids.erase(peer_id)
+		return
+	if not pending_admission_peer_ids.has(peer_id):
+		return
+	print(
+		"CLIENT READY: peer=",
+		peer_id,
+		" steam_id=",
+		transport_steam_id,
+		" protocol=",
+		protocol_version
+	)
 	_admit_connected_peer(peer_id)
+
+
+func _schedule_client_ready_timeout(peer_id: int) -> void:
+	get_tree().create_timer(CLIENT_READY_TIMEOUT_SECONDS).timeout.connect(
+		func() -> void:
+			if (
+				pending_admission_peer_ids.has(peer_id)
+				and multiplayer.is_server()
+				and multiplayer.get_peers().has(peer_id)
+				and GameState.get_player_id(peer_id) == -1
+			):
+				_reject_connected_peer(
+					peer_id,
+					"the client did not finish its application handshake"
+				)
+	)
 
 
 func _admit_connected_peer(peer_id: int) -> void:
@@ -3415,12 +3483,14 @@ func _is_peer_in_current_lobby(peer_id: int) -> bool:
 
 
 func _reject_connected_peer(peer_id: int, reason: String) -> void:
+	pending_admission_peer_ids.erase(peer_id)
 	push_warning("Rejecting peer %d: %s." % [peer_id, reason])
 	multiplayer.multiplayer_peer.disconnect_peer(peer_id, true)
 	_sync_lobby_availability()
 
 
 func _on_peer_disconnected(peer_id: int) -> void:
+	pending_admission_peer_ids.erase(peer_id)
 	if session_teardown_active:
 		return
 	if not multiplayer.is_server():
@@ -3459,15 +3529,36 @@ func _on_peer_disconnected(peer_id: int) -> void:
 
 
 func _on_connected_to_server() -> void:
+	print(
+		"CONNECTED TO SERVER: state=",
+		lobby_state,
+		" peer_id=",
+		multiplayer.get_unique_id(),
+		" transport_status=",
+		steam_peer.get_connection_status() if steam_peer != null else -1
+	)
 	if lobby_state != LobbyState.CONNECTING:
 		return
 	lobby_state = LobbyState.CONNECTED
 	_refresh_lobby_presence_from_membership()
 	_emit_lobby_status("Connected to lobby host.", false)
 	SceneController.enter_game()
+	rpc_id(
+		1,
+		"confirm_client_session_ready",
+		LobbyRules.PROTOCOL_VERSION,
+		Steam.getSteamID()
+	)
 
 
 func _on_connection_failed() -> void:
+	print(
+		"CONNECTION FAILED: state=",
+		lobby_state,
+		" transport_status=",
+		steam_peer.get_connection_status() if steam_peer != null else -1,
+		_steam_connection_end_suffix()
+	)
 	if (
 		lobby_state == LobbyState.CONNECTING
 		or lobby_state == LobbyState.JOINING
@@ -3476,6 +3567,11 @@ func _on_connection_failed() -> void:
 
 
 func _on_server_disconnected() -> void:
+	print(
+		"SERVER DISCONNECTED: state=",
+		lobby_state,
+		_steam_connection_end_suffix()
+	)
 	if lobby_state != LobbyState.CONNECTED:
 		return
 	if lobby_id > 0:
@@ -3483,8 +3579,56 @@ func _on_server_disconnected() -> void:
 	_reset_lobby_identity()
 	_set_offline_multiplayer_peer()
 	Client.reset_session()
-	_emit_lobby_status("The lobby host disconnected.", true)
+	_emit_lobby_status(
+		"The lobby host disconnected.%s" % _steam_connection_end_suffix(),
+		true
+	)
 	SceneController.open_main_menu()
+
+
+func _on_steam_connection_status_changed(
+	connect_handle: int,
+	connection: Dictionary,
+	old_state: int
+) -> void:
+	var new_state := int(connection.get("connection_state", -1))
+	var end_reason := int(connection.get("end_reason", 0))
+	var end_debug := str(connection.get("end_debug", "")).strip_edges()
+	if end_debug.is_empty():
+		end_debug = str(connection.get("debug_description", "")).strip_edges()
+	var is_terminal_state := new_state == 0 or new_state == 4 or new_state == 5
+	if is_terminal_state and (end_reason != 0 or not end_debug.is_empty()):
+		last_steam_connection_end_reason = end_reason
+		last_steam_connection_end_debug = end_debug
+	print(
+		"STEAM CONNECTION: handle=",
+		connect_handle,
+		" old_state=",
+		old_state,
+		" new_state=",
+		new_state,
+		" end_reason=",
+		end_reason,
+		" end_debug=",
+		end_debug
+	)
+
+
+func _clear_steam_connection_end_detail() -> void:
+	last_steam_connection_end_reason = 0
+	last_steam_connection_end_debug = ""
+
+
+func _steam_connection_end_suffix() -> String:
+	if (
+		last_steam_connection_end_reason == 0
+		and last_steam_connection_end_debug.is_empty()
+	):
+		return ""
+	var detail := " Steam reason %d" % last_steam_connection_end_reason
+	if not last_steam_connection_end_debug.is_empty():
+		detail += ": %s" % last_steam_connection_end_debug
+	return detail
 
 
 func _on_lobby_chat_update(
@@ -3643,6 +3787,7 @@ func _clear_runtime_session() -> void:
 	grab_states_by_grabber_id.clear()
 	spatial_interest_by_drone_id.clear()
 	fieldlink_next_command_msec_by_player_id.clear()
+	pending_admission_peer_ids.clear()
 	spatial_hash = ServerSpatialHash3D.new(SPATIAL_CELL_SIZE)
 	sync_timer = 0.0
 	next_drone_id = 0

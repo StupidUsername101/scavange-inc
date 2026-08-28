@@ -75,8 +75,8 @@ func _test_four_player_limit() -> void:
 
 func _test_lobby_compatibility() -> void:
 	_expect(
-		LobbyRules.PROTOCOL_VERSION == "6",
-		"the Godot 4.7/GodotSteam 4.22 transport revision has its own lobby protocol"
+		LobbyRules.PROTOCOL_VERSION == "7",
+		"the client-ready multiplayer handshake has its own lobby protocol"
 	)
 	_expect(
 		LobbyRules.is_compatible_lobby(
@@ -438,6 +438,17 @@ func _test_transport_wiring() -> void:
 		server_source.contains("get_steam_id_for_peer_id(")
 		and server_source.contains("getLobbyMemberByIndex("),
 		"host admits only Steam accounts in its current lobby"
+	)
+	_expect(
+		server_source.contains("func confirm_client_session_ready(")
+		and server_source.contains("pending_admission_peer_ids[peer_id] = true")
+		and server_source.contains('rpc_id(\n\t\t1,\n\t\t"confirm_client_session_ready"'),
+		"gameplay registration waits for an application-ready RPC from the client"
+	)
+	_expect(
+		server_source.contains("steam_peer.debug_level = 2")
+		and server_source.contains("func _on_steam_connection_status_changed("),
+		"Steam transport failures retain their native end reason"
 	)
 	_expect(
 		server_source.find("MULTIPLAYER_CHANNELS.ensure_runtime_capacity()")
