@@ -57,6 +57,10 @@ const TRIP_SUPPORT_FORWARD_LEAD_SECONDS := 0.035
 const TRIP_SUPPORT_MAX_FORWARD_LEAD := 0.22
 const TRIP_SUPPORT_PROBE_UP := 0.30
 const TRIP_SUPPORT_PROBE_DOWN := 1.35
+const TRIP_RECOVERY_GROUND_PROBE_UP := 0.2
+const TRIP_RECOVERY_GROUND_PROBE_DOWN := 3.2
+const TRIP_RECOVERY_CLEARANCE := 0.035
+const TRIP_RECOVERY_SEARCH_RADIUS := 0.38
 const WRIST_SOUND_HOVER_COOLDOWN_MSEC := 80
 const WRIST_SOUND_CLICK_COOLDOWN_MSEC := 90
 const WRIST_SOUND_FEEDBACK_COOLDOWN_MSEC := 220
@@ -77,6 +81,9 @@ const FIELDLINK_DISPLAY_STATE := preload(
 )
 const LOCAL_AUDIO_PREDICTION := preload(
 	"res://scripts/audio/local_audio_prediction.gd"
+)
+const PLAYER_RAGDOLL_ANCHOR := preload(
+	"res://scripts/characters/player_ragdoll_anchor_3d.gd"
 )
 
 #######################################################
@@ -104,6 +111,7 @@ var trip_sequence := 0
 var ragdoll_active := false
 var trip_recovery_remaining := 0.0
 var trip_direction := Vector3.FORWARD
+var authoritative_ragdoll_anchor
 var pending_jump_audio_prediction_key := 0
 var on_floor := false
 var grab_movement_multiplier := 1.0
@@ -166,6 +174,10 @@ func _ready() -> void:
 
 	grabber.make_capability_unique()
 	grabber.load_changed.connect(_on_grab_load_changed)
+	authoritative_ragdoll_anchor = PLAYER_RAGDOLL_ANCHOR.new()
+	authoritative_ragdoll_anchor.name = "AuthoritativeRagdollAnchor"
+	add_child(authoritative_ragdoll_anchor)
+	authoritative_ragdoll_anchor.add_collision_exception_with(self)
 
 	if body_loadout != null:
 		body_loadout = body_loadout.duplicate(true) as CharacterLoadout
@@ -936,12 +948,15 @@ func _get_public_inventory_state() -> Dictionary:
 
 func server_physics_tick(delta: float) -> void:
 	rotation.y = look_yaw
+	var was_ragdoll_active := ragdoll_active
 	_update_trip_state(delta)
 	if ragdoll_active:
-		move_input = Vector2.ZERO
-		wants_run = false
-		wants_jump = false
-		primary_action_held = false
+		_update_authoritative_ragdoll(delta)
+		return
+	if was_ragdoll_active:
+		# Recovery placed and re-enabled the character capsule this tick. Resume ordinary movement on
+		# the following physics frame instead of moving a collider while its deferred state is changing.
+		return
 	
 	var was_on_floor := on_floor
 	on_floor = false
@@ -1069,7 +1084,7 @@ func _update_trip_state(delta: float) -> void:
 	)
 	if trip_recovery_remaining > 0.0:
 		return
-	ragdoll_active = false
+	_recover_from_trip()
 
 
 func _begin_trip() -> void:
@@ -1092,6 +1107,140 @@ func _begin_trip() -> void:
 	).normalized()
 	wrist_interface_open = false
 	set_primary_action_held(false)
+	move_input = Vector2.ZERO
+	wants_run = false
+	wants_jump = false
+	collision_shape_3d.set_deferred("disabled", true)
+	if authoritative_ragdoll_anchor != null:
+		authoritative_ragdoll_anchor.activate(
+			global_transform,
+			velocity,
+			trip_direction,
+			trip_sequence
+		)
+
+
+func _update_authoritative_ragdoll(delta: float) -> void:
+	move_input = Vector2.ZERO
+	wants_run = false
+	wants_jump = false
+	primary_action_held = false
+	on_floor = false
+	_update_vitals(delta, false, false)
+	_update_vision_distortion(delta)
+	_update_weapon_state(delta)
+	if (
+		authoritative_ragdoll_anchor == null
+		or not authoritative_ragdoll_anchor.is_active()
+	):
+		return
+	global_position = authoritative_ragdoll_anchor.get_player_reference_position()
+	velocity = authoritative_ragdoll_anchor.linear_velocity
+
+
+func _recover_from_trip() -> void:
+	var anchor_velocity := velocity
+	var anchor_position := global_position
+	if (
+		authoritative_ragdoll_anchor != null
+		and authoritative_ragdoll_anchor.is_active()
+	):
+		anchor_velocity = authoritative_ragdoll_anchor.linear_velocity
+		anchor_position = authoritative_ragdoll_anchor.get_player_reference_position()
+	var recovery := _find_ragdoll_recovery(anchor_position)
+	if not bool(recovery.get("valid", false)):
+		# A low ceiling or occupied capsule volume is not a valid place to stand. Keep simulating the
+		# physical body and retry next tick instead of enabling a CharacterBody inside geometry.
+		return
+	global_position = recovery.get("position", anchor_position) as Vector3
+	on_floor = bool(recovery.get("on_floor", false))
+	velocity = anchor_velocity if anchor_velocity.is_finite() else Vector3.ZERO
+	if on_floor:
+		velocity.y = 0.0
+		air_time = 0.0
+	if authoritative_ragdoll_anchor != null:
+		authoritative_ragdoll_anchor.deactivate()
+	collision_shape_3d.set_deferred("disabled", false)
+	trip_recovery_remaining = 0.0
+	ragdoll_active = false
+
+
+func _find_ragdoll_recovery(anchor_position: Vector3) -> Dictionary:
+	if not anchor_position.is_finite() or not is_inside_tree() or get_world_3d() == null:
+		return {"valid": false}
+	var facing := -Basis(Vector3.UP, look_yaw).z
+	var right := Basis(Vector3.UP, look_yaw).x
+	var offsets: Array[Vector3] = [
+		Vector3.ZERO,
+		facing * TRIP_RECOVERY_SEARCH_RADIUS,
+		-facing * TRIP_RECOVERY_SEARCH_RADIUS,
+		right * TRIP_RECOVERY_SEARCH_RADIUS,
+		-right * TRIP_RECOVERY_SEARCH_RADIUS,
+	]
+	var found_ground := false
+	for offset: Vector3 in offsets:
+		var candidate := _grounded_recovery_position(anchor_position + offset)
+		if not candidate.is_finite():
+			continue
+		found_ground = true
+		if _is_recovery_space_clear(candidate):
+			return {"valid": true, "position": candidate, "on_floor": true}
+	if found_ground:
+		return {"valid": false}
+	# Falling off an edge remains a real fall. Continue from the physical torso rather than teleporting
+	# to the last grounded position; normal CharacterBody gravity takes over on the next frame.
+	return {"valid": true, "position": anchor_position, "on_floor": false}
+
+
+func _grounded_recovery_position(horizontal_position: Vector3) -> Vector3:
+	var query := PhysicsRayQueryParameters3D.new()
+	query.from = horizontal_position + Vector3.UP * TRIP_RECOVERY_GROUND_PROBE_UP
+	query.to = horizontal_position - Vector3.UP * TRIP_RECOVERY_GROUND_PROBE_DOWN
+	query.collision_mask = CharacterContactLayers.MOVEMENT_SURFACE
+	query.collide_with_areas = false
+	query.exclude = _ragdoll_recovery_exclusions()
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return Vector3.INF
+	var normal := hit.get("normal", Vector3.ZERO) as Vector3
+	if normal.y < FLOOR_CONTACT_NORMAL_Y:
+		return Vector3.INF
+	var ground_position := hit.get("position", horizontal_position) as Vector3
+	return Vector3(
+		horizontal_position.x,
+		ground_position.y + _standing_collision_half_height() + TRIP_RECOVERY_CLEARANCE,
+		horizontal_position.z
+	)
+
+
+func _is_recovery_space_clear(position_value: Vector3) -> bool:
+	if collision_shape_3d == null or collision_shape_3d.shape == null:
+		return true
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = collision_shape_3d.shape
+	query.transform = Transform3D(
+		Basis(Vector3.UP, look_yaw),
+		position_value
+	) * collision_shape_3d.transform
+	query.collision_mask = CharacterContactLayers.MOVEMENT_SURFACE
+	query.collide_with_areas = false
+	query.margin = COLLISION_SAFE_MARGIN
+	query.exclude = _ragdoll_recovery_exclusions()
+	return get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty()
+
+
+func _ragdoll_recovery_exclusions() -> Array[RID]:
+	var result: Array[RID] = [get_rid()]
+	if authoritative_ragdoll_anchor != null:
+		result.append(authoritative_ragdoll_anchor.get_collision_rid())
+	return result
+
+
+func _standing_collision_half_height() -> float:
+	var box := collision_shape_3d.shape as BoxShape3D
+	if box != null:
+		return box.size.y * 0.5 - collision_shape_3d.position.y
+	return STANDING_COLLISION_HEIGHT * 0.5
 
 
 func _landing_lacks_required_support() -> bool:

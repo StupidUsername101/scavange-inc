@@ -1,9 +1,9 @@
 class_name PlayerRagdoll3D
 extends Node3D
 
-## Local physical presentation for an authoritative player trip. ServerPlayer decides when the
-## player has lost support and replicates that state; every peer simulates the same articulated
-## body from the replicated takeoff velocity. Gameplay collision remains on ServerPlayer.
+## Articulated local presentation for an authoritative player trip. ServerPlayer decides when the
+## player has lost support and replicates a compact physical torso anchor; every peer simulates its
+## installed cosmetic limbs around that shared moving reference.
 
 const BODY_COLLISION_LAYER := 1 << 2
 const WORLD_COLLISION_MASK := CharacterContactLayers.MOVEMENT_SURFACE
@@ -16,6 +16,10 @@ const UPPER_LEG_LENGTH := PlayerProceduralLegRig.UPPER_LEG_LENGTH
 const LOWER_LEG_LENGTH := PlayerProceduralLegRig.LOWER_LEG_LENGTH
 const FOOT_SIZE := Vector3(0.27, 0.13, 0.42)
 const TRIP_ANGULAR_IMPULSE := 0.65
+const TORSO_OFFSET_FROM_PLAYER := Vector3(0.0, 0.15, 0.0)
+const AUTHORITY_CORRECTION_SPEED := 8.0
+const AUTHORITY_VELOCITY_BLEND_SPEED := 6.0
+const AUTHORITY_HARD_SNAP_DISTANCE := 2.5
 
 var _bodies: Dictionary[StringName, RigidBody3D] = {}
 var _joints: Dictionary[StringName, PinJoint3D] = {}
@@ -128,6 +132,40 @@ func _apply_trip_impulse(sequence: int, safe_direction: Vector3) -> void:
 func get_torso_world_position() -> Vector3:
 	var torso := _bodies.get(&"torso") as RigidBody3D
 	return torso.global_position if torso != null else global_position
+
+
+func get_head_world_position() -> Vector3:
+	var head := _bodies.get(&"head") as RigidBody3D
+	return head.global_position if head != null else get_torso_world_position()
+
+
+func get_head_world_up() -> Vector3:
+	var head := _bodies.get(&"head") as RigidBody3D
+	return head.global_basis.y.normalized() if head != null else Vector3.UP
+
+
+func synchronize_authoritative_torso(
+	target_position: Vector3,
+	target_velocity: Vector3,
+	delta: float
+) -> void:
+	if not _active or not target_position.is_finite():
+		return
+	var torso := _bodies.get(&"torso") as RigidBody3D
+	if torso == null:
+		return
+	var error := target_position - torso.global_position
+	if error.length_squared() > AUTHORITY_HARD_SNAP_DISTANCE * AUTHORITY_HARD_SNAP_DISTANCE:
+		# Move the complete articulated island together. Teleporting only the torso would stretch every
+		# joint through the world and inject a large corrective impulse on the next solver step.
+		for body: RigidBody3D in _bodies.values():
+			if _body_is_available(body.name):
+				body.global_position += error
+		return
+	var safe_velocity := target_velocity if target_velocity.is_finite() else Vector3.ZERO
+	var desired_velocity := safe_velocity + error * AUTHORITY_CORRECTION_SPEED
+	var weight := 1.0 - exp(-maxf(delta, 0.0) * AUTHORITY_VELOCITY_BLEND_SPEED)
+	torso.linear_velocity = torso.linear_velocity.lerp(desired_velocity, weight)
 
 
 func _build_bodies() -> void:

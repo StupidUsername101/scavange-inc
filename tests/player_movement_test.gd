@@ -41,6 +41,7 @@ func _run() -> void:
 	_test_shared_gait_clock()
 	_test_authoritative_jump_arc()
 	await _test_authoritative_split_support_trip()
+	await _test_authoritative_ragdoll_relocation()
 	await _test_authoritative_step_traversal()
 	await _test_authored_entrance_traversal()
 	_finish()
@@ -456,6 +457,63 @@ func _test_authoritative_step_traversal() -> void:
 	floor_body.free()
 	curb_body.free()
 	wall_body.free()
+
+
+func _test_authoritative_ragdoll_relocation() -> void:
+	var floor_body := _add_static_box(
+		"RagdollRelocationFloor",
+		Vector3(20.0, 0.2, 20.0),
+		Vector3(0.0, -0.1, 0.0)
+	)
+	var player := _make_physics_player(
+		Vector3(0.0, ServerPlayer.STANDING_COLLISION_HEIGHT * 0.5, 0.0)
+	)
+	player.player_id = 9
+	player.velocity = Vector3(4.0, 0.0, 0.0)
+	var trip_origin := player.global_position
+	player.call("_begin_trip")
+	for _frame: int in range(36):
+		await physics_frame
+		player.server_physics_tick(STEP)
+	var fallen_position := player.global_position
+	_expect(
+		player.ragdoll_active
+		and player.authoritative_ragdoll_anchor != null
+		and fallen_position.distance_to(trip_origin) > 0.5,
+		"the authoritative player follows its physical ragdoll instead of leaving a parked capsule"
+	)
+	player.call("_update_trip_state", ServerPlayer.TRIP_RECOVERY_SECONDS)
+	_expect(
+		not player.ragdoll_active
+		and player.global_position.distance_to(trip_origin) > 0.5
+		and player.global_position.distance_to(fallen_position) < 1.5,
+		"ragdoll recovery stands up near the final physical body instead of snapping to the trip origin"
+	)
+	player.free()
+
+	var low_ceiling := _add_static_box(
+		"RagdollRecoveryLowCeiling",
+		Vector3(3.0, 0.2, 3.0),
+		Vector3(5.0, 1.35, 0.0)
+	)
+	var cramped_player := _make_physics_player(
+		Vector3(5.0, ServerPlayer.STANDING_COLLISION_HEIGHT * 0.5, 0.0)
+	)
+	await physics_frame
+	cramped_player.call("_begin_trip")
+	cramped_player.call("_update_trip_state", ServerPlayer.TRIP_RECOVERY_SECONDS + STEP)
+	_expect(
+		cramped_player.ragdoll_active,
+		"recovery waits in ragdoll when no clear standing capsule fits beneath nearby geometry"
+	)
+	low_ceiling.free()
+	cramped_player.call("_update_trip_state", STEP)
+	_expect(
+		not cramped_player.ragdoll_active,
+		"recovery retries and stands once the authoritative volume is clear"
+	)
+	cramped_player.free()
+	floor_body.free()
 
 
 func _test_authored_entrance_traversal() -> void:

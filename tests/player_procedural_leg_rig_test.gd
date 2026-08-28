@@ -645,6 +645,9 @@ func _test_air_pose_and_proxy_wiring() -> void:
 	})
 	proxy.call("_sync_trip_presentation")
 	await _settle_physics()
+	proxy.is_local_player = true
+	proxy.call("_update_trip_camera", 0.5)
+	var ragdoll_head_position: Vector3 = proxy.player_ragdoll.get_head_world_position()
 	_expect(
 		proxy.player_ragdoll.is_active()
 		and not proxy.body_visual.visible
@@ -653,6 +656,10 @@ func _test_air_pose_and_proxy_wiring() -> void:
 		and not proxy.player_ragdoll.get_node("left_upper_leg").visible
 		and proxy.player_ragdoll.get_node("right_upper_leg").visible,
 		"the replicated trip swaps to an articulated ragdoll containing only installed limbs"
+	)
+	_expect(
+		proxy.camera_pivot.global_position.distance_to(ragdoll_head_position) < 0.12,
+		"the local camera follows the physical ragdoll head instead of remaining on the parked proxy root"
 	)
 	proxy.target_ragdoll_active = false
 	proxy.call("_sync_trip_presentation")

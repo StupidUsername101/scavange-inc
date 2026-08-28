@@ -36,8 +36,9 @@ const WRIST_PRESENTATION_SCENE := preload(
 	"res://scenes/proxy/wrist_terminal_presentation.tscn"
 )
 const TRIP_CAMERA_BLEND_SPEED := 7.5
-const TRIP_CAMERA_ROLL := deg_to_rad(16.0)
-const TRIP_CAMERA_DROP := 0.34
+const TRIP_CAMERA_ORIENTATION_SPEED := 9.0
+const TRIP_CAMERA_MAX_ROLL := deg_to_rad(62.0)
+const TRIP_CAMERA_MAX_PITCH_INFLUENCE := deg_to_rad(24.0)
 const REMOTE_WRIST_DISPLAY := preload(
 	"res://scripts/client/wrist_terminal_remote_display.gd"
 )
@@ -93,6 +94,7 @@ const LOCAL_AUDIO_PREDICTION := preload(
 var headbob_weight := 0.0
 var headbob_run_weight := 0.0
 var camera_pivot_rest_position: Vector3
+var audio_listener_rest_position: Vector3
 var target_gait_cycle := 0.5
 var visual_gait_cycle := 0.5
 var target_gait_stride_distance := PlayerGait.WALK_STEP_DISTANCE
@@ -112,6 +114,9 @@ var target_trip_sequence := 0
 var target_trip_direction := Vector3.FORWARD
 var presented_trip_sequence := -1
 var trip_camera_weight := 0.0
+var ragdoll_camera_world_position := Vector3.ZERO
+var ragdoll_camera_roll := 0.0
+var ragdoll_camera_pitch := 0.0
 
 var mouse_sensitivity := 0.002
 var look_yaw := 0.0
@@ -159,6 +164,7 @@ func _ready() -> void:
 	target_rotation = global_rotation
 
 	camera_pivot_rest_position = camera_pivot.position
+	audio_listener_rest_position = audio_listener.position
 	procedural_leg_rig.set_expression_identity(player_id)
 	edit_aim_hit.material_override = _create_edit_aim_material()
 	edit_aim_hit.visible = false
@@ -1326,7 +1332,7 @@ func _process(delta: float) -> void:
 			else:
 				rotation.y = server_player.rotation.y
 			_update_procedural_legs(delta, server_player)
-			_sync_trip_presentation()
+			_sync_trip_presentation(delta)
 			_update_trip_camera(delta)
 
 			return
@@ -1359,11 +1365,11 @@ func _process(delta: float) -> void:
 			weight
 		)
 	_update_procedural_legs(delta)
-	_sync_trip_presentation()
+	_sync_trip_presentation(delta)
 	_update_trip_camera(delta)
 
 
-func _sync_trip_presentation() -> void:
+func _sync_trip_presentation(delta := 0.0) -> void:
 	if player_ragdoll == null or body_visual == null:
 		return
 	if target_ragdoll_active:
@@ -1380,6 +1386,11 @@ func _sync_trip_presentation() -> void:
 				target_trip_direction
 			)
 			_update_held_item_mount()
+		player_ragdoll.synchronize_authoritative_torso(
+			global_position + PlayerRagdoll3D.TORSO_OFFSET_FROM_PLAYER,
+			target_velocity,
+			delta
+		)
 		body_visual.visible = false
 		return
 	if player_ragdoll.is_active():
@@ -1406,18 +1417,54 @@ func _ragdoll_source_visuals() -> Dictionary:
 func _update_trip_camera(delta: float) -> void:
 	if not is_local_player:
 		return
+	audio_listener.position = audio_listener_rest_position
 	var target_weight := 1.0 if target_ragdoll_active else 0.0
 	var blend := 1.0 - exp(
 		-maxf(delta, 0.0) * TRIP_CAMERA_BLEND_SPEED
 	)
 	trip_camera_weight = lerpf(trip_camera_weight, target_weight, blend)
-	var lateral_sign := (
-		-1.0
-		if posmod(target_trip_sequence + player_id, 2) == 0
-		else 1.0
+	if player_ragdoll != null and player_ragdoll.is_active():
+		ragdoll_camera_world_position = player_ragdoll.get_head_world_position()
+		var physical_up: Vector3 = player_ragdoll.get_head_world_up()
+		var view_basis := Basis(Vector3.UP, look_yaw)
+		var target_roll := clampf(
+			-asin(clampf(physical_up.dot(view_basis.x), -1.0, 1.0)),
+			-TRIP_CAMERA_MAX_ROLL,
+			TRIP_CAMERA_MAX_ROLL
+		)
+		var target_pitch := clampf(
+			asin(clampf(physical_up.dot(-view_basis.z), -1.0, 1.0)) * 0.45,
+			-TRIP_CAMERA_MAX_PITCH_INFLUENCE,
+			TRIP_CAMERA_MAX_PITCH_INFLUENCE
+		)
+		var orientation_weight := 1.0 - exp(
+			-maxf(delta, 0.0) * TRIP_CAMERA_ORIENTATION_SPEED
+		)
+		ragdoll_camera_roll = lerp_angle(
+			ragdoll_camera_roll,
+			target_roll,
+			orientation_weight
+		)
+		ragdoll_camera_pitch = lerp_angle(
+			ragdoll_camera_pitch,
+			target_pitch,
+			orientation_weight
+		)
+	var regular_camera_world_position := camera_pivot.global_position
+	var regular_listener_world_position := audio_listener.global_position
+	camera_pivot.global_position = regular_camera_world_position.lerp(
+		ragdoll_camera_world_position,
+		trip_camera_weight
 	)
-	camera_pivot.rotation.z = TRIP_CAMERA_ROLL * lateral_sign * trip_camera_weight
-	camera_pivot.position.y -= TRIP_CAMERA_DROP * trip_camera_weight
+	audio_listener.global_position = regular_listener_world_position.lerp(
+		ragdoll_camera_world_position,
+		trip_camera_weight
+	)
+	camera_pivot.rotation.x = (
+		_resolved_camera_pitch()
+		+ ragdoll_camera_pitch * trip_camera_weight
+	)
+	camera_pivot.rotation.z = ragdoll_camera_roll * trip_camera_weight
 
 
 func _update_procedural_legs(

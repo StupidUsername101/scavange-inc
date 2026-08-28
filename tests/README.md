@@ -109,8 +109,10 @@ momentum-preserving takeoff and airborne coasting, speed-neutral air steering,
 stable ballistic gravity, wall sliding that removes only blocked velocity, and a
 single distance-driven gait phase shared by footstep audio and camera motion. Hard landings also
 probe both real biped supports on the authority, as do completed gait footfalls: a missing second
-foothold must replicate one bounded trip/ragdoll state, while one-legged loadouts never fail a check
-for a phantom foot. These probes are event-driven rather than paid on every physics frame.
+foothold must replicate one trip/ragdoll transition, while one-legged loadouts never fail a check
+for a phantom foot. A compact server-owned torso carries the authoritative player through the fall,
+recovers beside its final position, and waits when nearby geometry cannot fit the standing capsule.
+These probes are event-driven rather than paid on every physics frame.
 
 The procedural player-leg suite checks reusable allocation-free two-bone presentation,
 planted-foot query reuse, ordinary and detail-only ground roles, smooth movement guides with
@@ -118,8 +120,9 @@ discrete stair contacts, turn-safe foot ordering, forward walking knee drive, po
 takeoff, continuous asymmetric airborne correction, ground-relative landing preparation, and every
 zero/one/two-leg availability combination. Touchdown contacts resolve independently, may arrive at
 different times and heights, and drive a saturating whole-body yield instead of forcing both feet onto
-one plane. The replicated trip presenter must construct physics only for installed limbs and restore
-the procedural body after recovery. A long high jump must remain tucked until its real ground
+one plane. The replicated trip presenter must construct physics only for installed limbs, keep its
+torso converged on the server reference, move the local camera/listener with its physical head, and
+restore the procedural body after recovery. A long high jump must remain tucked until its real ground
 clearance closes without freezing into a mirrored pose. Nonlinear per-jump pose variation is keyed by
 the server-owned jump sequence so every observer sees the same expressive choice, and a critically
 damped per-foot response prevents those randomized targets from producing a post-takeoff shove;
