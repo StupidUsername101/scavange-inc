@@ -8,7 +8,7 @@ const GAME_TAG := "scavange-inc"
 # Increment whenever an RPC method, channel, or replicated payload changes incompatibly. Steam
 # lobby compatibility is checked before creating the transport, so mismatched source revisions are
 # rejected at the browser instead of connecting far enough to fail inside SceneMultiplayer.
-const PROTOCOL_VERSION := "7"
+const PROTOCOL_VERSION := "8"
 
 const DATA_GAME := "game"
 const DATA_PROTOCOL := "protocol"

@@ -71,6 +71,20 @@ func _test_modular_gun_contract() -> void:
 		int(state.get("rounds", 0)) == build.get_magazine_capacity(),
 		"new gun state begins with one full magazine"
 	)
+	var build_signature := str(state.get(
+		GunItemDefinition.BUILD_SIGNATURE_KEY,
+		""
+	))
+	var fired_state := gun.consume_round(state)
+	_expect(
+		not build_signature.is_empty()
+		and build_signature == build.visual_signature()
+		and str(fired_state.get(
+			GunItemDefinition.BUILD_SIGNATURE_KEY,
+			""
+		)) == build_signature,
+		"gun visuals use one stable build signature that survives ammunition mutations"
+	)
 	_expect(
 		is_equal_approx(gun.get_instance_mass(state), build.get_total_mass()),
 		"crafted component mass determines the physical gun instance"

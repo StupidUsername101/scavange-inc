@@ -9,6 +9,9 @@ const MULTIPLAYER_CHANNELS := preload(
 const REPLICATION_SCHEDULE := preload(
 	"res://scripts/network/network_replication_schedule.gd"
 )
+const SNAPSHOT_STREAM_TRACKER := preload(
+	"res://scripts/network/network_snapshot_stream_tracker.gd"
+)
 
 #######################################################
 # Runs headless regression coverage for lobby system behavior and reports contract or
@@ -34,6 +37,7 @@ func _run() -> void:
 	_test_disconnect_rpc_safety()
 	_test_transfer_channel_capacity()
 	_test_replaceable_snapshot_transport()
+	_test_snapshot_stream_lifecycle()
 
 	if failure_count == 0:
 		print("Lobby system tests passed: %d assertions" % assertion_count)
@@ -75,8 +79,8 @@ func _test_four_player_limit() -> void:
 
 func _test_lobby_compatibility() -> void:
 	_expect(
-		LobbyRules.PROTOCOL_VERSION == "7",
-		"the client-ready multiplayer handshake has its own lobby protocol"
+		LobbyRules.PROTOCOL_VERSION == "8",
+		"the revisioned inventory lane has its own lobby protocol"
 	)
 	_expect(
 		LobbyRules.is_compatible_lobby(
@@ -681,6 +685,13 @@ func _test_replaceable_snapshot_transport() -> void:
 		"replaceable snapshots carry a client-side stale-packet guard"
 	)
 	_expect(
+		server_source.contains("player.to_state_dict(false)")
+		and client_source.contains(
+			'@rpc("authority", "reliable", "call_local", 1)\nfunc on_player_inventory_state_received'
+		),
+		"realtime player poses stay lean while inventory revisions use a reliable player lane"
+	)
+	_expect(
 		REPLICATION_SCHEDULE.read_snapshot_sequence(
 			{1: {"network_snapshot_sequence": 42}}
 		) == 42,
@@ -693,6 +704,39 @@ func _test_replaceable_snapshot_transport() -> void:
 	_expect(
 		REPLICATION_SCHEDULE.is_newer_snapshot(43, 42),
 		"a newer replacement snapshot advances normally"
+	)
+
+
+func _test_snapshot_stream_lifecycle() -> void:
+	var tracker = SNAPSHOT_STREAM_TRACKER.new()
+	var stream_id := &"test_entities"
+	_expect(
+		not tracker.should_publish(stream_id, false),
+		"a never-active empty snapshot stream performs no network work"
+	)
+	tracker.force_next_publish(stream_id)
+	_expect(
+		tracker.should_publish(stream_id, false)
+		and not tracker.should_publish(stream_id, false),
+		"a late-join refresh publishes a stable-empty stream exactly once"
+	)
+	_expect(
+		tracker.should_publish(stream_id, true)
+		and tracker.should_publish(stream_id, true)
+		and tracker.is_active(stream_id),
+		"an active entity stream continues publishing replacement snapshots"
+	)
+	_expect(
+		tracker.should_publish(stream_id, false)
+		and not tracker.should_publish(stream_id, false)
+		and not tracker.is_active(stream_id),
+		"the first active-to-empty snapshot clears stale proxies and later empty ticks stay silent"
+	)
+	tracker.should_publish(stream_id, true)
+	tracker.reset()
+	_expect(
+		not tracker.should_publish(stream_id, false),
+		"session reset forgets prior stream activity instead of leaking lifecycle state"
 	)
 
 

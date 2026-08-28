@@ -108,10 +108,7 @@ func _test_definition_and_warehouse(definition: RadioItemDefinition) -> void:
 		"res://assets/sounds/music/not so legally downloaded music/gothic/Gothic 3 Soundtrack - End Titles.mp3"
 	)
 	var quiet_outlier_envelope: PackedByteArray = (
-		MUSIC_VISUAL_ENVELOPES.TRACK_ENVELOPES.get(
-			quiet_outlier_track,
-			PackedByteArray()
-		)
+		MUSIC_VISUAL_ENVELOPES.get_envelope(quiet_outlier_track)
 	)
 	var quiet_envelope_min := 255
 	var quiet_envelope_max := 0
@@ -121,10 +118,7 @@ func _test_definition_and_warehouse(definition: RadioItemDefinition) -> void:
 	var unresponsive_envelope_count := 0
 	for song_path: String in songs:
 		var envelope: PackedByteArray = (
-			MUSIC_VISUAL_ENVELOPES.TRACK_ENVELOPES.get(
-				song_path,
-				PackedByteArray()
-			)
+			MUSIC_VISUAL_ENVELOPES.get_envelope(song_path)
 		)
 		var envelope_min := 255
 		var envelope_max := 0
@@ -162,6 +156,14 @@ func _test_definition_and_warehouse(definition: RadioItemDefinition) -> void:
 		and quiet_envelope_max >= 240
 		and quiet_envelope_max - quiet_envelope_min >= 160,
 		"every track has a source-level rhythmic envelope, including masters too quiet for reliable received-spectrum animation"
+	)
+	_expect(
+		FileAccess.file_exists(MUSIC_VISUAL_ENVELOPES.DATA_PATH)
+		and MUSIC_VISUAL_ENVELOPES.get_track_paths().size() == songs.size()
+		and FileAccess.get_file_as_string(
+			"res://scripts/audio/music_visual_envelope_catalog.gd"
+		).length() < 12_000,
+		"visual envelopes load once from compact generated data instead of megabytes of parsed GDScript"
 	)
 	_expect(
 		definition.speaker_local_position.z > 0.2

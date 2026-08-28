@@ -10,8 +10,6 @@ const LOBBY_MEMBERSHIP_CHECK_DELAY := 0.15
 const MIN_DIRECTION_LENGTH_SQUARED := 0.000001
 const STEAM_APP_ID := 480
 const DEFAULT_PLAYER_SPAWN_POSITION := Vector3(0.0, 5.0, 0.0)
-const NO_ARMS_DEMO_PLAYER_ID := 2
-const NO_LEGS_DEMO_PLAYER_ID := 3
 const DEFAULT_DISTORTION_CENTER := Vector2(0.5, 0.5)
 const DEFAULT_DISTORTION_PULSE_HZ := 7.0
 const MIN_TOTAL_GRAB_FORCE := 0.001
@@ -47,6 +45,9 @@ const MULTIPLAYER_CHANNELS := preload(
 const REPLICATION_SCHEDULE := preload(
 	"res://scripts/network/network_replication_schedule.gd"
 )
+const SNAPSHOT_STREAM_TRACKER := preload(
+	"res://scripts/network/network_snapshot_stream_tracker.gd"
+)
 const PHYSICAL_IMPACT_RESPONSE := preload(
 	"res://scripts/audio/physical_impact_response.gd"
 )
@@ -60,6 +61,10 @@ const STEAM_PRESENCE_CONNECT := "connect"
 const STEAM_PRESENCE_STATUS := "status"
 const STEAM_PRESENCE_GROUP := "steam_player_group"
 const STEAM_PRESENCE_GROUP_SIZE := "steam_player_group_size"
+const PROJECTILE_SNAPSHOT_STREAM := &"projectiles"
+const DRONE_PART_SNAPSHOT_STREAM := &"drone_parts"
+const ENEMY_SNAPSHOT_STREAM := &"enemies"
+const ROPE_SNAPSHOT_STREAM := &"ropes"
 
 const SERVER_WORLD_SCENE := preload("res://scenes/server/server_world.tscn")
 const SERVER_PLAYER_SCENE := preload("res://scenes/server/server_player.tscn")
@@ -70,12 +75,6 @@ const SERVER_DRONE_PART_SCENE := preload(
 )
 const FULL_BODY_LOADOUT := preload(
 	"res://resources/character_loadouts/full_body.tres"
-)
-const NO_ARMS_LOADOUT := preload(
-	"res://resources/character_loadouts/no_arms.tres"
-)
-const NO_LEGS_LOADOUT := preload(
-	"res://resources/character_loadouts/no_legs.tres"
 )
 
 #######################################################
@@ -115,6 +114,7 @@ var spatial_hash: ServerSpatialHash3D = ServerSpatialHash3D.new(
 	SPATIAL_CELL_SIZE
 )
 var spatial_interest_by_drone_id: Dictionary[int, int] = {}
+var snapshot_stream_tracker = SNAPSHOT_STREAM_TRACKER.new()
 
 var server_world: Node3D
 var sync_timer := 0.0
@@ -329,7 +329,7 @@ func _publish_player_states(snapshot_sequence: int) -> void:
 		if not is_instance_valid(player):
 			continue
 		states[player_id] = _sequence_state(
-			player.to_state_dict(),
+			player.to_state_dict(false),
 			snapshot_sequence
 		)
 	Client.rpc("on_player_states_received", states)
@@ -410,6 +410,13 @@ func _publish_drone_states(snapshot_sequence: int) -> void:
 
 
 func _publish_projectile_states(snapshot_sequence: int) -> void:
+	if server_projectiles_by_id.is_empty():
+		if snapshot_stream_tracker.should_publish(
+			PROJECTILE_SNAPSHOT_STREAM,
+			false
+		):
+			Client.rpc("on_projectile_states_received", {})
+		return
 	var states: Dictionary = {}
 	for projectile_id: int in server_projectiles_by_id:
 		var projectile: ServerProjectile = server_projectiles_by_id[projectile_id]
@@ -418,10 +425,21 @@ func _publish_projectile_states(snapshot_sequence: int) -> void:
 				projectile.to_state_dict(),
 				snapshot_sequence
 			)
-	Client.rpc("on_projectile_states_received", states)
+	if snapshot_stream_tracker.should_publish(
+		PROJECTILE_SNAPSHOT_STREAM,
+		not states.is_empty()
+	):
+		Client.rpc("on_projectile_states_received", states)
 
 
 func _publish_drone_part_states(snapshot_sequence: int) -> void:
+	if server_drone_parts_by_id.is_empty():
+		if snapshot_stream_tracker.should_publish(
+			DRONE_PART_SNAPSHOT_STREAM,
+			false
+		):
+			Client.rpc("on_drone_part_states_received", {})
+		return
 	var states: Dictionary = {}
 	for part_id: int in server_drone_parts_by_id:
 		var part := server_drone_parts_by_id[part_id]
@@ -430,10 +448,21 @@ func _publish_drone_part_states(snapshot_sequence: int) -> void:
 				part.call("to_state_dict") as Dictionary,
 				snapshot_sequence
 			)
-	Client.rpc("on_drone_part_states_received", states)
+	if snapshot_stream_tracker.should_publish(
+		DRONE_PART_SNAPSHOT_STREAM,
+		not states.is_empty()
+	):
+		Client.rpc("on_drone_part_states_received", states)
 
 
 func _publish_enemy_states(snapshot_sequence: int) -> void:
+	if server_enemies_by_enemy_id.is_empty():
+		if snapshot_stream_tracker.should_publish(
+			ENEMY_SNAPSHOT_STREAM,
+			false
+		):
+			Client.rpc("on_enemy_states_received", {})
+		return
 	var states: Dictionary = {}
 	for enemy_id: int in server_enemies_by_enemy_id:
 		var enemy: ServerEnemy = server_enemies_by_enemy_id[enemy_id]
@@ -442,10 +471,24 @@ func _publish_enemy_states(snapshot_sequence: int) -> void:
 				enemy.to_state_dict(),
 				snapshot_sequence
 			)
-	Client.rpc("on_enemy_states_received", states)
+	if snapshot_stream_tracker.should_publish(
+		ENEMY_SNAPSHOT_STREAM,
+		not states.is_empty()
+	):
+		Client.rpc("on_enemy_states_received", states)
 
 
 func _publish_rope_states(snapshot_sequence: int) -> void:
+	if (
+		server_ropes_by_rope_id.is_empty()
+		and rope_placements_by_player_id.is_empty()
+	):
+		if snapshot_stream_tracker.should_publish(
+			ROPE_SNAPSHOT_STREAM,
+			false
+		):
+			Client.rpc("on_rope_states_received", {})
+		return
 	var states: Dictionary = {}
 	for rope_id: int in server_ropes_by_rope_id:
 		var rope: ServerRope = server_ropes_by_rope_id[rope_id]
@@ -461,7 +504,11 @@ func _publish_rope_states(snapshot_sequence: int) -> void:
 				preview_state,
 				snapshot_sequence
 			)
-	Client.rpc("on_rope_states_received", states)
+	if snapshot_stream_tracker.should_publish(
+		ROPE_SNAPSHOT_STREAM,
+		not states.is_empty()
+	):
+		Client.rpc("on_rope_states_received", states)
 
 
 func _publish_station_states(snapshot_sequence: int) -> void:
@@ -635,6 +682,8 @@ func register_peer(peer_id: int) -> bool:
 		peer_id,
 		"spawn_client_world"
 	)
+	_publish_all_player_inventories_to_peer(peer_id)
+	_force_optional_snapshot_refresh()
 
 	print(
 		"registered peer=",
@@ -644,6 +693,51 @@ func register_peer(peer_id: int) -> bool:
 	)
 	_sync_lobby_availability()
 	return true
+
+
+func _force_optional_snapshot_refresh() -> void:
+	# A joining Client clears all proxy registries before admission. Force the next complete optional
+	# stream snapshots as an additional lifecycle guarantee; active streams include their current
+	# entities and empty streams explicitly confirm that there is nothing to retain.
+	snapshot_stream_tracker.force_next_publish(PROJECTILE_SNAPSHOT_STREAM)
+	snapshot_stream_tracker.force_next_publish(DRONE_PART_SNAPSHOT_STREAM)
+	snapshot_stream_tracker.force_next_publish(ENEMY_SNAPSHOT_STREAM)
+	snapshot_stream_tracker.force_next_publish(ROPE_SNAPSHOT_STREAM)
+
+
+func _publish_all_player_inventories_to_peer(peer_id: int) -> void:
+	if not _is_rpc_peer_reachable(peer_id):
+		return
+	for player_id: int in server_players_by_player_id:
+		_publish_player_inventory_state(player_id, peer_id)
+
+
+func _publish_player_inventory_state(player_id: int, peer_id := 0) -> void:
+	var player := get_server_player(player_id)
+	if player == null:
+		return
+	var inventory := player._get_public_inventory_state()
+	if peer_id > 0:
+		if _is_rpc_peer_reachable(peer_id):
+			Client.rpc_id(
+				peer_id,
+				"on_player_inventory_state_received",
+				player_id,
+				player.inventory_revision,
+				inventory
+			)
+		return
+	Client.rpc(
+		"on_player_inventory_state_received",
+		player_id,
+		player.inventory_revision,
+		inventory
+	)
+
+
+func _on_player_inventory_changed(_revision: int, player_id: int) -> void:
+	_publish_player_inventory_state(player_id)
+
 
 func get_sending_player() -> ServerPlayer:
 	var peer_id := multiplayer.get_remote_sender_id()
@@ -711,25 +805,24 @@ func spawn_server_player(
 		p.set_body_loadout(body_loadout)
 
 	server_players_by_player_id[player_id] = p
+	p.inventory_changed.connect(
+		_on_player_inventory_changed.bind(player_id)
+	)
 	spatial_hash.register_entity(
 		_get_player_spatial_key(player_id),
 		p,
 		&"player",
 		player_id
 	)
+	_publish_player_inventory_state(player_id)
 
 	print("spawned server player=", player_id, " at ", spawn_pos)
 
 
-func _get_starting_body_loadout(player_id: int) -> CharacterLoadout:
-	match player_id:
-		# i disabled this because it makes debugging difficult. 
-		#NO_ARMS_DEMO_PLAYER_ID:
-			#return NO_ARMS_LOADOUT
-		#NO_LEGS_DEMO_PLAYER_ID:
-			#return NO_LEGS_LOADOUT
-		_:
-			return FULL_BODY_LOADOUT
+func _get_starting_body_loadout(_player_id: int) -> CharacterLoadout:
+	# Player identity must never select a hidden demonstration loadout. Missing limbs are ordinary
+	# authoritative equipment state and can still be created, removed, and replicated at runtime.
+	return FULL_BODY_LOADOUT
 
 
 func register_item(item_id: int, item: ServerItem) -> void:
@@ -3800,6 +3893,7 @@ func _clear_runtime_session() -> void:
 	next_spatial_sound_sequence = 0
 	network_snapshot_sequence = 0
 	item_motion_sequence = 0
+	snapshot_stream_tracker.reset()
 	GameState.reset_session()
 
 

@@ -203,6 +203,16 @@ func _finish() -> void:
 		and server.call("get_server_projectile", projectile.projectile_id) != null
 	):
 		server.call("despawn_projectile", projectile.projectile_id)
+	var renderer := (
+		client.get("spatial_audio_renderer") as SpatialAudioRenderer
+		if client != null
+		else null
+	)
+	if renderer != null:
+		renderer.reset_session(true)
+	# Let AudioServer observe the stopped pooled voices before terminating the test process. Quitting
+	# on the impact frame otherwise leaves Godot's Ogg playback handles alive and obscures real leaks.
+	await process_frame
 	if failure_count == 0:
 		print("Ballistics runtime integration test passed")
 		quit(0)

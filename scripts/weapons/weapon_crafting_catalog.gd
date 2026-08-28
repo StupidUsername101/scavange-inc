@@ -196,8 +196,12 @@ static func build_summary(
 static func make_crafted_instance_state(build: GunBuild) -> Dictionary:
 	if build == null:
 		return {}
+	var build_state := build.to_state_dict()
 	return {
-		"build": build.to_state_dict(),
+		"build": build_state,
+		GunItemDefinition.BUILD_SIGNATURE_KEY: (
+			GunBuild.visual_signature_from_state(build_state)
+		),
 		"rounds": build.get_magazine_capacity(),
 	}
 

@@ -1202,6 +1202,8 @@ func _test_continuous_distance_updates() -> void:
 		) < 0.2,
 		"distance attenuation has no hard knee at the reference distance"
 	)
+	continuous_service.free()
+	service.free()
 
 
 func _test_multi_probe_listener_boundary() -> void:
@@ -1250,6 +1252,7 @@ func _test_multi_probe_listener_boundary() -> void:
 		and int(service.get_debug_state().get("field_solve_count", 0)) == 1,
 		"crossing a nearest-probe boundary by one centimetre keeps route loudness continuous"
 	)
+	service.free()
 
 
 func _test_client_voice_renderer() -> void:

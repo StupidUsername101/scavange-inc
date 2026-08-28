@@ -366,6 +366,11 @@ func reset_session(clear_registrations := false) -> void:
 	_voice_reserved_until_usec.fill(0)
 	_listener_acoustic_intensity = 0.0
 	if clear_registrations:
+		# A disconnected world will register its semantic sounds again. Release the prior world's
+		# stream handles as well as its registry so compressed playback resources do not survive the
+		# session that owned them.
+		for player: AudioStreamPlayer3D in _players:
+			player.stream = null
 		_registrations.clear()
 
 

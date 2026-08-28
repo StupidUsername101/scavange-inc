@@ -48,7 +48,6 @@ const PROP_ACOUSTIC_MATERIALS := {
 @export var acoustic_material: AcousticMaterial
 ## Reversible garage-wide A/B switch. Routing probes remain active when their sampled response is
 ## disabled, so this never changes reachability through the building.
-@export var use_baked_room_response := false
 
 
 func _ready() -> void:
@@ -89,14 +88,12 @@ func _build_acoustic_probes() -> void:
 		probe.probe_id = descriptor.get("probe_id", &"")
 		probe.position = descriptor.get("position", Vector3.ZERO)
 		probe.auto_connect_radius = float(descriptor.get("auto_connect_radius", 5.0))
-		probe.sample_reflections = (
-			use_baked_room_response
-			and bool(descriptor.get("sample_reflections", true))
-		)
+		# These remain propagation/routing probes. The garage's abandoned A/B room-response path
+		# must not synthesize a second reflection field on top of generic propagation.
+		probe.sample_reflections = false
 		probe.reflection_sample_distance = 20.0
 		probe.environment_influence_radius = float(
 			descriptor.get("environment_influence_radius", 5.0)
 		)
-		probe.reverb_scale = 1.06 if use_baked_room_response else 0.0
+		probe.reverb_scale = 0.0
 		add_child(probe)
-

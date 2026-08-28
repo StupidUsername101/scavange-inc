@@ -51,6 +51,7 @@ signal acoustic_perception_continuous_sample(
 var item_proxies_by_item_id: Dictionary[int, ItemProxy] = {}
 var item_spawn_queue: Array[Dictionary] = []
 var player_proxys_by_player_id: Dictionary[int, PlayerProxy] = {}
+var pending_player_inventory_by_player_id: Dictionary[int, Dictionary] = {}
 var drone_proxies_by_drone_id: Dictionary[int, Node3D] = {}
 var projectile_proxies_by_id: Dictionary[int, ProjectileProxy] = {}
 var drone_part_proxies_by_id: Dictionary[int, Node3D] = {}
@@ -86,6 +87,7 @@ func reset_session() -> void:
 	item_proxies_by_item_id.clear()
 	item_spawn_queue.clear()
 	player_proxys_by_player_id.clear()
+	pending_player_inventory_by_player_id.clear()
 	drone_proxies_by_drone_id.clear()
 	projectile_proxies_by_id.clear()
 	drone_part_proxies_by_id.clear()
@@ -994,6 +996,15 @@ func on_player_states_received(states: Dictionary) -> void:
 
 			add_child(proxy)
 			player_proxys_by_player_id[player_id] = proxy
+			var pending_inventory: Dictionary = (
+				pending_player_inventory_by_player_id.get(player_id, {})
+			)
+			if not pending_inventory.is_empty():
+				proxy.apply_replicated_inventory_state(
+					int(pending_inventory.get("revision", -1)),
+					pending_inventory.get("inventory", {})
+				)
+				pending_player_inventory_by_player_id.erase(player_id)
 
 		var proxy: PlayerProxy = player_proxys_by_player_id[player_id]
 		proxy.apply_server_state(state)
@@ -1007,7 +1018,34 @@ func on_player_states_received(states: Dictionary) -> void:
 		var proxy: PlayerProxy = player_proxys_by_player_id[player_id]
 
 		player_proxys_by_player_id.erase(player_id)
+		pending_player_inventory_by_player_id.erase(player_id)
 		proxy.queue_free()
+
+
+@rpc("authority", "reliable", "call_local", 1)
+func on_player_inventory_state_received(
+	player_id_value: int,
+	revision_value: int,
+	inventory_value: Dictionary
+) -> void:
+	var player_id := maxi(player_id_value, -1)
+	var revision := maxi(revision_value, -1)
+	if player_id < 0 or revision < 0:
+		return
+	var proxy := player_proxys_by_player_id.get(player_id) as PlayerProxy
+	if proxy != null:
+		proxy.apply_replicated_inventory_state(revision, inventory_value)
+		return
+	var pending: Dictionary = pending_player_inventory_by_player_id.get(
+		player_id,
+		{}
+	)
+	if revision < int(pending.get("revision", -1)):
+		return
+	pending_player_inventory_by_player_id[player_id] = {
+		"revision": revision,
+		"inventory": inventory_value.duplicate(true),
+	}
 	
 @rpc("authority", "unreliable", "call_local", 2)
 func on_drone_states_received(states: Dictionary) -> void:

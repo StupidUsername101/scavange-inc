@@ -23,6 +23,5 @@ array_definition = ExtResource("4_definition")
 [node name="Facility" type="Node3D" parent="."]
 script = ExtResource("2_facility")
 acoustic_material = SubResource("AcousticMaterial_garage")
-use_baked_room_response = false
 
 [node name="Emitters" parent="." instance=ExtResource("5_emitters")]

@@ -111,6 +111,7 @@ var target_expression_clock := 0.0
 var resolved_pose_gait_cycle := 0.5
 var character_pose := PlayerCharacterPoseController.new()
 var ocular_expression := PlayerOcularExpressionController.new()
+var _expression_identity_player_id := -1
 var ocular_social_target_player_id := -1
 var ocular_social_epoch := -1
 var target_faction_id := 0
@@ -143,6 +144,13 @@ var target_edit_aim_origin := Vector3.ZERO
 var target_edit_aim_hit := Vector3.ZERO
 var target_edit_aim_color := Color(0.2, 0.8, 1.0, 1.0)
 var target_player_state: Dictionary = {}
+var _last_inventory_revision := -1
+var _cached_public_inventory: Dictionary = {
+	"capacity": PlayerInventoryRules.BASE_CAPACITY,
+	"selected_slot": 0,
+	"entries": [],
+	"equipment": {},
+}
 var equipment_visuals: Dictionary = {}
 var equipment_definition_paths: Dictionary = {}
 var held_item_visual: Node3D
@@ -174,9 +182,7 @@ func _ready() -> void:
 
 	camera_pivot_rest_position = camera_pivot.position
 	audio_listener_rest_position = audio_listener.position
-	procedural_leg_rig.set_expression_identity(player_id)
-	character_pose.set_expression_identity(player_id)
-	ocular_expression.set_expression_identity(player_id)
+	_apply_expression_identity(player_id, true)
 	edit_aim_hit.material_override = _create_edit_aim_material()
 	edit_aim_hit.visible = false
 	acoustic_perception.bind_camera(camera)
@@ -190,6 +196,17 @@ func _ready() -> void:
 		)
 
 	set_local_player(is_local_player)
+
+
+func _apply_expression_identity(next_player_id: int, force := false) -> void:
+	if not force and next_player_id == _expression_identity_player_id:
+		return
+	_expression_identity_player_id = next_player_id
+	if procedural_leg_rig != null:
+		procedural_leg_rig.set_expression_identity(next_player_id)
+	character_pose.set_expression_identity(next_player_id)
+	ocular_expression.set_expression_identity(next_player_id)
+
 
 func _input(event: InputEvent) -> void:
 	if not is_local_player:
@@ -297,10 +314,7 @@ func consume_grab_rotation_input() -> Vector2:
 
 func apply_server_state(state: Dictionary) -> void:
 	player_id = SafeVariant.integral_int_or(state.get("player_id", -1), -1)
-	if procedural_leg_rig != null:
-		procedural_leg_rig.set_expression_identity(player_id)
-	character_pose.set_expression_identity(player_id)
-	ocular_expression.set_expression_identity(player_id)
+	_apply_expression_identity(player_id)
 	target_faction_id = SafeVariant.integral_int_or(
 		state.get("faction_id", target_faction_id),
 		target_faction_id
@@ -395,6 +409,18 @@ func apply_server_state(state: Dictionary) -> void:
 	_apply_player_system_state(state)
 
 
+func apply_replicated_inventory_state(
+	revision: int,
+	inventory: Dictionary
+) -> void:
+	if revision < 0 or revision <= _last_inventory_revision:
+		return
+	var merged_state := target_player_state.duplicate(false)
+	merged_state["inventory_revision"] = revision
+	merged_state["inventory"] = inventory
+	_apply_player_system_state(merged_state)
+
+
 func _apply_player_system_state(state: Dictionary) -> void:
 	# Scene inspection and tests can apply a snapshot before _ready initializes
 	# @onready references. The children already exist on an instantiated scene.
@@ -418,13 +444,29 @@ func _apply_player_system_state(state: Dictionary) -> void:
 		0.0,
 		1.0
 	)
-	target_player_state = state.duplicate(true)
-	var inventory: Dictionary = PlayerInventoryRules.sanitize_public_inventory(
-		state.get("inventory", {})
+	var next_inventory_revision := SafeVariant.integral_int_or(
+		state.get("inventory_revision"),
+		-1
 	)
+	var has_inventory_payload := state.has("inventory")
+	var inventory_changed := false
+	if has_inventory_payload:
+		inventory_changed = (
+			next_inventory_revision < 0
+			or next_inventory_revision > _last_inventory_revision
+		)
+	if inventory_changed:
+		_cached_public_inventory = PlayerInventoryRules.sanitize_public_inventory(
+			state.get("inventory", {})
+		)
+		_last_inventory_revision = next_inventory_revision
+	var inventory := _cached_public_inventory
 	var equipment: Dictionary = inventory["equipment"]
-	_apply_equipment_state(equipment)
-	_apply_held_item_state(inventory)
+	if inventory_changed:
+		_apply_equipment_state(equipment)
+		_apply_held_item_state(inventory)
+	target_player_state = state.duplicate(false)
+	target_player_state["inventory"] = inventory
 	var server_wrist_open := SafeVariant.strict_bool_or(
 		state.get("wrist_interface_open", false),
 		false
@@ -447,7 +489,7 @@ func _apply_player_system_state(state: Dictionary) -> void:
 		_sync_remote_wrist_display()
 
 	if inventory_hud != null:
-		inventory_hud.apply_player_state(state)
+		inventory_hud.apply_player_state(target_player_state, inventory_changed)
 	if vision_effect != null:
 		var eye_entry: Dictionary = SafeVariant.dictionary_copy(
 			equipment.get(PlayerInventoryRules.EYES_SLOT, {}),
@@ -587,10 +629,18 @@ func _apply_held_item_state(inventory: Dictionary) -> void:
 		entry.get("instance_state", {}),
 		false
 	)
+	var build_signature := str(state.get(
+		GunItemDefinition.BUILD_SIGNATURE_KEY,
+		""
+	))
+	if build_signature.is_empty():
+		build_signature = GunBuild.visual_signature_from_state(
+			SafeVariant.dictionary_copy(state.get("build", {}), false)
+		)
 	var signature := (
 		definition_path
 		+ "|"
-		+ JSON.stringify(state.get("build", {}))
+		+ build_signature
 		+ ("|local" if is_local_player else "|remote")
 	)
 	if signature == held_item_signature:
@@ -760,9 +810,9 @@ func get_weapon_audio_prediction_profile() -> Dictionary:
 		or not (has_left_arm or has_right_arm)
 	):
 		return {}
-	var inventory := PlayerInventoryRules.sanitize_public_inventory(
-		target_player_state.get("inventory", {})
-	)
+	var inventory := _cached_public_inventory
+	if inventory.is_empty():
+		return {}
 	var entries: Array = inventory.get("entries", [])
 	var selected_slot := int(inventory.get("selected_slot", 0))
 	if selected_slot < 0 or selected_slot >= entries.size():

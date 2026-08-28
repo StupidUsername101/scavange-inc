@@ -426,16 +426,24 @@ func _test_authoritative_cluster() -> void:
 	view.free()
 	var routing_probe_count := 0
 	var sampled_response_probe_count := 0
+	var local_reverb_probe_count := 0
 	for child: Node in cluster.find_children("*", "AcousticProbe3D", true, false):
 		if not child is AcousticProbe3D:
 			continue
 		routing_probe_count += 1
-		if (child as AcousticProbe3D).sample_reflections:
+		var probe := child as AcousticProbe3D
+		if probe.sample_reflections:
 			sampled_response_probe_count += 1
+		if probe.reverb_scale > 0.0:
+			local_reverb_probe_count += 1
 	_expect(
 		routing_probe_count == LAYOUT.acoustic_probe_descriptors().size()
 		and sampled_response_probe_count == 0,
 		"the bunker retains every routing probe while disabling its sampled response everywhere"
+	)
+	_expect(
+		local_reverb_probe_count == 0,
+		"the garage routing probes cannot synthesize a second local room response"
 	)
 
 	var states: Dictionary = {}
@@ -1063,7 +1071,7 @@ func _large_bunker_directional_dominance(
 			nearest_db = volume_db
 		else:
 			rest_power += pow(10.0, volume_db / 10.0)
-	return {
+	var result := {
 		"nearest_emitter_id": nearest_emitter_id,
 		"loudest_emitter_id": loudest_emitter_id,
 		"nearest_over_rest_db": (
@@ -1071,6 +1079,8 @@ func _large_bunker_directional_dominance(
 			- 10.0 * log(maxf(rest_power, 0.00000001)) / log(10.0)
 		),
 	}
+	renderer.free()
+	return result
 
 
 func _trace_dense_perimeter(

@@ -40,6 +40,7 @@ func _run() -> void:
 	_test_ocular_distortion_contract()
 	_test_client_draw_order()
 	_test_server_wiring()
+	_test_starting_loadout_contract()
 
 	if failure_count == 0:
 		print(
@@ -145,9 +146,10 @@ func _test_definition_contracts() -> void:
 func _test_inventory_and_equipment_transactions() -> void:
 	var player := SERVER_PLAYER_SCENE.instantiate() as ServerPlayer
 	root.add_child(player)
+	var initial_revision := player.inventory_revision
 
 	_expect(
-		player.get_inventory_capacity() == 1,
+		player.get_inventory_capacity() == 1 and initial_revision > 0,
 		"a player without a backpack has one inventory slot"
 	)
 	_expect(player.has_equipped_eyes(), "players begin with factory eyes")
@@ -173,7 +175,8 @@ func _test_inventory_and_equipment_transactions() -> void:
 	_expect(
 		not removed_wrist.is_empty()
 		and not player.has_equipped_wrist_device()
-		and not player.wrist_interface_open,
+		and not player.wrist_interface_open
+		and player.inventory_revision > initial_revision,
 		"losing the wrist item immediately closes its interface"
 	)
 
@@ -185,8 +188,10 @@ func _test_inventory_and_equipment_transactions() -> void:
 		player.try_store_inventory_entry(soda_entry),
 		"the baseline slot accepts one item"
 	)
+	var filled_revision := player.inventory_revision
 	_expect(
-		not player.try_store_inventory_entry(soda_entry),
+		not player.try_store_inventory_entry(soda_entry)
+		and player.inventory_revision == filled_revision,
 		"the baseline slot rejects a second item"
 	)
 
@@ -209,11 +214,13 @@ func _test_inventory_and_equipment_transactions() -> void:
 		)
 
 	var sling := load(BACKPACK_PATHS[0]) as BackpackDefinition
+	var revision_before_rejected_downsize := player.inventory_revision
 	var downsize_result := player.try_equip_world_entry(
 		PlayerInventoryRules.make_entry(sling)
 	)
 	_expect(
-		not bool(downsize_result.get("success", false)),
+		not bool(downsize_result.get("success", false))
+		and player.inventory_revision == revision_before_rejected_downsize,
 		"a smaller backpack cannot discard overflow items"
 	)
 	_expect(
@@ -251,6 +258,15 @@ func _test_inventory_and_equipment_transactions() -> void:
 			removed_eyes.get("instance_state", {}).get("wear", -1.0)
 		) == 0.37,
 		"equipped items preserve per-instance state"
+	)
+	var snapshot := player.to_state_dict()
+	var lean_snapshot := player.to_state_dict(false)
+	_expect(
+		int(snapshot.get("inventory_revision", -1)) == player.inventory_revision
+		and snapshot.get("inventory", {}) is Dictionary
+		and int(lean_snapshot.get("inventory_revision", -1)) == player.inventory_revision
+		and not lean_snapshot.has("inventory"),
+		"authoritative snapshots carry the revision for their cached public inventory"
 	)
 
 	player.free()
@@ -400,6 +416,52 @@ func _test_client_draw_order() -> void:
 		hud.visible and vision.material is ShaderMaterial,
 		"equipped eyes restore both vision and the player HUD"
 	)
+	proxy.apply_replicated_inventory_state(10, {
+		"capacity": 1,
+		"selected_slot": 0,
+		"entries": [],
+		"equipment": {},
+	})
+	proxy.apply_server_state({
+		"player_id": 71,
+		"inventory_revision": 10,
+		"health_ratio": 0.6,
+	})
+	_expect(
+		not hud.visible
+		and is_equal_approx(hud.health_ratio, 0.6),
+		"lean movement snapshots update vitals without reapplying unchanged inventory"
+	)
+	proxy.apply_replicated_inventory_state(9, {
+		"capacity": 1,
+		"selected_slot": 0,
+		"entries": [],
+		"equipment": {
+			PlayerInventoryRules.EYES_SLOT:
+				PlayerInventoryRules.to_public_entry(
+					PlayerInventoryRules.make_entry(factory_eyes)
+				),
+		},
+	})
+	_expect(
+		not hud.visible,
+		"a late reliable inventory revision cannot rewind newer equipment"
+	)
+	proxy.apply_replicated_inventory_state(11, {
+		"capacity": 1,
+		"selected_slot": 0,
+		"entries": [],
+		"equipment": {
+			PlayerInventoryRules.EYES_SLOT:
+				PlayerInventoryRules.to_public_entry(
+					PlayerInventoryRules.make_entry(factory_eyes)
+				),
+		},
+	})
+	_expect(
+		hud.visible and vision.material is ShaderMaterial,
+		"the next reliable inventory revision applies equipment immediately"
+	)
 	proxy.free()
 
 
@@ -423,6 +485,27 @@ func _test_server_wiring() -> void:
 		client_source.contains("USE_HOLD_SECONDS")
 		and client_source.contains("\"equip_item\""),
 		"holding F sends an equip intent"
+	)
+
+
+func _test_starting_loadout_contract() -> void:
+	var server := root.get_node_or_null("Server")
+	var expected_path := "res://resources/character_loadouts/full_body.tres"
+	var all_players_receive_default := server != null
+	for player_id: int in [1, 2, 3, 999]:
+		var loadout := (
+			server.call("_get_starting_body_loadout", player_id) as CharacterLoadout
+			if server != null
+			else null
+		)
+		all_players_receive_default = (
+			all_players_receive_default
+			and loadout != null
+			and loadout.resource_path == expected_path
+		)
+	_expect(
+		all_players_receive_default,
+		"joining player identity never selects a hidden demo body loadout"
 	)
 
 

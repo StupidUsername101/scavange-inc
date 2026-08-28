@@ -1,11 +1,11 @@
 extends SceneTree
 
 const TEST_PLAYER_ID := 91001
-const TEST_DURATION_SECONDS := 16.0
+const TEST_DURATION_SECONDS := 22.0
 const HOLD_CHECK_SECONDS := 2.5
 const FOLLOW_START_SECONDS := 3.0
 const RELOCATION_SECONDS := 8.0
-const RECOVERY_CHECK_SECONDS := 15.0
+const RECOVERY_CHECK_SECONDS := 21.0
 
 #######################################################
 # Runs headless regression coverage for drone runtime integration behavior and reports
@@ -61,7 +61,10 @@ func _add_relocation_obstacle() -> void:
 	wall.position = Vector3(12.0, 3.0, 2.5)
 	var collision := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(0.65, 6.0, 6.0)
+	# The follow behavior selects a nonlinear orbit point, not the player's exact position. Span the
+	# possible orbit corridor so this fixture actually requires static avoidance on every run instead
+	# of sometimes producing a naturally clear target path.
+	shape.size = Vector3(0.65, 6.0, 16.0)
 	collision.shape = shape
 	wall.add_child(collision)
 	test_root.add_child(wall)

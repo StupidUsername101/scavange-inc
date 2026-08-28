@@ -281,6 +281,30 @@ func to_state_dict() -> Dictionary:
 	}
 
 
+func visual_signature() -> String:
+	return visual_signature_from_state(to_state_dict())
+
+
+static func visual_signature_from_state(state: Dictionary) -> String:
+	var barrel_paths := PackedStringArray()
+	var barrel_paths_value: Variant = state.get("barrel_paths", [])
+	if barrel_paths_value is Array:
+		for path_value: Variant in barrel_paths_value as Array:
+			var path := str(path_value)
+			if not path.is_empty():
+				barrel_paths.append(path)
+	if barrel_paths.is_empty():
+		var legacy_barrel_path := str(state.get("barrel_path", ""))
+		if not legacy_barrel_path.is_empty():
+			barrel_paths.append(legacy_barrel_path)
+	return "receiver=%s|barrels=%s|magazine=%s|ammunition=%s" % [
+		str(state.get("receiver_path", "")),
+		",".join(barrel_paths),
+		str(state.get("magazine_path", "")),
+		str(state.get("ammunition_path", "")),
+	]
+
+
 func apply_state_dict(state: Dictionary) -> void:
 	var receiver_path := str(state.get("receiver_path", ""))
 	var magazine_path := str(state.get("magazine_path", ""))

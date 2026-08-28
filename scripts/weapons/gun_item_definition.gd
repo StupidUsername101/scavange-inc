@@ -10,15 +10,20 @@ extends ItemDefinition
 @export_group("Firearm")
 @export var default_build: GunBuild
 
+const BUILD_SIGNATURE_KEY := "build_signature"
+
 
 func make_default_instance_state() -> Dictionary:
 	if default_build == null:
 		return {
 			"build": {},
+			BUILD_SIGNATURE_KEY: GunBuild.visual_signature_from_state({}),
 			"rounds": 0,
 		}
+	var build_state := default_build.to_state_dict()
 	return {
-		"build": default_build.to_state_dict(),
+		"build": build_state,
+		BUILD_SIGNATURE_KEY: GunBuild.visual_signature_from_state(build_state),
 		"rounds": default_build.get_magazine_capacity(),
 	}
 
@@ -30,6 +35,10 @@ func normalize_instance_state(state: Dictionary) -> Dictionary:
 			default_build.to_state_dict()
 			if default_build != null
 			else {}
+		)
+	if str(result.get(BUILD_SIGNATURE_KEY, "")).is_empty():
+		result[BUILD_SIGNATURE_KEY] = GunBuild.visual_signature_from_state(
+			SafeVariant.dictionary_copy(result.get("build", {}), false)
 		)
 	var build := get_build(result)
 	result["rounds"] = clampi(
@@ -45,6 +54,7 @@ func get_public_instance_state(state: Dictionary) -> Dictionary:
 	var build := get_build(normalized)
 	return {
 		"build": build.to_state_dict(),
+		BUILD_SIGNATURE_KEY: str(normalized.get(BUILD_SIGNATURE_KEY, "")),
 		"rounds": int(normalized.get("rounds", 0)),
 		"magazine_capacity": build.get_magazine_capacity(),
 		"build_valid": build.is_compatible(),

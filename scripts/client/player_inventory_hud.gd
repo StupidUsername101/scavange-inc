@@ -44,7 +44,7 @@ func _ready() -> void:
 	queue_redraw()
 
 
-func apply_player_state(state: Dictionary) -> void:
+func apply_player_state(state: Dictionary, apply_inventory := true) -> void:
 	health_ratio = clampf(
 		SafeVariant.finite_float_or(state.get("health_ratio", health_ratio), health_ratio),
 		0.0,
@@ -62,16 +62,17 @@ func apply_player_state(state: Dictionary) -> void:
 		1.0
 	)
 
-	var inventory: Dictionary = PlayerInventoryRules.sanitize_public_inventory(
-		state.get("inventory", {})
-	)
-	var next_capacity: int = int(inventory["capacity"])
-	if next_capacity != capacity:
-		capacity = next_capacity
-		capacity_pulse = 1.0
-	selected_slot = int(inventory["selected_slot"])
-	inventory_entries = (inventory["entries"] as Array).duplicate(true)
-	equipment = (inventory["equipment"] as Dictionary).duplicate(true)
+	if apply_inventory:
+		var inventory: Dictionary = PlayerInventoryRules.sanitize_public_inventory(
+			state.get("inventory", {})
+		)
+		var next_capacity: int = int(inventory["capacity"])
+		if next_capacity != capacity:
+			capacity = next_capacity
+			capacity_pulse = 1.0
+		selected_slot = int(inventory["selected_slot"])
+		inventory_entries = (inventory["entries"] as Array).duplicate(true)
+		equipment = (inventory["equipment"] as Dictionary).duplicate(true)
 	queue_redraw()
 
 

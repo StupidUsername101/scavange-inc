@@ -1,6 +1,8 @@
 class_name ServerPlayer
 extends CharacterBody3D
 
+signal inventory_changed(revision: int)
+
 const WALK_SPEED := 5.75
 const RUN_SPEED := 13.5
 const GROUND_ACCELERATION := 46.0
@@ -130,6 +132,9 @@ var is_actually_running := false
 var inventory_entries: Array[Dictionary] = []
 var equipment_entries: Dictionary = {}
 var selected_inventory_slot := 0
+var inventory_revision := 0
+var _cached_public_inventory_revision := -1
+var _cached_public_inventory: Dictionary = {}
 var weapon_fire_cooldown_remaining := 0.0
 var weapon_reload_remaining := 0.0
 var weapon_reload_duration := 0.0
@@ -463,16 +468,27 @@ func _on_grab_load_changed(
 
 
 func _install_default_equipment() -> void:
+	var changed := false
 	if not equipment_entries.has(PlayerInventoryRules.EYES_SLOT):
 		var eye_entry := PlayerInventoryRules.make_entry(DEFAULT_EYES)
 		if not eye_entry.is_empty():
 			equipment_entries[PlayerInventoryRules.EYES_SLOT] = eye_entry
+			changed = true
 	if not equipment_entries.has(PlayerInventoryRules.WRIST_DEVICE_SLOT):
 		var wrist_entry := PlayerInventoryRules.make_entry(
 			DEFAULT_WRIST_DEVICE
 		)
 		if not wrist_entry.is_empty():
 			equipment_entries[PlayerInventoryRules.WRIST_DEVICE_SLOT] = wrist_entry
+			changed = true
+	if changed:
+		_mark_inventory_changed()
+
+
+func _mark_inventory_changed() -> void:
+	inventory_revision += 1
+	_cached_public_inventory_revision = -1
+	inventory_changed.emit(inventory_revision)
 
 
 func get_inventory_capacity() -> int:
@@ -496,7 +512,8 @@ func select_inventory_slot(slot_index: int) -> void:
 	)
 	if next_slot != selected_inventory_slot:
 		_cancel_weapon_reload()
-	selected_inventory_slot = next_slot
+		selected_inventory_slot = next_slot
+		_mark_inventory_changed()
 
 
 func try_store_inventory_entry(entry: Dictionary) -> bool:
@@ -510,6 +527,7 @@ func try_store_inventory_entry(entry: Dictionary) -> bool:
 		0,
 		maxi(get_inventory_capacity() - 1, 0)
 	)
+	_mark_inventory_changed()
 	return true
 
 
@@ -531,6 +549,7 @@ func try_equip_world_entry(entry: Dictionary) -> Dictionary:
 	equipment_entries[slot] = entry.duplicate(true)
 	if slot == PlayerInventoryRules.WRIST_DEVICE_SLOT:
 		set_wrist_interface_open(false)
+	_mark_inventory_changed()
 	return {
 		"success": true,
 		"slot": slot,
@@ -574,6 +593,7 @@ func try_equip_inventory_entry(slot_index: int) -> Dictionary:
 		0,
 		maxi(get_inventory_capacity() - 1, 0)
 	)
+	_mark_inventory_changed()
 	return {
 		"success": true,
 		"slot": equipment_slot,
@@ -605,6 +625,7 @@ func try_unequip_to_world(equipment_slot: String) -> Dictionary:
 		0,
 		maxi(get_inventory_capacity() - 1, 0)
 	)
+	_mark_inventory_changed()
 	return entry
 
 
@@ -622,6 +643,7 @@ func take_selected_inventory_entry() -> Dictionary:
 		0,
 		maxi(get_inventory_capacity() - 1, 0)
 	)
+	_mark_inventory_changed()
 	return entry
 
 
@@ -661,6 +683,7 @@ func try_fire_selected_gun() -> Dictionary:
 		fired_barrel_count
 	)
 	inventory_entries[selected_inventory_slot] = entry
+	_mark_inventory_changed()
 	weapon_fire_cooldown_remaining = (
 		1.0 / maxf(float(profile.get("rounds_per_second", 1.0)), 0.1)
 	)
@@ -768,6 +791,7 @@ func _update_weapon_state(delta: float) -> void:
 			entry.get("instance_state", {})
 		)
 		inventory_entries[weapon_reload_slot] = entry
+		_mark_inventory_changed()
 	_cancel_weapon_reload()
 
 
@@ -787,8 +811,11 @@ func spill_all_item_entries() -> Array[Dictionary]:
 		var entry: Dictionary = entry_value
 		if not entry.is_empty():
 			result.append(entry.duplicate(true))
+	var had_entries := not inventory_entries.is_empty() or not equipment_entries.is_empty()
 	inventory_entries.clear()
 	equipment_entries.clear()
+	if had_entries:
+		_mark_inventory_changed()
 	set_wrist_interface_open(false)
 	return result
 
@@ -965,6 +992,8 @@ func _get_vision_distortion_state() -> Dictionary:
 
 
 func _get_public_inventory_state() -> Dictionary:
+	if _cached_public_inventory_revision == inventory_revision:
+		return _cached_public_inventory
 	var public_inventory: Array[Dictionary] = []
 	for entry: Dictionary in inventory_entries:
 		public_inventory.append(PlayerInventoryRules.to_public_entry(entry))
@@ -975,12 +1004,14 @@ func _get_public_inventory_state() -> Dictionary:
 		var entry: Dictionary = equipment_entries[slot_value]
 		public_equipment[slot] = PlayerInventoryRules.to_public_entry(entry)
 
-	return {
+	_cached_public_inventory = {
 		"capacity": get_inventory_capacity(),
 		"selected_slot": selected_inventory_slot,
 		"entries": public_inventory,
 		"equipment": public_equipment,
 	}
+	_cached_public_inventory_revision = inventory_revision
+	return _cached_public_inventory
 
 func server_physics_tick(delta: float) -> void:
 	# A server-owned presentation clock gives every peer the same slow breathing/weight-shift phase
@@ -1620,8 +1651,8 @@ static func horizontal_velocity_after_wall_collision(
 	return current_velocity - wall_normal * inward_speed
 
 
-func to_state_dict() -> Dictionary:
-	return {
+func to_state_dict(include_inventory := true) -> Dictionary:
+	var state := {
 		"player_id": player_id,
 		"pos": global_position,
 		"rot": global_rotation,
@@ -1638,7 +1669,7 @@ func to_state_dict() -> Dictionary:
 		"footstep_surface": footstep_surface,
 		"health_ratio": health / MAX_HEALTH,
 		"stamina_ratio": stamina / MAX_STAMINA,
-		"inventory": _get_public_inventory_state(),
+		"inventory_revision": inventory_revision,
 		"interaction_hint": interaction_hint,
 		"vision_distortion": _get_vision_distortion_state(),
 		"weapon_reload_ratio": (
@@ -1655,3 +1686,6 @@ func to_state_dict() -> Dictionary:
 		"wrist_interface_open": wrist_interface_open,
 		"wrist_display_page": wrist_display_page,
 	}
+	if include_inventory:
+		state["inventory"] = _get_public_inventory_state()
+	return state

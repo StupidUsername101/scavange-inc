@@ -140,6 +140,11 @@ func _test_inventory_fire_contract(
 	if definition == null:
 		return
 	var state := WeaponCraftingCatalog.make_crafted_instance_state(build)
+	_expect(
+		str(state.get(GunItemDefinition.BUILD_SIGNATURE_KEY, ""))
+		== build.visual_signature(),
+		"fabrication stamps one stable visual signature onto the crafted instance"
+	)
 	var player_scene := load("res://scenes/server/server_player.tscn") as PackedScene
 	var player := player_scene.instantiate() as ServerPlayer
 	root.add_child(player)
