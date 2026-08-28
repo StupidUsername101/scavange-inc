@@ -241,6 +241,38 @@ func _test_lobby_browser_behavior() -> void:
 		return
 	var browser: Variant = browser_scene.instantiate()
 	root.add_child(browser)
+	_expect(
+		browser.extract_friend_lobby_id(
+			{"id": 480, "lobby": 109775241012345678},
+			"",
+			""
+		) == 109775241012345678,
+		"friend game state resolves its exact 64-bit Steam lobby ID"
+	)
+	_expect(
+		browser.extract_friend_lobby_id(
+			{},
+			"109775241087654321",
+			""
+		) == 109775241087654321,
+		"friend group presence recovers a lobby missing from game state"
+	)
+	_expect(
+		browser.extract_friend_lobby_id(
+			{},
+			"",
+			"+connect_lobby 109775241099999999"
+		) == 109775241099999999,
+		"friend Join Game presence provides the final discovery fallback"
+	)
+	_expect(
+		browser.extract_friend_lobby_id(
+			{},
+			"not-an-id",
+			"+connect_lobby nope"
+		) == 0,
+		"malformed friend presence cannot produce a lobby candidate"
+	)
 	var valid_snapshot := {
 		"name": "  Test\nLobby  ",
 		"members": 2,
@@ -409,10 +441,16 @@ func _test_transport_wiring() -> void:
 		"browser actually submits its filtered request"
 	)
 	_expect(
-		browser_source.contains(
+		browser_source.contains("Steam.getFriendGamePlayed(")
+		and browser_source.contains("Steam.getFriendRichPresence(")
+		and browser_source.contains("friend_rich_presence_update.connect("),
+		"browser discovers a friend's current lobby independently of Spacewar's public index"
+	)
+	_expect(
+		not browser_source.contains(
 			"Steam.addRequestLobbyListFilterSlotsAvailable(1)"
 		),
-		"browser asks Steam for lobbies with an open slot"
+		"mutable availability is validated locally instead of hiding lobby IDs during discovery"
 	)
 
 
