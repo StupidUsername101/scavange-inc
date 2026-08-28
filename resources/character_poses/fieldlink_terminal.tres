@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="CharacterPoseDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/characters/character_pose_definition.gd" id="1_pose"]
+
+[resource]
+script = ExtResource("1_pose")
+pose_id = &"fieldlink_terminal"
+procedural_inheritance = 0.28
+left_arm_weight = 1.0
+left_arm_rotation = Vector3(0.9, 0, 0.86)
+right_arm_weight = 1.0
+right_arm_rotation = Vector3(0.9, 0, -0.86)

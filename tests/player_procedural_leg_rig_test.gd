@@ -489,6 +489,58 @@ func _test_independent_split_height_landing() -> void:
 		and yield_offset.y < -0.02,
 		"split-height support nonlinearly tilts and lowers the hips/upper body toward the uneven stance"
 	)
+	var whole_body_pose := PlayerCharacterPoseController.new()
+	whole_body_pose.set_expression_identity(31)
+	for frame: int in range(20):
+		whole_body_pose.update(
+			STEP,
+			float(frame) * STEP,
+			0.25,
+			0.0,
+			0.0,
+			0.0,
+			Vector3.ZERO,
+			true,
+			false,
+			rig,
+			true,
+			true,
+			true,
+			true
+		)
+	_expect(
+		whole_body_pose.upper_body_rotation.z < deg_to_rad(-2.5)
+		and whole_body_pose.upper_body_position.y < -0.015,
+		"the layered full-body pose preserves real split-height balance instead of flattening it with idle or action motion"
+	)
+	var authored_pose := CharacterPoseDefinition.new()
+	authored_pose.procedural_inheritance = 0.0
+	authored_pose.upper_body_weight = 1.0
+	authored_pose.upper_body_rotation = Vector3(0.1, 0.0, 0.0)
+	whole_body_pose.set_action_pose(authored_pose, 1.0)
+	for frame: int in range(20):
+		whole_body_pose.update(
+			STEP,
+			0.5 + float(frame) * STEP,
+			0.25,
+			0.0,
+			0.0,
+			0.0,
+			Vector3.ZERO,
+			true,
+			false,
+			rig,
+			true,
+			true,
+			true,
+			true
+		)
+	_expect(
+		whole_body_pose.upper_body_rotation.x > 0.08
+		and whole_body_pose.upper_body_rotation.z < deg_to_rad(-2.5)
+		and whole_body_pose.upper_body_position.y < -0.015,
+		"an authored emote/action remains additive to physical support instead of replacing balance"
+	)
 	fixture.queue_free()
 	await _settle_physics()
 

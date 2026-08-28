@@ -135,6 +135,7 @@ var primary_audio_prediction_session := 0
 var primary_audio_prediction_shot_index := 1
 var weapon_rng := RandomNumberGenerator.new()
 var gait := PlayerGait.new()
+var expression_clock := 0.0
 var footstep_surface: StringName = &"concrete"
 var interaction_hint := ""
 var vision_distortion_remaining := 0.0
@@ -947,6 +948,10 @@ func _get_public_inventory_state() -> Dictionary:
 	}
 
 func server_physics_tick(delta: float) -> void:
+	# A server-owned presentation clock gives every peer the same slow breathing/weight-shift phase
+	# without replicating bones. It advances through ragdoll and stationary states so late joins do
+	# not restart a character's expression loop.
+	expression_clock += maxf(delta, 0.0)
 	rotation.y = look_yaw
 	var was_ragdoll_active := ragdoll_active
 	_update_trip_state(delta)
@@ -1571,6 +1576,7 @@ func to_state_dict() -> Dictionary:
 		"gait_cycle": gait.get_cycle(),
 		"gait_stride_distance": gait.stride_distance,
 		"gait_active": gait.active,
+		"expression_clock": expression_clock,
 		"footstep_surface": footstep_surface,
 		"health_ratio": health / MAX_HEALTH,
 		"stamina_ratio": stamina / MAX_STAMINA,

@@ -29,11 +29,14 @@ const FATIGUE_SHOULDER_POSITION_LIFT := 0.32
 const FATIGUE_SHOULDER_ROTATION_LIFT := 0.38
 const MAX_FRAME_DELTA_SECONDS := 0.1
 const TIME_ROLLOVER_SECONDS := 4096.0
+const CRITICALLY_DAMPED_VECTOR3 := preload(
+	"res://scripts/characters/critically_damped_vector3.gd"
+)
 
 var position_offset := Vector3.ZERO
 var rotation_offset := Vector3.ZERO
-var _position_velocity := Vector3.ZERO
-var _rotation_velocity := Vector3.ZERO
+var _position_spring := CRITICALLY_DAMPED_VECTOR3.new()
+var _rotation_spring := CRITICALLY_DAMPED_VECTOR3.new()
 var _gait_bob_offset := Vector3.ZERO
 var _movement_weight := 0.0
 var _gait_cycle := 0.0
@@ -108,26 +111,16 @@ func advance(delta: float) -> void:
 		_run_weight,
 		fatigue_weight
 	)
-	var angular_frequency := TAU * RESPONSE_FREQUENCY_HZ
-	var decay := exp(-angular_frequency * safe_delta)
-
-	var position_error := position_offset - target_position
-	var position_step := (
-		_position_velocity + position_error * angular_frequency
-	) * safe_delta
-	position_offset = target_position + (position_error + position_step) * decay
-	_position_velocity = (
-		_position_velocity - position_step * angular_frequency
-	) * decay
-
-	var rotation_error := rotation_offset - target_rotation
-	var rotation_step := (
-		_rotation_velocity + rotation_error * angular_frequency
-	) * safe_delta
-	rotation_offset = target_rotation + (rotation_error + rotation_step) * decay
-	_rotation_velocity = (
-		_rotation_velocity - rotation_step * angular_frequency
-	) * decay
+	position_offset = _position_spring.advance(
+		target_position,
+		safe_delta,
+		RESPONSE_FREQUENCY_HZ
+	)
+	rotation_offset = _rotation_spring.advance(
+		target_rotation,
+		safe_delta,
+		RESPONSE_FREQUENCY_HZ
+	)
 
 
 static func shoulder_position_at_cycle(

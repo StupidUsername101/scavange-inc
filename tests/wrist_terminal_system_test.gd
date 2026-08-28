@@ -1189,6 +1189,7 @@ func _test_local_body_arm_isolation() -> void:
 	proxy.target_wrist_interface_open = true
 	proxy.wrist_pose_weight = 0.0
 	proxy.call("_update_wrist_pose", 1.0)
+	proxy.call("_update_character_pose", 1.0)
 	proxy.apply_replicated_wrist_state(true, &"scanner")
 	var wrist_visual := proxy.equipment_visuals.get(
 		PlayerInventoryRules.WRIST_DEVICE_SLOT
@@ -1247,6 +1248,7 @@ func _test_local_body_arm_isolation() -> void:
 	})
 	proxy.wrist_pose_weight = 0.0
 	proxy.call("_update_wrist_pose", 1.0)
+	proxy.call("_update_character_pose", 1.0)
 	var right_arm_device_rear_z := _maximum_relative_z(
 		remote_backplate,
 		body_visual

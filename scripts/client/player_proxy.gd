@@ -4,12 +4,6 @@ class_name PlayerProxy
 const INTERP_SPEED := 12.0
 const MAX_EXTRAPOLATION_TIME := 0.25
 
-const WALK_BOB_VERTICAL := 0.04
-const WALK_BOB_HORIZONTAL := 0.022
-
-const RUN_BOB_VERTICAL := 0.04
-const RUN_BOB_HORIZONTAL := 0.026
-
 const HEADBOB_BLEND_SPEED := 8.0
 const HEADBOB_RUN_BLEND_SPEED := 5.0
 const HEADBOB_PHASE_SYNC_SPEED := 10.0
@@ -30,8 +24,9 @@ const LEFT_ARM_REST_POSITION := Vector3(-0.47, 0.16, 0.0)
 const RIGHT_ARM_REST_POSITION := Vector3(0.47, 0.16, 0.0)
 const LEFT_SHOULDER_POSITION := Vector3(-0.47, 0.57, 0.0)
 const RIGHT_SHOULDER_POSITION := Vector3(0.47, 0.57, 0.0)
-const LEFT_WRIST_POSE_ROTATION := Vector3(0.9, 0.0, 0.86)
-const RIGHT_WRIST_POSE_ROTATION := Vector3(0.9, 0.0, -0.86)
+const FIELDLINK_POSE: CharacterPoseDefinition = preload(
+	"res://resources/character_poses/fieldlink_terminal.tres"
+)
 const WRIST_PRESENTATION_SCENE := preload(
 	"res://scenes/proxy/wrist_terminal_presentation.tscn"
 )
@@ -106,6 +101,9 @@ var local_move_input := Vector2.ZERO
 var local_run_input := false
 var local_predicted_horizontal_speed := 0.0
 var target_stamina_ratio := 1.0
+var target_expression_clock := 0.0
+var resolved_pose_gait_cycle := 0.5
+var character_pose := PlayerCharacterPoseController.new()
 
 var target_on_floor := false
 var target_jump_sequence := 0
@@ -166,6 +164,7 @@ func _ready() -> void:
 	camera_pivot_rest_position = camera_pivot.position
 	audio_listener_rest_position = audio_listener.position
 	procedural_leg_rig.set_expression_identity(player_id)
+	character_pose.set_expression_identity(player_id)
 	edit_aim_hit.material_override = _create_edit_aim_material()
 	edit_aim_hit.visible = false
 
@@ -279,6 +278,7 @@ func apply_server_state(state: Dictionary) -> void:
 	player_id = SafeVariant.integral_int_or(state.get("player_id", -1), -1)
 	if procedural_leg_rig != null:
 		procedural_leg_rig.set_expression_identity(player_id)
+	character_pose.set_expression_identity(player_id)
 	var current_position := global_position if is_inside_tree() else position
 	var current_rotation := global_rotation if is_inside_tree() else rotation
 
@@ -304,6 +304,13 @@ func apply_server_state(state: Dictionary) -> void:
 	target_ragdoll_active = SafeVariant.strict_bool_or(
 		state.get("ragdoll_active", false),
 		false
+	)
+	target_expression_clock = maxf(
+		SafeVariant.finite_float_or(
+			state.get("expression_clock"),
+			target_expression_clock
+		),
+		0.0
 	)
 	target_trip_sequence = maxi(
 		SafeVariant.integral_int_or(
@@ -992,29 +999,6 @@ func _update_wrist_pose(delta: float) -> void:
 	)
 	if not pose_active and is_zero_approx(wrist_pose_weight):
 		wrist_mouse_look_owns_pitch = false
-	var eased_weight := smoothstep(0.0, 1.0, wrist_pose_weight)
-	# The owner has a camera-mounted arm rig with geometry authored around the
-	# Fieldlink. Rotating the replicated body arm as well pushes it through the
-	# camera and screen; only other players need this world-space pose.
-	var world_arm_weight := 0.0 if is_local_player else eased_weight
-	# Rotate the capsule and its wrist mount around the anatomical shoulder,
-	# rather than around the capsule's center. Positive X brings the wrist
-	# toward world-forward (-Z); the old negative, center-pivoted pose folded
-	# the device backward through the torso.
-	_apply_remote_arm_pose(
-		left_arm_visual,
-		LEFT_ARM_REST_POSITION,
-		LEFT_SHOULDER_POSITION,
-		LEFT_WRIST_POSE_ROTATION,
-		world_arm_weight if has_left_arm else 0.0
-	)
-	_apply_remote_arm_pose(
-		right_arm_visual,
-		RIGHT_ARM_REST_POSITION,
-		RIGHT_SHOULDER_POSITION,
-		RIGHT_WRIST_POSE_ROTATION,
-		world_arm_weight if not has_left_arm else 0.0
-	)
 	_update_held_item_mount()
 
 
@@ -1101,15 +1085,6 @@ func update_headbob(delta: float) -> void:
 	)
 
 	if not gait_initialized:
-		camera_pivot.position = camera_pivot_rest_position
-		if wrist_presentation != null:
-			wrist_presentation.set_motion_input(
-				Vector3.ZERO,
-				0.0,
-				1.0 - target_stamina_ratio,
-				visual_gait_cycle,
-				0.0
-			)
 		return
 	stride_distance = maxf(stride_distance, PlayerGait.MINIMUM_STRIDE_DISTANCE)
 	var cycles_per_second := (
@@ -1137,30 +1112,6 @@ func update_headbob(delta: float) -> void:
 			1.0
 		)
 	_predict_local_footstep(is_moving)
-
-	var walk_bob_offset := PlayerGait.calculate_bob_offset(
-		visual_gait_cycle,
-		WALK_BOB_VERTICAL,
-		WALK_BOB_HORIZONTAL
-	)
-	var run_bob_offset := PlayerGait.calculate_run_bob_offset(
-		visual_gait_cycle,
-		RUN_BOB_VERTICAL,
-		RUN_BOB_HORIZONTAL
-	)
-	var bob_offset := walk_bob_offset.lerp(
-		run_bob_offset,
-		headbob_run_weight
-	)
-	camera_pivot.position = camera_pivot_rest_position + bob_offset * headbob_weight
-	if wrist_presentation != null:
-		wrist_presentation.set_motion_input(
-			bob_offset * headbob_weight,
-			headbob_weight,
-			1.0 - target_stamina_ratio,
-			visual_gait_cycle,
-			headbob_run_weight
-		)
 
 
 func _predict_local_footstep(is_moving: bool) -> void:
@@ -1313,6 +1264,7 @@ func _process(delta: float) -> void:
 			target_gait_cycle = server_player.gait.get_cycle()
 			target_gait_stride_distance = server_player.gait.stride_distance
 			target_gait_active = server_player.gait.active
+			target_expression_clock = server_player.expression_clock
 			target_jump_sequence = server_player.jump_sequence
 			target_ragdoll_active = server_player.ragdoll_active
 			target_trip_sequence = server_player.trip_sequence
@@ -1332,6 +1284,7 @@ func _process(delta: float) -> void:
 			else:
 				rotation.y = server_player.rotation.y
 			_update_procedural_legs(delta, server_player)
+			_update_character_pose(delta)
 			_sync_trip_presentation(delta)
 			_update_trip_camera(delta)
 
@@ -1365,6 +1318,7 @@ func _process(delta: float) -> void:
 			weight
 		)
 	_update_procedural_legs(delta)
+	_update_character_pose(delta)
 	_sync_trip_presentation(delta)
 	_update_trip_camera(delta)
 
@@ -1462,9 +1416,16 @@ func _update_trip_camera(delta: float) -> void:
 	)
 	camera_pivot.rotation.x = (
 		_resolved_camera_pitch()
+		+ character_pose.camera_rotation.x * (1.0 - trip_camera_weight)
 		+ ragdoll_camera_pitch * trip_camera_weight
 	)
-	camera_pivot.rotation.z = ragdoll_camera_roll * trip_camera_weight
+	camera_pivot.rotation.y = (
+		character_pose.camera_rotation.y * (1.0 - trip_camera_weight)
+	)
+	camera_pivot.rotation.z = (
+		character_pose.camera_rotation.z * (1.0 - trip_camera_weight)
+		+ ragdoll_camera_roll * trip_camera_weight
+	)
 
 
 func _update_procedural_legs(
@@ -1495,8 +1456,87 @@ func _update_procedural_legs(
 		target_gait_active,
 		target_jump_sequence
 	)
-	upper_body_pose.position = procedural_leg_rig.get_body_yield_offset()
-	upper_body_pose.rotation = procedural_leg_rig.get_body_yield_rotation()
+	resolved_pose_gait_cycle = gait_cycle
+
+
+func _update_character_pose(delta: float) -> void:
+	var action_weight := (
+		0.0
+		if is_local_player
+		else smoothstep(0.0, 1.0, wrist_pose_weight)
+	)
+	var fieldlink_on_left := has_left_arm
+	character_pose.set_action_pose(
+		FIELDLINK_POSE,
+		action_weight,
+		fieldlink_on_left,
+		not fieldlink_on_left and has_right_arm
+	)
+	var expression_clock := target_expression_clock
+	if not multiplayer.is_server():
+		expression_clock += time_since_last_state
+	var pose_movement_weight := headbob_weight
+	var pose_run_weight := headbob_run_weight
+	if not is_local_player:
+		pose_movement_weight = (
+			1.0
+			if target_gait_active and target_on_floor and not target_ragdoll_active
+			else 0.0
+		)
+		pose_run_weight = clampf(
+			inverse_lerp(
+				PlayerGait.WALK_STEP_DISTANCE,
+				PlayerGait.RUN_STEP_DISTANCE,
+				target_gait_stride_distance
+			),
+			0.0,
+			1.0
+		)
+	var local_velocity := global_basis.inverse() * target_velocity
+	character_pose.update(
+		delta,
+		expression_clock,
+		resolved_pose_gait_cycle,
+		pose_movement_weight,
+		pose_run_weight,
+		1.0 - target_stamina_ratio,
+		local_velocity,
+		target_on_floor,
+		target_ragdoll_active,
+		procedural_leg_rig,
+		has_left_arm,
+		has_right_arm,
+		has_left_leg,
+		has_right_leg
+	)
+	upper_body_pose.position = character_pose.upper_body_position
+	upper_body_pose.rotation = character_pose.upper_body_rotation
+	head_visual.position = Vector3(0.0, 0.78, 0.0) + character_pose.head_position
+	head_visual.rotation = character_pose.head_rotation
+	_apply_remote_arm_pose(
+		left_arm_visual,
+		LEFT_ARM_REST_POSITION,
+		LEFT_SHOULDER_POSITION,
+		character_pose.left_arm_rotation,
+		1.0 if has_left_arm else 0.0
+	)
+	_apply_remote_arm_pose(
+		right_arm_visual,
+		RIGHT_ARM_REST_POSITION,
+		RIGHT_SHOULDER_POSITION,
+		character_pose.right_arm_rotation,
+		1.0 if has_right_arm else 0.0
+	)
+	if is_local_player:
+		camera_pivot.position = camera_pivot_rest_position + character_pose.camera_position
+		if wrist_presentation != null:
+			wrist_presentation.set_motion_input(
+				character_pose.camera_position,
+				headbob_weight,
+				1.0 - target_stamina_ratio,
+				resolved_pose_gait_cycle,
+				headbob_run_weight
+			)
 
 
 func _create_edit_aim_material() -> StandardMaterial3D:

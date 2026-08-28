@@ -316,6 +316,13 @@ func get_active_swing_side() -> int:
 	return _active_swing_side
 
 
+func get_swing_progress(side: int) -> float:
+	var state := _state_for_side(side)
+	if state == null or not state.available:
+		return 1.0
+	return clampf(state.swing_progress, 0.0, 1.0)
+
+
 func get_probe_cast_count() -> int:
 	return _probe_cast_count
 

@@ -11,6 +11,7 @@ godot --headless --path . --script res://tests/player_equipment_system_test.gd
 godot --headless --path . --script res://tests/wrist_terminal_system_test.gd
 godot --headless --path . --script res://tests/player_movement_test.gd
 godot --headless --path . --script res://tests/player_procedural_leg_rig_test.gd
+godot --headless --path . --script res://tests/player_character_pose_system_test.gd
 godot --headless --path . --script res://tests/grab_rotation_test.gd
 godot --headless --path . --script res://tests/body_part_shop_system_test.gd
 godot --headless --path . --script res://tests/ballistics_system_test.gd
