@@ -18,8 +18,8 @@ silently replacing it.
 
 ## Execution checkpoint — 2026-08-29
 
-Passes 1 and 2 are implemented and characterized. Pass 3 remains deliberately separate so class
-extraction and world-layout migration do not share a checkpoint with a multiplayer protocol change.
+Passes 1 and 2 are implemented and characterized. The first Pass 3 seam was then implemented as a
+separate checkpoint so class extraction did not share a commit with the multiplayer protocol change.
 
 Completed work:
 
@@ -36,6 +36,23 @@ Completed work:
   GDScript into a 3,062-byte cached loader plus a 328,984-byte versioned binary artifact;
 - made cleared client audio sessions release old compressed stream handles, and made the relevant
   audio fixtures explicitly release temporary renderers/services.
+
+Pass 3 progress:
+
+- `ServerReplicationService` now owns snapshot cadence and sequence numbers, grabbed-item motion
+  sequence numbers, optional-stream lifecycle state, state collection, radio/listener publication,
+  local prediction contexts, and reliable inventory publication;
+- `server.gd` retains gameplay registries and admission authority, and exposes only the narrow
+  `publish_states()` delegation point needed by existing runtime/tests;
+- the service performs one validated bind to the autoload coordinator. This avoids a Godot circular
+  script-type dependency without introducing per-tick reflection, context dictionaries, or copied
+  registries;
+- the parked drone integration obstacle is now placed across the live recovery command. It tests
+  local context steering deterministically without accidentally demanding global path planning around
+  an arbitrarily widened wall.
+
+Player presentation, the wrist controller, top-level world layout, and registration adapters remain
+the next isolated Pass 3 checkpoints.
 
 Measured idle replication effect: the old empty world emitted one empty projectile replacement at
 20 Hz and three empty bulk replacements at 10 Hz, or 50 redundant empty RPCs per second. Stable-empty

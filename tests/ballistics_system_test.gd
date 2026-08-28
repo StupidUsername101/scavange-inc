@@ -433,13 +433,16 @@ func _test_intercept_solution() -> void:
 
 func _test_projectile_network_wiring() -> void:
 	var server_source := _read_text("res://scripts/server/server.gd")
+	var replication_source := _read_text(
+		"res://scripts/network/server_replication_service.gd"
+	)
 	var drone_source := _read_text(
 		"res://scripts/server/server_drone.gd"
 	)
 	var client_source := _read_text("res://scripts/client/client.gd")
 	_expect(
 		server_source.contains("spawn_ballistic_projectile(")
-		and server_source.contains("on_projectile_states_received"),
+		and replication_source.contains("on_projectile_states_received"),
 		"server publishes authoritative projectile state"
 	)
 	_expect(

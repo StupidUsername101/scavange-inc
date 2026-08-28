@@ -229,6 +229,9 @@ func _test_runtime_context_gate() -> void:
 func _test_network_architecture_contract() -> void:
 	var client_source := FileAccess.get_file_as_string("res://scripts/client/client.gd")
 	var server_source := FileAccess.get_file_as_string("res://scripts/server/server.gd")
+	var replication_source := FileAccess.get_file_as_string(
+		"res://scripts/network/server_replication_service.gd"
+	)
 	var player_source := FileAccess.get_file_as_string(
 		"res://scripts/server/server_player.gd"
 	)
@@ -252,7 +255,7 @@ func _test_network_architecture_contract() -> void:
 	)
 	_expect(
 		NetworkReplicationSchedule.LOCAL_AUDIO_CONTEXT_INTERVAL_TICKS == 4
-		and server_source.contains("build_local_prediction_context(")
+		and replication_source.contains("build_local_prediction_context(")
 		and player_source.contains("current_automatic_audio_prediction_key"),
 		"cached listener context runs at 5 Hz while held fire reconciles every deterministic shot"
 	)

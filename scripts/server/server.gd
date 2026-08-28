@@ -1,4 +1,5 @@
 extends Node
+class_name ServerRuntimeCoordinator
 
 const SYNC_RATE := 0.05
 const DEFAULT_MONEY := 1000
@@ -42,11 +43,8 @@ const FIELDLINK_DISPLAY_STATE := preload(
 const MULTIPLAYER_CHANNELS := preload(
 	"res://scripts/network/multiplayer_channel_contract.gd"
 )
-const REPLICATION_SCHEDULE := preload(
-	"res://scripts/network/network_replication_schedule.gd"
-)
-const SNAPSHOT_STREAM_TRACKER := preload(
-	"res://scripts/network/network_snapshot_stream_tracker.gd"
+const SERVER_REPLICATION_SERVICE := preload(
+	"res://scripts/network/server_replication_service.gd"
 )
 const PHYSICAL_IMPACT_RESPONSE := preload(
 	"res://scripts/audio/physical_impact_response.gd"
@@ -54,17 +52,10 @@ const PHYSICAL_IMPACT_RESPONSE := preload(
 const LOCAL_AUDIO_PREDICTION := preload(
 	"res://scripts/audio/local_audio_prediction.gd"
 )
-const RADIO_STATE_SNAPSHOT_CODEC := preload(
-	"res://scripts/audio/radio_state_snapshot_codec.gd"
-)
 const STEAM_PRESENCE_CONNECT := "connect"
 const STEAM_PRESENCE_STATUS := "status"
 const STEAM_PRESENCE_GROUP := "steam_player_group"
 const STEAM_PRESENCE_GROUP_SIZE := "steam_player_group_size"
-const PROJECTILE_SNAPSHOT_STREAM := &"projectiles"
-const DRONE_PART_SNAPSHOT_STREAM := &"drone_parts"
-const ENEMY_SNAPSHOT_STREAM := &"enemies"
-const ROPE_SNAPSHOT_STREAM := &"ropes"
 
 const SERVER_WORLD_SCENE := preload("res://scenes/server/server_world.tscn")
 const SERVER_PLAYER_SCENE := preload("res://scenes/server/server_player.tscn")
@@ -114,7 +105,7 @@ var spatial_hash: ServerSpatialHash3D = ServerSpatialHash3D.new(
 	SPATIAL_CELL_SIZE
 )
 var spatial_interest_by_drone_id: Dictionary[int, int] = {}
-var snapshot_stream_tracker = SNAPSHOT_STREAM_TRACKER.new()
+var replication_service
 
 var server_world: Node3D
 var sync_timer := 0.0
@@ -138,8 +129,6 @@ var lobby_operation_generation := 0
 var session_teardown_active := false
 var acoustic_service: ServerAcousticService
 var next_spatial_sound_sequence := 0
-var network_snapshot_sequence := 0
-var item_motion_sequence := 0
 var fieldlink_next_command_msec_by_player_id: Dictionary[int, int] = {}
 var pending_admission_peer_ids: Dictionary[int, bool] = {}
 var grab_aim_assist_shape := BoxShape3D.new()
@@ -148,6 +137,8 @@ var last_steam_connection_end_debug := ""
 
 
 func _ready() -> void:
+	replication_service = SERVER_REPLICATION_SERVICE.new()
+	replication_service.bind(self)
 	# This must happen before a SteamMultiplayerPeer creates any connection. GodotSteam snapshots
 	# the project lane count into each SteamPacketPeer; undersized configurations silently fold
 	# high channels onto lane 0, which lets call_local audio work for the host while remote audio
@@ -284,8 +275,7 @@ func _physics_process(delta: float) -> void:
 			rope.server_physics_tick(delta)
 
 	_apply_grab_forces(delta)
-	item_motion_sequence += 1
-	_publish_grabbed_item_motion_states(item_motion_sequence)
+	replication_service.publish_grabbed_item_motion_states()
 
 	sync_timer -= delta
 	if sync_timer > 0.0:
@@ -296,338 +286,7 @@ func _physics_process(delta: float) -> void:
 
 
 func publish_states() -> void:
-	var snapshot_sequence := network_snapshot_sequence
-	network_snapshot_sequence += 1
-	_publish_player_states(snapshot_sequence)
-	_publish_item_states(snapshot_sequence)
-	_publish_drone_states(snapshot_sequence)
-	_publish_projectile_states(snapshot_sequence)
-	_publish_radio_states()
-	if REPLICATION_SCHEDULE.is_due(
-		snapshot_sequence,
-		REPLICATION_SCHEDULE.LOCAL_AUDIO_CONTEXT_INTERVAL_TICKS
-	):
-		_publish_local_audio_prediction_contexts()
-	if REPLICATION_SCHEDULE.is_due(
-		snapshot_sequence,
-		REPLICATION_SCHEDULE.BULK_PHYSICS_INTERVAL_TICKS
-	):
-		_publish_drone_part_states(snapshot_sequence)
-		_publish_enemy_states(snapshot_sequence)
-		_publish_rope_states(snapshot_sequence)
-	if REPLICATION_SCHEDULE.is_due(
-		snapshot_sequence,
-		REPLICATION_SCHEDULE.STATION_INTERVAL_TICKS
-	):
-		_publish_station_states(snapshot_sequence)
-
-
-func _publish_player_states(snapshot_sequence: int) -> void:
-	var states: Dictionary = {}
-	for player_id: int in server_players_by_player_id:
-		var player := server_players_by_player_id[player_id]
-		if not is_instance_valid(player):
-			continue
-		states[player_id] = _sequence_state(
-			player.to_state_dict(false),
-			snapshot_sequence
-		)
-	Client.rpc("on_player_states_received", states)
-
-
-func _publish_item_states(snapshot_sequence: int) -> void:
-	var states: Dictionary = {}
-	var grabber_player_ids := _grabbed_item_player_ids()
-	for item_id: int in server_items_by_item_id:
-		var item := server_items_by_item_id[item_id]
-		if not is_instance_valid(item):
-			continue
-		var state := _sequence_state(item.to_state_dict(), snapshot_sequence)
-		state["item_motion_sequence"] = item_motion_sequence
-		state["grabber_player_id"] = int(grabber_player_ids.get(item_id, -1))
-		states[item_id] = state
-	Client.rpc("on_item_states_received", states)
-
-
-func _publish_grabbed_item_motion_states(motion_sequence: int) -> void:
-	if grab_states_by_grabber_id.is_empty():
-		return
-	var states: Dictionary = {}
-	for grab_state: GrabState in grab_states_by_grabber_id.values():
-		if (
-			grab_state == null
-			or not is_instance_valid(grab_state.grabber)
-			or not is_instance_valid(grab_state.body)
-			or not grab_state.body is ServerItem
-		):
-			continue
-		var item := grab_state.body as ServerItem
-		var state := item.to_motion_state_dict()
-		state["item_motion_sequence"] = motion_sequence
-		state["grabber_player_id"] = _grabber_player_id(grab_state.grabber)
-		states[item.item_id] = state
-	if not states.is_empty():
-		# The listen-server presentation follows its authoritative body directly; only remote peers
-		# need serialized interpolation deltas.
-		for peer_id: int in multiplayer.get_peers():
-			Client.rpc_id(
-				peer_id,
-				"on_grabbed_item_motion_states_received",
-				states
-			)
-
-
-static func _grabber_player_id(grabber: GrabberComponent) -> int:
-	if grabber == null or not is_instance_valid(grabber):
-		return -1
-	var carrier := grabber.get_carrier_body() as ServerPlayer
-	return carrier.player_id if carrier != null else -1
-
-
-func _grabbed_item_player_ids() -> Dictionary[int, int]:
-	var result: Dictionary[int, int] = {}
-	for grab_state: GrabState in grab_states_by_grabber_id.values():
-		if (
-			grab_state == null
-			or not is_instance_valid(grab_state.grabber)
-			or not is_instance_valid(grab_state.body)
-			or not grab_state.body is ServerItem
-		):
-			continue
-		var item := grab_state.body as ServerItem
-		result[item.item_id] = _grabber_player_id(grab_state.grabber)
-	return result
-
-
-func _publish_drone_states(snapshot_sequence: int) -> void:
-	var states: Dictionary = {}
-	for drone_id: int in server_drones_by_drone_id:
-		var drone: ServerDrone = server_drones_by_drone_id[drone_id]
-		if not is_instance_valid(drone) or not drone.network_visible:
-			continue
-		states[drone_id] = _sequence_state(drone.to_state_dict(), snapshot_sequence)
-	Client.rpc("on_drone_states_received", states)
-
-
-func _publish_projectile_states(snapshot_sequence: int) -> void:
-	if server_projectiles_by_id.is_empty():
-		if snapshot_stream_tracker.should_publish(
-			PROJECTILE_SNAPSHOT_STREAM,
-			false
-		):
-			Client.rpc("on_projectile_states_received", {})
-		return
-	var states: Dictionary = {}
-	for projectile_id: int in server_projectiles_by_id:
-		var projectile: ServerProjectile = server_projectiles_by_id[projectile_id]
-		if is_instance_valid(projectile):
-			states[projectile_id] = _sequence_state(
-				projectile.to_state_dict(),
-				snapshot_sequence
-			)
-	if snapshot_stream_tracker.should_publish(
-		PROJECTILE_SNAPSHOT_STREAM,
-		not states.is_empty()
-	):
-		Client.rpc("on_projectile_states_received", states)
-
-
-func _publish_drone_part_states(snapshot_sequence: int) -> void:
-	if server_drone_parts_by_id.is_empty():
-		if snapshot_stream_tracker.should_publish(
-			DRONE_PART_SNAPSHOT_STREAM,
-			false
-		):
-			Client.rpc("on_drone_part_states_received", {})
-		return
-	var states: Dictionary = {}
-	for part_id: int in server_drone_parts_by_id:
-		var part := server_drone_parts_by_id[part_id]
-		if is_instance_valid(part):
-			states[part_id] = _sequence_state(
-				part.call("to_state_dict") as Dictionary,
-				snapshot_sequence
-			)
-	if snapshot_stream_tracker.should_publish(
-		DRONE_PART_SNAPSHOT_STREAM,
-		not states.is_empty()
-	):
-		Client.rpc("on_drone_part_states_received", states)
-
-
-func _publish_enemy_states(snapshot_sequence: int) -> void:
-	if server_enemies_by_enemy_id.is_empty():
-		if snapshot_stream_tracker.should_publish(
-			ENEMY_SNAPSHOT_STREAM,
-			false
-		):
-			Client.rpc("on_enemy_states_received", {})
-		return
-	var states: Dictionary = {}
-	for enemy_id: int in server_enemies_by_enemy_id:
-		var enemy: ServerEnemy = server_enemies_by_enemy_id[enemy_id]
-		if is_instance_valid(enemy):
-			states[enemy_id] = _sequence_state(
-				enemy.to_state_dict(),
-				snapshot_sequence
-			)
-	if snapshot_stream_tracker.should_publish(
-		ENEMY_SNAPSHOT_STREAM,
-		not states.is_empty()
-	):
-		Client.rpc("on_enemy_states_received", states)
-
-
-func _publish_rope_states(snapshot_sequence: int) -> void:
-	if (
-		server_ropes_by_rope_id.is_empty()
-		and rope_placements_by_player_id.is_empty()
-	):
-		if snapshot_stream_tracker.should_publish(
-			ROPE_SNAPSHOT_STREAM,
-			false
-		):
-			Client.rpc("on_rope_states_received", {})
-		return
-	var states: Dictionary = {}
-	for rope_id: int in server_ropes_by_rope_id:
-		var rope: ServerRope = server_ropes_by_rope_id[rope_id]
-		if is_instance_valid(rope):
-			states[rope_id] = _sequence_state(
-				rope.to_state_dict(),
-				snapshot_sequence
-			)
-	for player_id: int in rope_placements_by_player_id:
-		var preview_state := _get_rope_placement_state(player_id)
-		if not preview_state.is_empty():
-			states[-player_id - 1] = _sequence_state(
-				preview_state,
-				snapshot_sequence
-			)
-	if snapshot_stream_tracker.should_publish(
-		ROPE_SNAPSHOT_STREAM,
-		not states.is_empty()
-	):
-		Client.rpc("on_rope_states_received", states)
-
-
-func _publish_station_states(snapshot_sequence: int) -> void:
-	var inspection_states: Dictionary = {}
-	for station_id: int in inspection_stations_by_id:
-		var station: Node3D = inspection_stations_by_id[station_id]
-		if is_instance_valid(station):
-			inspection_states[station_id] = _sequence_state(
-				station.call("to_state_dict") as Dictionary,
-				snapshot_sequence
-			)
-	Client.rpc("on_inspection_station_states_received", inspection_states)
-
-	var body_shop_states: Dictionary = {}
-	for terminal_id: int in body_part_shop_terminals_by_id:
-		var terminal: Node3D = body_part_shop_terminals_by_id[terminal_id]
-		if is_instance_valid(terminal):
-			body_shop_states[terminal_id] = _sequence_state(
-				terminal.call("to_state_dict") as Dictionary,
-				snapshot_sequence
-			)
-	Client.rpc("on_body_part_shop_states_received", body_shop_states)
-
-	var weapon_states: Dictionary = {}
-	for station_id: int in weapon_crafting_stations_by_id:
-		var weapon_station: Node3D = weapon_crafting_stations_by_id[station_id]
-		if is_instance_valid(weapon_station):
-			weapon_states[station_id] = _sequence_state(
-				weapon_station.call("to_state_dict") as Dictionary,
-				snapshot_sequence
-			)
-	Client.rpc("on_weapon_crafting_station_states_received", weapon_states)
-
-
-static func _sequence_state(state: Dictionary, snapshot_sequence: int) -> Dictionary:
-	state["network_snapshot_sequence"] = snapshot_sequence
-	return state
-
-
-func _publish_radio_states() -> void:
-	for player_id: int in server_players_by_player_id:
-		var listener := server_players_by_player_id[player_id]
-		if not is_instance_valid(listener):
-			continue
-		var player_state := GameState.get_player_state(player_id)
-		if (
-			player_state == null
-			or not _is_rpc_peer_reachable(player_state.peer_id)
-		):
-			continue
-		var radio_states: Dictionary = {}
-		var listener_position := listener.get_audio_listener_position()
-		for radio_id: int in server_radios_by_item_id:
-			var radio: ServerRadio = server_radios_by_item_id[radio_id]
-			if not is_instance_valid(radio) or not radio.powered:
-				continue
-			var state := radio.build_listener_state(
-				player_id,
-				listener_position,
-				acoustic_service,
-				listener.get_rid()
-			)
-			if not state.is_empty():
-				radio_states[radio.item_id] = state
-		for cluster: Node3D in server_speaker_clusters:
-			if (
-				not is_instance_valid(cluster)
-				or not cluster.has_method("append_listener_states")
-			):
-				continue
-			cluster.call(
-				"append_listener_states",
-				radio_states,
-				player_id,
-				listener_position,
-				acoustic_service,
-				listener.get_rid()
-			)
-		var payload := RADIO_STATE_SNAPSHOT_CODEC.encode(radio_states)
-		if payload.is_empty():
-			push_warning(
-				"Continuous audio snapshot exceeded its bounded wire contract"
-			)
-			continue
-		# Every continuous state, including starts and stops, uses one replaceable ordered lane.
-		# A second reliable lane can overtake these snapshots and re-excite an already populated
-		# room return with stale program state. At 20 Hz, a lost transition heals on the next tick.
-		Client.rpc_id(
-			player_state.peer_id,
-			"on_radio_states_received",
-			payload
-		)
-
-
-func _publish_local_audio_prediction_contexts() -> void:
-	if not LOCAL_AUDIO_PREDICTION.ENABLED:
-		return
-	for player_id: int in server_players_by_player_id:
-		var listener := server_players_by_player_id[player_id]
-		if not is_instance_valid(listener):
-			continue
-		var player_state := GameState.get_player_state(player_id)
-		if (
-			player_state == null
-			or not _is_rpc_peer_reachable(player_state.peer_id)
-		):
-			continue
-		var context := acoustic_service.build_local_prediction_context(
-			player_id,
-			listener.get_audio_listener_position(),
-			listener.get_rid()
-		)
-		if context.is_empty():
-			continue
-		Client.rpc_id(
-			player_state.peer_id,
-			"on_local_audio_prediction_context_received",
-			context
-		)
+	replication_service.publish_states()
 
 
 func spawn_server_world() -> void:
@@ -682,8 +341,8 @@ func register_peer(peer_id: int) -> bool:
 		peer_id,
 		"spawn_client_world"
 	)
-	_publish_all_player_inventories_to_peer(peer_id)
-	_force_optional_snapshot_refresh()
+	replication_service.publish_all_player_inventories_to_peer(peer_id)
+	replication_service.force_optional_snapshot_refresh()
 
 	print(
 		"registered peer=",
@@ -695,48 +354,8 @@ func register_peer(peer_id: int) -> bool:
 	return true
 
 
-func _force_optional_snapshot_refresh() -> void:
-	# A joining Client clears all proxy registries before admission. Force the next complete optional
-	# stream snapshots as an additional lifecycle guarantee; active streams include their current
-	# entities and empty streams explicitly confirm that there is nothing to retain.
-	snapshot_stream_tracker.force_next_publish(PROJECTILE_SNAPSHOT_STREAM)
-	snapshot_stream_tracker.force_next_publish(DRONE_PART_SNAPSHOT_STREAM)
-	snapshot_stream_tracker.force_next_publish(ENEMY_SNAPSHOT_STREAM)
-	snapshot_stream_tracker.force_next_publish(ROPE_SNAPSHOT_STREAM)
-
-
-func _publish_all_player_inventories_to_peer(peer_id: int) -> void:
-	if not _is_rpc_peer_reachable(peer_id):
-		return
-	for player_id: int in server_players_by_player_id:
-		_publish_player_inventory_state(player_id, peer_id)
-
-
-func _publish_player_inventory_state(player_id: int, peer_id := 0) -> void:
-	var player := get_server_player(player_id)
-	if player == null:
-		return
-	var inventory := player._get_public_inventory_state()
-	if peer_id > 0:
-		if _is_rpc_peer_reachable(peer_id):
-			Client.rpc_id(
-				peer_id,
-				"on_player_inventory_state_received",
-				player_id,
-				player.inventory_revision,
-				inventory
-			)
-		return
-	Client.rpc(
-		"on_player_inventory_state_received",
-		player_id,
-		player.inventory_revision,
-		inventory
-	)
-
-
 func _on_player_inventory_changed(_revision: int, player_id: int) -> void:
-	_publish_player_inventory_state(player_id)
+	replication_service.publish_player_inventory_state(player_id)
 
 
 func get_sending_player() -> ServerPlayer:
@@ -814,7 +433,7 @@ func spawn_server_player(
 		&"player",
 		player_id
 	)
-	_publish_player_inventory_state(player_id)
+	replication_service.publish_player_inventory_state(player_id)
 
 	print("spawned server player=", player_id, " at ", spawn_pos)
 
@@ -3891,9 +3510,7 @@ func _clear_runtime_session() -> void:
 	next_enemy_id = 0
 	next_body_part_order_id = 0
 	next_spatial_sound_sequence = 0
-	network_snapshot_sequence = 0
-	item_motion_sequence = 0
-	snapshot_stream_tracker.reset()
+	replication_service.reset()
 	GameState.reset_session()
 
 

@@ -38,6 +38,7 @@ func _run() -> void:
 	_test_transfer_channel_capacity()
 	_test_replaceable_snapshot_transport()
 	_test_snapshot_stream_lifecycle()
+	_test_replication_service_boundary()
 
 	if failure_count == 0:
 		print("Lobby system tests passed: %d assertions" % assertion_count)
@@ -592,6 +593,9 @@ func _test_replaceable_snapshot_transport() -> void:
 	var server_source := FileAccess.get_file_as_string(
 		"res://scripts/server/server.gd"
 	)
+	var replication_source := FileAccess.get_file_as_string(
+		"res://scripts/network/server_replication_service.gd"
+	)
 	_expect(
 		client_source.contains(
 			'@rpc("authority", "unreliable", "call_local", %d)\nfunc on_player_states_received'
@@ -608,7 +612,7 @@ func _test_replaceable_snapshot_transport() -> void:
 			'@rpc("authority", "unreliable", "call_local", %d)\nfunc on_grabbed_item_motion_states_received'
 			% MULTIPLAYER_CHANNELS.ITEM_SNAPSHOT_CHANNEL
 		)
-		and server_source.contains('"on_grabbed_item_motion_states_received"'),
+		and replication_source.contains('"on_grabbed_item_motion_states_received"'),
 		"full item lifecycle and high-rate held motion share one dedicated replaceable lane"
 	)
 	for handler_name: String in [
@@ -678,14 +682,14 @@ func _test_replaceable_snapshot_transport() -> void:
 		"mostly-static station panels use the 2 Hz schedule"
 	)
 	_expect(
-		server_source.contains(
-			'state["network_snapshot_sequence"] = snapshot_sequence'
+		replication_source.contains(
+			'state["network_snapshot_sequence"] = current_sequence'
 		)
 		and client_source.contains("func _accept_network_snapshot("),
 		"replaceable snapshots carry a client-side stale-packet guard"
 	)
 	_expect(
-		server_source.contains("player.to_state_dict(false)")
+		replication_source.contains("player.to_state_dict(false)")
 		and client_source.contains(
 			'@rpc("authority", "reliable", "call_local", 1)\nfunc on_player_inventory_state_received'
 		),
@@ -737,6 +741,35 @@ func _test_snapshot_stream_lifecycle() -> void:
 	_expect(
 		not tracker.should_publish(stream_id, false),
 		"session reset forgets prior stream activity instead of leaking lifecycle state"
+	)
+
+
+func _test_replication_service_boundary() -> void:
+	var server := root.get_node_or_null("Server")
+	var service: Variant = (
+		server.get("replication_service") if server != null else null
+	)
+	var server_source := FileAccess.get_file_as_string(
+		"res://scripts/server/server.gd"
+	)
+	var service_source := FileAccess.get_file_as_string(
+		"res://scripts/network/server_replication_service.gd"
+	)
+	_expect(
+		service != null
+		and service.get_script().resource_path
+		== "res://scripts/network/server_replication_service.gd"
+		and service.get("stream_tracker") != null,
+		"the server binds one lifecycle-aware replication service"
+	)
+	_expect(
+		server_source.contains(
+			"replication_service.publish_grabbed_item_motion_states()"
+		)
+		and server_source.contains("replication_service.publish_states()")
+		and not server_source.contains("func _publish_projectile_states(")
+		and service_source.contains("func _publish_projectile_states("),
+		"snapshot schedule and publication live outside the gameplay coordinator"
 	)
 
 

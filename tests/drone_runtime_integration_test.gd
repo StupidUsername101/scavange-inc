@@ -5,6 +5,7 @@ const TEST_DURATION_SECONDS := 22.0
 const HOLD_CHECK_SECONDS := 2.5
 const FOLLOW_START_SECONDS := 3.0
 const RELOCATION_SECONDS := 8.0
+const OBSTACLE_PLACEMENT_SECONDS := 8.25
 const RECOVERY_CHECK_SECONDS := 21.0
 
 #######################################################
@@ -22,6 +23,7 @@ var failure_count := 0
 var hold_checked := false
 var follow_started := false
 var relocated := false
+var obstacle_placed := false
 var recovery_checked := false
 var saw_static_avoidance := false
 
@@ -39,7 +41,6 @@ func _setup() -> void:
 	air.name = "AirEnvironment"
 	test_root.add_child(air)
 	_add_ground()
-	_add_relocation_obstacle()
 	_add_player()
 	_add_enemy()
 	_add_drone()
@@ -55,16 +56,22 @@ func _add_ground() -> void:
 	test_root.add_child(ground)
 
 
-func _add_relocation_obstacle() -> void:
+func _add_relocation_obstacle(movement_direction: Vector3) -> void:
+	movement_direction.y = 0.0
+	if movement_direction.length_squared() <= 0.001:
+		return
+	movement_direction = movement_direction.normalized()
 	var wall := StaticBody3D.new()
 	wall.name = "RelocationObstacle"
-	wall.position = Vector3(12.0, 3.0, 2.5)
+	var wall_center := drone.global_position + movement_direction * 3.2
+	wall.position = Vector3(wall_center.x, 3.0, wall_center.z)
+	# Box local X is its thin axis, so align that axis with the current commanded travel direction.
+	wall.rotation.y = atan2(-movement_direction.z, movement_direction.x)
 	var collision := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
-	# The follow behavior selects a nonlinear orbit point, not the player's exact position. Span the
-	# possible orbit corridor so this fixture actually requires static avoidance on every run instead
-	# of sometimes producing a naturally clear target path.
-	shape.size = Vector3(0.65, 6.0, 16.0)
+	# This is a local steering fixture, not a global path-planning maze. Place a modest wall across the
+	# actual recovery command so avoidance is mandatory while a short context detour remains possible.
+	shape.size = Vector3(0.65, 6.0, 4.0)
 	collision.shape = shape
 	wall.add_child(collision)
 	test_root.add_child(wall)
@@ -147,6 +154,16 @@ func _on_physics_frame() -> void:
 		player.global_position = Vector3(20.0, 1.0, 5.0)
 		player.velocity = Vector3.ZERO
 
+	if relocated and not obstacle_placed and elapsed >= OBSTACLE_PLACEMENT_SECONDS:
+		var movement_target: Vector3 = drone.ai_controller.combined_intent.get(
+			"movement_target",
+			drone.global_position
+		)
+		var movement_direction := movement_target - drone.global_position
+		if movement_direction.length_squared() > 0.001:
+			_add_relocation_obstacle(movement_direction)
+			obstacle_placed = true
+
 	if not recovery_checked and elapsed >= RECOVERY_CHECK_SECONDS:
 		recovery_checked = true
 		var chip := load(
@@ -157,7 +174,12 @@ func _on_physics_frame() -> void:
 		_expect(
 			horizontal_radius >= chip.get_follow_inner_radius() - 0.35
 			and horizontal_radius <= chip.get_follow_outer_radius() + 0.35,
-			"drone reacquires the follow annulus after relocation"
+			"drone reacquires the follow annulus after relocation (radius %.3f, expected %.3f..%.3f)"
+			% [
+				horizontal_radius,
+				chip.get_follow_inner_radius() - 0.35,
+				chip.get_follow_outer_radius() + 0.35,
+			]
 		)
 		_expect(
 			absf(offset.y - chip.get_follow_height_offset()) < 0.5,

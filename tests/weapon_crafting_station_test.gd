@@ -237,10 +237,12 @@ func _test_machine_scenes_and_replication(
 	)
 	server_world_instance.free()
 	client_world_instance.free()
-	var server_source := FileAccess.get_file_as_string("res://scripts/server/server.gd")
+	var replication_source := FileAccess.get_file_as_string(
+		"res://scripts/network/server_replication_service.gd"
+	)
 	var client_source := FileAccess.get_file_as_string("res://scripts/client/client.gd")
 	_expect(
-		server_source.contains("on_weapon_crafting_station_states_received")
+		replication_source.contains("on_weapon_crafting_station_states_received")
 		and client_source.contains("on_weapon_crafting_station_states_received"),
 		"station selections replicate through the established server/client snapshot boundary"
 	)
