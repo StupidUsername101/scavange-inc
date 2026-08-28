@@ -349,8 +349,8 @@ func _test_client_draw_order() -> void:
 		"player proxy contains the ocular post-process"
 	)
 	_expect(
-		proxy.has_node("BodyVisual/LeftArm/WristMount")
-		and proxy.has_node("BodyVisual/RightArm/WristMount"),
+		proxy.has_node("BodyVisual/UpperBodyPose/LeftArm/WristMount")
+		and proxy.has_node("BodyVisual/UpperBodyPose/RightArm/WristMount"),
 		"either surviving arm can carry replicated wrist equipment"
 	)
 	var interface_layer := proxy.get_node("PlayerInterface") as CanvasLayer

@@ -6,12 +6,20 @@ signal foreground_transient_started(strength: float, received_volume_db: float)
 const LISTENER_ACTIVITY := preload(
 	"res://scripts/audio/listener_acoustic_activity.gd"
 )
+const LOCAL_AUDIO_PREDICTION := preload(
+	"res://scripts/audio/local_audio_prediction.gd"
+)
 const DEFAULT_VOICE_COUNT := 24
 const MAX_PENDING_EVENTS := 64
 const BUS_PREFIX := "ScavangeSpatialVoice"
 const PRESSURE_OUTPUT_BUS := &"ScavangePressureOutput"
 const MAX_VOICE_RESERVATION_SECONDS := 12.0
 const LISTENER_ACOUSTIC_RELEASE_SPEED := 5.0
+const LOCAL_PREDICTION_LIFETIME_USEC := 4000000
+# Listen-server authority advances before its local presentation proxy in the same frame. Give that
+# proxy enough time to cross the shared gait phase before committing an authority-first owner cue.
+# This is not network buffering: unkeyed remote/world events still render immediately.
+const AUTHORITY_FIRST_PREDICTION_GRACE_USEC := 50000
 
 ## Client-only voice pool. Every voice owns a persistent EQ/filter bus, so applying a server path
 ## result requires no bus or DSP allocation during playback.
@@ -25,11 +33,18 @@ var _voice_started_usec := PackedInt64Array()
 var _voice_reserved_until_usec := PackedInt64Array()
 var _rng := RandomNumberGenerator.new()
 var _listener_acoustic_intensity := 0.0
+var _predicted_events_by_key: Dictionary[int, int] = {}
+var _authoritative_events_by_prediction_key: Dictionary[int, int] = {}
+var _pending_authoritative_predictions: Dictionary[int, Dictionary] = {}
 
 
 func _ready() -> void:
 	_rng.randomize()
 	_ensure_pressure_output_bus()
+	# Build the fixed voice/DSP pool while the client world is loading. Allocating 24 players and
+	# their effect racks on the first footstep or trigger pull turns correct local prediction into a
+	# visible input-frame hitch and an audible late start.
+	_ensure_voice_pool()
 	set_process(true)
 
 
@@ -124,6 +139,72 @@ func unregister_sound(sound_id: StringName, owner_token := 0) -> void:
 
 
 func submit(packet: Dictionary) -> bool:
+	var prediction_key := LOCAL_AUDIO_PREDICTION.sanitize_key(
+		packet.get("local_prediction_key")
+	)
+	if prediction_key > 0 and _predicted_events_by_key.has(prediction_key):
+		# The owner already rendered this cosmetic event on the input/visual frame. The server
+		# packet is still the authoritative acceptance, but replaying it would create a flam whose
+		# spacing equals the round trip. Other clients never receive this key and use the normal path.
+		_predicted_events_by_key.erase(prediction_key)
+		return true
+	if prediction_key > 0:
+		# Authority can beat the local gait presentation on a listen server because the Server autoload
+		# receives the physics callback first. Keep the confirmation for a small bounded grace window;
+		# submit_predicted() will consume it later in this same rendered frame. If prediction never
+		# arrives, _process() renders the untouched authoritative packet.
+		_pending_authoritative_predictions[prediction_key] = {
+			"packet": packet,
+			"received_usec": Time.get_ticks_usec(),
+		}
+		return true
+	var accepted := _submit_unreconciled(packet)
+	return accepted
+
+
+func submit_predicted(packet_value: Dictionary) -> bool:
+	var packet := AcousticEventPacket.sanitize(packet_value)
+	var prediction_key := LOCAL_AUDIO_PREDICTION.sanitize_key(
+		packet.get("local_prediction_key")
+	)
+	if prediction_key == 0 or _predicted_events_by_key.has(prediction_key):
+		return false
+	if _pending_authoritative_predictions.has(prediction_key):
+		# The server already accepted this action, but had not committed its acoustically delayed copy.
+		# Render the input-frame packet now and remember the completed key so neither ordering can flam.
+		_pending_authoritative_predictions.erase(prediction_key)
+		var accepted := _submit_unreconciled(packet)
+		if accepted:
+			_authoritative_events_by_prediction_key[prediction_key] = (
+				Time.get_ticks_usec()
+			)
+		return accepted
+	if _authoritative_events_by_prediction_key.has(prediction_key):
+		_authoritative_events_by_prediction_key.erase(prediction_key)
+		return false
+	var accepted := _submit_unreconciled(packet)
+	if accepted:
+		_predicted_events_by_key[prediction_key] = Time.get_ticks_usec()
+	return accepted
+
+
+func reject_prediction(prediction_key_value: int) -> void:
+	var prediction_key := LOCAL_AUDIO_PREDICTION.sanitize_key(prediction_key_value)
+	if prediction_key == 0:
+		return
+	_predicted_events_by_key.erase(prediction_key)
+	_authoritative_events_by_prediction_key.erase(prediction_key)
+	_pending_authoritative_predictions.erase(prediction_key)
+	for event_index: int in range(_pending_events.size() - 1, -1, -1):
+		if int(_pending_events[event_index].get("local_prediction_key", 0)) == prediction_key:
+			_pending_events.remove_at(event_index)
+
+
+func has_prediction(prediction_key: int) -> bool:
+	return _predicted_events_by_key.has(prediction_key)
+
+
+func _submit_unreconciled(packet: Dictionary) -> bool:
 	var sound_id: StringName = packet.get("sound_id", &"")
 	if not _registrations.has(sound_id):
 		return false
@@ -266,11 +347,15 @@ static func _pressure_packet(
 		),
 		"pressure_layer": true,
 		"pressure_uses_source_stream": false,
+		"local_prediction_key": parent.get("local_prediction_key", 0),
 	}
 
 
 func reset_session(clear_registrations := false) -> void:
 	_pending_events.clear()
+	_predicted_events_by_key.clear()
+	_authoritative_events_by_prediction_key.clear()
+	_pending_authoritative_predictions.clear()
 	for player: AudioStreamPlayer3D in _players:
 		player.stop()
 	for rack: SpatialAudioEffectRack in _effect_racks:
@@ -291,15 +376,48 @@ func _process(delta: float) -> void:
 		LISTENER_ACOUSTIC_RELEASE_SPEED,
 		LISTENER_ACOUSTIC_RELEASE_SPEED
 	)
-	if _pending_events.is_empty():
-		return
-	var now_usec := Time.get_ticks_usec()
-	for event_index: int in range(_pending_events.size() - 1, -1, -1):
-		var packet: Dictionary = _pending_events[event_index]
-		if int(packet.get("play_at_usec", 0)) > now_usec:
-			continue
-		_pending_events.remove_at(event_index)
-		_play_packet(packet)
+	if not _pending_events.is_empty():
+		var now_usec := Time.get_ticks_usec()
+		for event_index: int in range(_pending_events.size() - 1, -1, -1):
+			var packet: Dictionary = _pending_events[event_index]
+			if int(packet.get("play_at_usec", 0)) > now_usec:
+				continue
+			_pending_events.remove_at(event_index)
+			_play_packet(packet)
+	if not _pending_authoritative_predictions.is_empty():
+		var authority_now_usec := Time.get_ticks_usec()
+		for prediction_key: int in _pending_authoritative_predictions.keys():
+			var pending: Dictionary = _pending_authoritative_predictions[prediction_key]
+			if authority_now_usec - int(pending.get("received_usec", 0)) < (
+				AUTHORITY_FIRST_PREDICTION_GRACE_USEC
+			):
+				continue
+			_pending_authoritative_predictions.erase(prediction_key)
+			var packet: Dictionary = pending.get("packet", {})
+			if _submit_unreconciled(packet):
+				_authoritative_events_by_prediction_key[prediction_key] = (
+					authority_now_usec
+				)
+	if not _predicted_events_by_key.is_empty():
+		var prediction_cutoff := Time.get_ticks_usec() - LOCAL_PREDICTION_LIFETIME_USEC
+		for prediction_key: int in _predicted_events_by_key.keys():
+			if _predicted_events_by_key[prediction_key] < prediction_cutoff:
+				_predicted_events_by_key.erase(prediction_key)
+	if not _authoritative_events_by_prediction_key.is_empty():
+		var authoritative_cutoff := (
+			Time.get_ticks_usec() - LOCAL_PREDICTION_LIFETIME_USEC
+		)
+		for prediction_key: int in _authoritative_events_by_prediction_key.keys():
+			if (
+				_authoritative_events_by_prediction_key[prediction_key]
+				< authoritative_cutoff
+			):
+				_authoritative_events_by_prediction_key.erase(prediction_key)
+	for voice_index: int in range(_effect_racks.size()):
+		_effect_racks[voice_index].update_tail_floor(
+			_players[voice_index].playing,
+			delta
+		)
 
 
 func _play_packet(packet: Dictionary) -> bool:
@@ -460,6 +578,7 @@ func _ensure_pressure_output_bus() -> void:
 
 
 func _configure_voice_effects(voice_index: int, packet: Dictionary) -> void:
+	_effect_racks[voice_index].prepare_for_input()
 	_update_early_reflection_pans(packet)
 	_effect_racks[voice_index].apply_acoustic(packet)
 

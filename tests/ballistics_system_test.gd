@@ -429,7 +429,8 @@ func _test_projectile_network_wiring() -> void:
 		"server publishes authoritative projectile state"
 	)
 	_expect(
-		drone_source.contains("Server.spawn_ballistic_projectile(")
+		drone_source.contains("server_service.call(")
+		and drone_source.contains('"spawn_ballistic_projectile"')
 		and not drone_source.contains(
 			"collider.call(\"apply_damage\", weapon.damage_per_shot)"
 		),

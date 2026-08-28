@@ -43,6 +43,8 @@ const STAIRWELL_CENTER_X := 4.15
 const STAIRWELL_WIDTH := 2.5
 const STAIRWELL_RUN := 6.4
 const RAMP_THICKNESS := 0.18
+const STAIR_TREAD_COUNT := 20
+const STAIR_TREAD_OVERLAP := 0.012
 
 const TUNNEL_CENTER := Vector3(11.0, 0.0, 12.0)
 const WIDE_TUNNEL_CENTER := Vector3(28.0, 0.0, 12.0)
@@ -132,6 +134,58 @@ static func structural_boxes() -> Array[Dictionary]:
 		&"valve_concrete",
 		VALVE_REFERENCE_CONCRETE
 	)
+	return boxes
+
+
+## Presentation contact uses the authoritative shells plus discrete stair treads. CharacterBody3D
+## continues to move over the smooth ramps in `structural_boxes`; only visible feet see these
+## generated treads, so stair climbing remains stable while the pose reads as actual steps.
+static func foot_contact_boxes() -> Array[Dictionary]:
+	var boxes := structural_boxes()
+	boxes.append_array(stair_tread_boxes())
+	return boxes
+
+
+static func stair_tread_boxes() -> Array[Dictionary]:
+	var boxes: Array[Dictionary] = []
+	var tread_run := STAIRWELL_RUN / float(STAIR_TREAD_COUNT)
+	var tread_rise := STOREY_HEIGHT / float(STAIR_TREAD_COUNT)
+	var ramp_angle := atan2(STOREY_HEIGHT, STAIRWELL_RUN)
+	var ramp_surface_offset := cos(ramp_angle) * RAMP_THICKNESS * 0.5
+	for ramp_index: int in range(STOREY_COUNT - 1):
+		var travel_z := 1.0 if posmod(ramp_index, 2) == 0 else -1.0
+		var low_end_z := (
+			BUILDING_CENTER.z
+			- travel_z * STAIRWELL_RUN * 0.5
+		)
+		var base_y := STOREY_HEIGHT * float(ramp_index)
+		for tread_index: int in range(STAIR_TREAD_COUNT):
+			var top_y := (
+				base_y
+				+ ramp_surface_offset
+				+ float(tread_index + 1) * tread_rise
+			)
+			var tread_height := tread_rise + STAIR_TREAD_OVERLAP
+			_add_box(
+				boxes,
+				StringName(
+					"BuildingRamp%dTread%02d"
+					% [ramp_index + 1, tread_index + 1]
+				),
+				Vector3(
+					BUILDING_CENTER.x + STAIRWELL_CENTER_X,
+					top_y - tread_height * 0.5,
+					low_end_z
+					+ travel_z * (float(tread_index) + 0.5) * tread_run
+				),
+				Vector3(
+					STAIRWELL_WIDTH - 0.22,
+					tread_height,
+					tread_run + STAIR_TREAD_OVERLAP
+				),
+				Vector3.ZERO,
+				&"ramp"
+			)
 	return boxes
 
 

@@ -7,6 +7,9 @@ const MODULAR_STRUCTURE_ASSEMBLER := preload(
 const ASSET_SCENE_LOADER := preload(
 	"res://scripts/level_editor/level_asset_scene_loader.gd"
 )
+const FOOT_CONTACT_BUILDER := preload(
+	"res://scripts/world/foot_contact_geometry_builder.gd"
+)
 const PROP_SCENES := {
 	&"generator": preload("res://assets/third_party/pizza_doggy/models/bunkers/generator_1.glb"),
 	&"machinery": preload("res://assets/third_party/pizza_doggy/models/bunkers/machinery_1.glb"),
@@ -16,6 +19,26 @@ const PROP_SCENES := {
 	&"computer_terminal": preload("res://assets/third_party/pizza_doggy/models/tech/computer_terminal_1.glb"),
 	&"control_panel": preload("res://assets/third_party/pizza_doggy/models/tech/control_panel_1.glb"),
 	&"fuse_box": preload("res://assets/third_party/pizza_doggy/models/tech/fuse_box_1.glb"),
+}
+const PROP_COLLISION_SHAPES := {
+	&"generator": preload("res://resources/world/prop_collisions/generator_1_convex.tres"),
+	&"machinery": preload("res://resources/world/prop_collisions/machinery_1_convex.tres"),
+	&"metal_crate": preload("res://resources/world/prop_collisions/metal_crate_3_convex.tres"),
+	&"water_barrel": preload("res://resources/world/prop_collisions/water_barrel_1_convex.tres"),
+	&"wood_pallet": preload("res://resources/world/prop_collisions/wood_pallet_1_convex.tres"),
+	&"computer_terminal": preload("res://resources/world/prop_collisions/computer_terminal_1_convex.tres"),
+	&"control_panel": preload("res://resources/world/prop_collisions/control_panel_1_convex.tres"),
+	&"fuse_box": preload("res://resources/world/prop_collisions/fuse_box_1_convex.tres"),
+}
+const PROP_SURFACES := {
+	&"generator": &"metal",
+	&"machinery": &"metal",
+	&"metal_crate": &"metal",
+	&"water_barrel": &"metal",
+	&"wood_pallet": &"wood",
+	&"computer_terminal": &"metal",
+	&"control_panel": &"metal",
+	&"fuse_box": &"metal",
 }
 
 var _unit_box: BoxMesh
@@ -35,6 +58,21 @@ func _ready() -> void:
 	_build_large_bunker_details()
 	_build_valve_bunker_details()
 	_build_props()
+	_build_foot_contact_geometry()
+
+
+func _build_foot_contact_geometry() -> void:
+	FOOT_CONTACT_BUILDER.build_clustered_boxes(
+		self,
+		LAYOUT.foot_contact_boxes(),
+		"IndustrialFootContact"
+	)
+	FOOT_CONTACT_BUILDER.build_baked_props(
+		self,
+		LAYOUT.prop_descriptors(),
+		PROP_COLLISION_SHAPES,
+		PROP_SURFACES
+	)
 
 
 func _build_materials() -> void:
@@ -72,6 +110,14 @@ func _build_building_details() -> void:
 	var center: Vector3 = LAYOUT.BUILDING_CENTER
 	var front_z: float = center.z - LAYOUT.BUILDING_DEPTH * 0.5 - 0.13
 	var door_x: float = center.x + LAYOUT.DOOR_CENTER_X
+	for descriptor: Dictionary in LAYOUT.stair_tread_boxes():
+		_add_box(
+			str(descriptor.get("name", &"BuildingTread")),
+			descriptor.get("position", Vector3.ZERO),
+			descriptor.get("size", Vector3.ONE),
+			Vector3.ZERO,
+			_materials[&"ramp"]
+		)
 	_add_box(
 		"BuildingDoorHeader",
 		Vector3(door_x, LAYOUT.DOOR_HEIGHT + 0.12, front_z - 0.03),

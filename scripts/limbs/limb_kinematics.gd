@@ -10,6 +10,16 @@ const EPSILON := 0.000001
 const REACH_MARGIN := 0.01
 
 
+## Reusable output for presentation systems that solve the same limbs every frame. Callers own one
+## instance per limb and avoid constructing a Dictionary and PackedVector3Array on every update.
+## The older return-value APIs below remain intact for editor tools, tests, and ML setup paths.
+class TwoBoneSolution:
+	var hip := Vector3.ZERO
+	var knee := Vector3.ZERO
+	var tip := Vector3.ZERO
+	var bend_direction := Vector3.RIGHT
+
+
 static func solve_two_bone(
 	hip: Vector3,
 	requested_tip: Vector3,
@@ -39,6 +49,41 @@ static func solve_two_bone_continuous(
 	previous_bend: Vector3,
 	fallback_direction: Vector3
 ) -> Dictionary:
+	var solution := TwoBoneSolution.new()
+	solve_two_bone_into(
+		solution,
+		hip,
+		requested_tip,
+		upper_length,
+		lower_length,
+		bend_hint,
+		previous_bend,
+		fallback_direction
+	)
+	return {
+		"points": PackedVector3Array([
+			solution.hip,
+			solution.knee,
+			solution.tip,
+		]),
+		"bend_direction": solution.bend_direction,
+	}
+
+
+## Allocation-free form of [method solve_two_bone_continuous]. The output object must be retained
+## by the caller; its four fields are overwritten completely on every invocation.
+static func solve_two_bone_into(
+	output: TwoBoneSolution,
+	hip: Vector3,
+	requested_tip: Vector3,
+	upper_length: float,
+	lower_length: float,
+	bend_hint: Vector3,
+	previous_bend: Vector3,
+	fallback_direction: Vector3
+) -> void:
+	if output == null:
+		return
 	var upper := maxf(upper_length, 0.001)
 	var lower := maxf(lower_length, 0.001)
 	var offset := requested_tip - hip
@@ -99,15 +144,14 @@ static func solve_two_bone_continuous(
 			direction
 		).normalized()
 
-	var knee := (
+	output.hip = hip
+	output.knee = (
 		hip
 		+ direction * along
 		+ perpendicular * perpendicular_height
 	)
-	return {
-		"points": PackedVector3Array([hip, knee, tip]),
-		"bend_direction": perpendicular,
-	}
+	output.tip = tip
+	output.bend_direction = perpendicular
 
 
 ## Produces a HingeJoint3D frame whose local Z axis follows the solved knee hinge.

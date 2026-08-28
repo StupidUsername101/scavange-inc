@@ -1,5 +1,9 @@
 extends Node3D
 
+const FOOT_CONTACT_BUILDER := preload(
+	"res://scripts/world/foot_contact_geometry_builder.gd"
+)
+
 const HOUSE_WIDTH := 6.4
 const HOUSE_DEPTH := 5.9
 const WALL_HEIGHT := 3.05
@@ -90,13 +94,15 @@ func _build_house() -> void:
 		"RadioMarker",
 		Vector3(-0.9, 0.135, -0.55),
 		Vector3(0.65, 0.03, 0.65),
-		marker_material
+		marker_material,
+		false
 	)
 	_add_box(
 		"ListenerMarker",
 		Vector3(-0.9, 0.135, 1.15),
 		Vector3(0.65, 0.03, 0.65),
-		marker_material
+		marker_material,
+		false
 	)
 	_add_label(
 		"ACOUSTIC TEST HOUSE  //  OPEN DOOR",
@@ -112,7 +118,8 @@ func _add_box(
 	node_name: String,
 	local_position: Vector3,
 	size: Vector3,
-	material: Material
+	material: Material,
+	provides_foot_contact := true
 ) -> void:
 	var mesh := BoxMesh.new()
 	mesh.size = size
@@ -122,6 +129,13 @@ func _add_box(
 	instance.position = local_position
 	instance.mesh = mesh
 	add_child(instance)
+	if provides_foot_contact:
+		FOOT_CONTACT_BUILDER.add_box(
+			self,
+			"%sFootContact" % node_name,
+			local_position,
+			size
+		)
 
 
 func _add_label(

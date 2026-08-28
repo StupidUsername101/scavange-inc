@@ -9,6 +9,7 @@ extends RefCounted
 const REALTIME_INTERVAL_TICKS := 1
 const BULK_PHYSICS_INTERVAL_TICKS := 2
 const STATION_INTERVAL_TICKS := 10
+const LOCAL_AUDIO_CONTEXT_INTERVAL_TICKS := 4
 
 
 static func is_due(snapshot_sequence: int, interval_ticks: int) -> bool:

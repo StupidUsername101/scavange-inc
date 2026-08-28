@@ -74,6 +74,10 @@ func _test_four_player_limit() -> void:
 
 func _test_lobby_compatibility() -> void:
 	_expect(
+		LobbyRules.PROTOCOL_VERSION == "2",
+		"the audio-prediction and procedural-character RPC revision has its own lobby protocol"
+	)
+	_expect(
 		LobbyRules.is_compatible_lobby(
 			LobbyRules.GAME_TAG,
 			LobbyRules.PROTOCOL_VERSION,

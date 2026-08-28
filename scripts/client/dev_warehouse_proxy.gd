@@ -1,6 +1,9 @@
 extends Node3D
 
 const CATALOG := preload("res://scripts/drones/dev_warehouse_catalog.gd")
+const FOOT_CONTACT_BUILDER := preload(
+	"res://scripts/world/foot_contact_geometry_builder.gd"
+)
 
 #######################################################
 # Mirrors authoritative dev warehouse state on clients and updates its local visual
@@ -34,6 +37,18 @@ func _build_warehouse(layout: Dictionary) -> void:
 		Vector3(0.0, max_height * 0.5, -0.08),
 		Vector3(total_width + 0.3, max_height, 0.12),
 		dark_material
+	)
+	FOOT_CONTACT_BUILDER.add_box(
+		self,
+		"WarehouseFloorFootContact",
+		Vector3(0.0, 0.09, 1.0),
+		Vector3(total_width + 1.0, 0.18, 2.2)
+	)
+	FOOT_CONTACT_BUILDER.add_box(
+		self,
+		"WarehouseBackFootContact",
+		Vector3(0.0, max_height * 0.5, -0.08),
+		Vector3(total_width + 0.3, max_height, 0.12)
 	)
 
 	_add_world_label(

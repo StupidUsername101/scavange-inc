@@ -10,6 +10,7 @@ godot --headless --path . --script res://tests/lobby_system_test.gd
 godot --headless --path . --script res://tests/player_equipment_system_test.gd
 godot --headless --path . --script res://tests/wrist_terminal_system_test.gd
 godot --headless --path . --script res://tests/player_movement_test.gd
+godot --headless --path . --script res://tests/player_procedural_leg_rig_test.gd
 godot --headless --path . --script res://tests/grab_rotation_test.gd
 godot --headless --path . --script res://tests/body_part_shop_system_test.gd
 godot --headless --path . --script res://tests/ballistics_system_test.gd
@@ -36,6 +37,10 @@ godot --headless --path . --script res://tests/audio_dsp_discontinuity_probe.gd
 godot --headless --path . --script res://tests/reverb_return_normalization_probe.gd
 godot --headless --path . --script res://tests/pa_four_speaker_render_probe.gd
 godot --headless --path . --script res://tests/valve_bunker_pause_tail_render_probe.gd
+godot --headless --path . --script res://tests/audio_tail_floor_render_probe.gd
+godot --headless --path . --script res://tests/music_content_tail_render_probe.gd
+godot --headless --path . --script res://tests/audio_prediction_system_test.gd
+godot --headless --path . --script res://tests/jump_landing_audio_latency_test.gd
 godot --headless --path . --script res://tests/asset_bundle_integration_test.gd
 godot --headless --path . --script res://tests/drone_ml_pipeline_test.gd
 godot --headless --path . --script res://tests/drone_training_policy_test.gd
@@ -101,7 +106,23 @@ critically damped heavy-arm hold sway, moving-screen pointer alignment, and game
 The player-movement suite checks accelerated ground movement and braking,
 momentum-preserving takeoff and airborne coasting, speed-neutral air steering,
 stable ballistic gravity, wall sliding that removes only blocked velocity, and a
-single distance-driven gait phase shared by footstep audio and camera motion.
+single distance-driven gait phase shared by footstep audio and camera motion. Hard landings also
+probe both real biped supports on the authority, as do completed gait footfalls: a missing second
+foothold must replicate one bounded trip/ragdoll state, while one-legged loadouts never fail a check
+for a phantom foot. These probes are event-driven rather than paid on every physics frame.
+
+The procedural player-leg suite checks reusable allocation-free two-bone presentation,
+planted-foot query reuse, ordinary and detail-only ground roles, smooth movement guides with
+discrete stair contacts, turn-safe foot ordering, forward walking knee drive, pose-preserving
+takeoff, continuous asymmetric airborne correction, ground-relative landing preparation, and every
+zero/one/two-leg availability combination. Touchdown contacts resolve independently, may arrive at
+different times and heights, and drive a saturating whole-body yield instead of forcing both feet onto
+one plane. The replicated trip presenter must construct physics only for installed limbs and restore
+the procedural body after recovery. A long high jump must remain tucked until its real ground
+clearance closes without freezing into a mirrored pose. Nonlinear per-jump pose variation is keyed by
+the server-owned jump sequence so every observer sees the same expressive choice, and a critically
+damped per-foot response prevents those randomized targets from producing a post-takeoff shove;
+missing limbs must not create hidden support, IK output, collision probes, or alternating gait slots.
 
 The grab-rotation suite checks authored item hold poses, shortest-path orientation
 errors, persistent player-relative targets, preserved three-dimensional hold anchors,
@@ -273,12 +294,45 @@ origins, and cone animation cannot drift into layout-specific subclasses. The re
 builds an asymmetric twelve-speaker array in reverse child order to guard this count-agnostic contract.
 The rendered four-speaker guard walks the bunker entrance in both directions on the captured-audio
 clock and bounds level, audible-band, stereo, correlation, derivative, and limiter movement.
+The large-bunker lifecycle guard additionally instantiates the real client renderer and requires four
+localized direct cabinet paths plus one live full-band shared Hall return. It crosses both a single
+missing unreliable snapshot and a pause held through complete silence, then requires resume to clear
+every tail filter/gain state without revealing a retired return.
 The Valve-bunker pause-tail guard renders the real four-cabinet shared late field, verifies that a
 clean PA never starts any receiver-static voice, pauses by removing the authoritative snapshot, and
 requires every program decoder to stop while the populated room return decays monotonically to the
 noise floor. This prevents a nominal `-60 dB` static layer from masquerading as silence beneath music.
 Spectral steps already more than 24 dB beneath the program window are treated as masked;
 overall waveform discontinuity and level checks still cover every sample/window.
+The tail-floor render probe then isolates the shared production rack with a finite three-band tonal
+source. It preserves the useful early room decay, finds the first undriven quarter-second window below
+-50 dB, and requires the following residue to cross -88 dB within 750 ms and become fully inaudible
+before Godot's default two-second below-threshold channel shutdown. Restoring the rack after silence
+must also remain below -90 dB without new input. The untapered engine return fails
+both the residue window and lifetime checks, covering the previously untested musical-tail to
+noise-floor transition for footsteps and continuous program audio.
+The music-content tail probe repeats that transition through the real four-speaker bunker renderer
+with `Es geht alles vorüber es geht alles vorbei.mp3`. It keeps the recognizable first echo, then
+requires the dry-to-diffuse handoff to continue falling instead of exposing a decorrelated Freeverb
+plateau. This catches lossy, dense program residue that the clean three-tone source cannot excite.
+The audio-prediction suite then guards the multiplayer presentation split: owner cues start with a
+free-field fallback even before the first server-issued listener context, prediction keys are
+disjoint for UI/gait/automatic shots, normalized pressure follows the cached room response,
+host-speed and client-speed packet ordering reconcile to one voice, rejected future arrivals are
+removed, authority-first host cues wait only within the bounded presentation-frame grace and safely
+fall through when prediction is absent, and remote unkeyed events still play once. It also checks
+that the replaceable context owns a valid dedicated GodotSteam lane and runs at the bounded 5 Hz
+schedule rather than adding geometry work per input. Host and joining-client gait presentation both
+advance from same-frame movement input through the authoritative acceleration solver, while delayed
+snapshots are forbidden from dragging an already-predicted impact backward.
+The jump-landing latency probe complements those semantic assertions with captured audio. It drives
+a production `ServerPlayer` through a real ballistic jump and floor collision, then follows the
+landing through `Server.emit_spatial_sound()`, the acoustic solve, local-host RPC, the production
+renderer, and an `AudioEffectCapture` on Master. It prints the flight time separately from
+contact-to-packet, physical travel, voice start, first audible sample, and Godot's reported output
+latency. Headless runs measure the game path with the dummy driver's zero output latency. Run the
+same script without `--headless` to include the active audio driver's buffer; Bluetooth codec/radio
+latency remains downstream of Godot and therefore outside Master capture.
 The separate reverb-return probe renders deterministic broadband noise through bunker- and
 tunnel-sized wet-only racks, then measures their post-warmup RMS. It fails if the analytical return
 normalization still leaves Godot's feedback network hot or crushes the return beyond its calibrated

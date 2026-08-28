@@ -5,6 +5,9 @@ extends Node3D
 ## proxy; this component contains only the building that happens to host the original demo array.
 
 const LAYOUT := preload("res://scripts/world/speaker_cluster_demo_layout.gd")
+const FOOT_CONTACT_BUILDER := preload(
+	"res://scripts/world/foot_contact_geometry_builder.gd"
+)
 const PROP_SCENES := {
 	&"generator": preload("res://assets/third_party/pizza_doggy/models/bunkers/generator_1.glb"),
 	&"machinery": preload("res://assets/third_party/pizza_doggy/models/bunkers/machinery_1.glb"),
@@ -13,6 +16,24 @@ const PROP_SCENES := {
 	&"wood_pallet": preload("res://assets/third_party/pizza_doggy/models/bunkers/wood_pallet_1.glb"),
 	&"control_panel": preload("res://assets/third_party/pizza_doggy/models/tech/control_panel_1.glb"),
 	&"fuse_box": preload("res://assets/third_party/pizza_doggy/models/tech/fuse_box_1.glb"),
+}
+const PROP_COLLISION_SHAPES := {
+	&"generator": preload("res://resources/world/prop_collisions/generator_1_convex.tres"),
+	&"machinery": preload("res://resources/world/prop_collisions/machinery_1_convex.tres"),
+	&"metal_crate": preload("res://resources/world/prop_collisions/metal_crate_3_convex.tres"),
+	&"water_barrel": preload("res://resources/world/prop_collisions/water_barrel_1_convex.tres"),
+	&"wood_pallet": preload("res://resources/world/prop_collisions/wood_pallet_1_convex.tres"),
+	&"control_panel": preload("res://resources/world/prop_collisions/control_panel_1_convex.tres"),
+	&"fuse_box": preload("res://resources/world/prop_collisions/fuse_box_1_convex.tres"),
+}
+const PROP_SURFACES := {
+	&"generator": &"metal",
+	&"machinery": &"metal",
+	&"metal_crate": &"metal",
+	&"water_barrel": &"metal",
+	&"wood_pallet": &"wood",
+	&"control_panel": &"metal",
+	&"fuse_box": &"metal",
 }
 
 var _unit_box: BoxMesh
@@ -26,6 +47,17 @@ func _ready() -> void:
 	_build_structure()
 	_build_details()
 	_build_props()
+	FOOT_CONTACT_BUILDER.build_clustered_boxes(
+		self,
+		LAYOUT.structural_boxes(),
+		"GarageFootContact"
+	)
+	FOOT_CONTACT_BUILDER.build_baked_props(
+		self,
+		LAYOUT.prop_descriptors(),
+		PROP_COLLISION_SHAPES,
+		PROP_SURFACES
+	)
 
 
 func _build_materials() -> void:

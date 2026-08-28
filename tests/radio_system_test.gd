@@ -481,11 +481,12 @@ func _test_authoritative_playback(definition: RadioItemDefinition) -> void:
 		shared_group_slot >= 0
 		and absf(reconstructed_shared_power / original_shared_power - 1.0)
 		< 0.001
-		and AudioServer.get_bus_effect_count(shared_late_rack.bus_index) == 5
+		and AudioServer.get_bus_effect_count(shared_late_rack.bus_index) == 6
 		and shared_late_rack.equalizer != null
 		and shared_late_rack.lowpass != null
 		and shared_late_rack.highpass != null
 		and shared_late_rack.early_delay != null
+		and shared_late_rack.tail_lowpass != null
 		and is_equal_approx(shared_late_rack.early_delay.dry, 1.0)
 		and shared_late_rack.early_delay.tap1_level_db <= -59.0
 		and shared_late_rack.early_delay.tap2_level_db <= -59.0
@@ -642,6 +643,17 @@ func _test_authoritative_playback(definition: RadioItemDefinition) -> void:
 		"snapshot jitter cannot trigger frequent hard seeks in a healthy continuous song"
 	)
 	var pooled_voice_count := renderer._players.size()
+	var all_radio_doppler_disabled := true
+	for player: AudioStreamPlayer3D in renderer._players:
+		all_radio_doppler_disabled = (
+			all_radio_doppler_disabled
+			and player.doppler_tracking
+			== AudioStreamPlayer3D.DOPPLER_TRACKING_DISABLED
+		)
+	_expect(
+		all_radio_doppler_disabled,
+		"listener movement cannot add engine Doppler to continuous 3D music voices"
+	)
 	renderer.request_foreground_transient_space(0.78, -5.0)
 	var loud_radio_duck_db := renderer._foreground_duck_db(-5.0)
 	var quiet_radio_duck_db := renderer._foreground_duck_db(-35.0)
@@ -675,7 +687,8 @@ func _test_authoritative_playback(definition: RadioItemDefinition) -> void:
 		and AudioServer.get_bus_effect(bus_index, 0) is AudioEffectDistortion
 		and AudioServer.get_bus_effect(bus_index, 4) is AudioEffectSpectrumAnalyzer
 		and AudioServer.get_bus_effect(bus_index, 5) is AudioEffectDelay
-		and AudioServer.get_bus_effect(bus_index, 6) is AudioEffectReverb,
+		and AudioServer.get_bus_effect(bus_index, 6) is AudioEffectReverb
+		and AudioServer.get_bus_effect(bus_index, 7) is AudioEffectLowPassFilter,
 		"radio voice analyzes its filtered program before hybrid early and late room effects"
 	)
 	var distortion := AudioServer.get_bus_effect(
@@ -714,12 +727,13 @@ func _test_authoritative_playback(definition: RadioItemDefinition) -> void:
 		"reverb_predelay_feedback": 0.4,
 	})
 	var stable_reverb_spread := smoothing_rack.reverb.spread
+	var stable_reverb_predelay := smoothing_rack.reverb.predelay_msec
 	smoothing_rack.approach_acoustic({
 		"reverb_send": 0.5,
 		"reverb_room_size": 0.8,
 		"reverb_damping": 0.7,
 		"reverb_spread": 0.98,
-		"reverb_predelay_msec": 24.0,
+		"reverb_predelay_msec": 96.0,
 		"reverb_predelay_feedback": 0.4,
 	}, 0.8)
 	var normalized_mix := SpatialAudioEffectRack.power_normalized_reverb_mix(0.5)
@@ -742,7 +756,10 @@ func _test_authoritative_playback(definition: RadioItemDefinition) -> void:
 		) < 0.0001
 		and is_equal_approx(smoothing_rack.reverb.dry, normalized_mix.x)
 		and is_equal_approx(smoothing_rack.reverb.room_size, 0.8)
-		and is_equal_approx(smoothing_rack.reverb.predelay_msec, 24.0)
+		and is_equal_approx(
+			smoothing_rack.reverb.predelay_msec,
+			stable_reverb_predelay
+		)
 		and is_equal_approx(
 			stable_reverb_spread,
 			SpatialAudioEffectRack.REALTIME_SAFE_REVERB_SPREAD
@@ -921,6 +938,20 @@ func _test_authoritative_playback(definition: RadioItemDefinition) -> void:
 		and fading_volume_after < fading_volume_before,
 		"a missing continuous snapshot fades its existing voice instead of hard-stopping it"
 	)
+	var fading_rack := (
+		renderer._effect_racks[fading_slot]
+		if fading_slot >= 0
+		else null
+	) as SpatialAudioEffectRack
+	_expect(
+		fading_rack != null
+		and fading_rack._tail_floor_undriven_seconds == 0.0
+		and not AudioServer.is_bus_effect_enabled(
+			fading_rack.bus_index,
+			fading_rack._tail_lowpass_effect_index
+		),
+		"a transport gap cannot classify still-playing program samples as an undriven DSP tail"
+	)
 	var recovery_state: Dictionary = radio.call(
 		"build_listener_state",
 		1,
@@ -938,6 +969,21 @@ func _test_authoritative_playback(definition: RadioItemDefinition) -> void:
 			fading_volume_after
 		),
 		"a continuous state returning after one skipped snapshot resumes the same smoothly faded voice"
+	)
+	# Exercise the earlier lifecycle bug directly: the tail filter is enabled before its gain taper,
+	# so a quick return must disable it even while the bus is still at unity.
+	if fading_rack != null:
+		fading_rack.update_tail_floor(false, 0.05)
+		fading_rack.update_tail_floor(true, 0.05)
+	_expect(
+		fading_rack != null
+		and fading_rack._tail_floor_undriven_seconds == 0.0
+		and is_zero_approx(fading_rack._tail_floor_gain_db)
+		and not AudioServer.is_bus_effect_enabled(
+			fading_rack.bus_index,
+			fading_rack._tail_lowpass_effect_index
+		),
+		"a returning continuous voice restores its full-band direct and Hall path after a brief gap"
 	)
 	renderer.submit_snapshot({})
 	renderer._process(1.0)

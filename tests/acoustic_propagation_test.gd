@@ -41,6 +41,8 @@ const ACOUSTIC_RULE_CONTRACT: Array[Dictionary] = [
 	{"id": &"A26", "rule": "Baked path bends apply bounded frequency-dependent deviation after route election; straight paths remain neutral."},
 	{"id": &"A27", "rule": "Distinct early routes add before one listener-space diffuse field is attached."},
 	{"id": &"A29", "rule": "A synchronized array uses path-direct energy for cabinet direction while diffuse recovery remains listener-space energy."},
+	{"id": &"A30", "rule": "Every undriven client reverb rack tapers its artifact floor before Godot's hard idle-channel cutoff."},
+	{"id": &"A31", "rule": "Locally knowable owner cues start from a server-issued context and their authoritative confirmation never replays them."},
 ]
 
 var failure_count := 0
@@ -1286,6 +1288,43 @@ func _test_client_voice_renderer() -> void:
 		renderer._voice_reserved_until_usec[0] > Time.get_ticks_usec()
 		and renderer._select_voice(0.5) == 1,
 		"a finished dry stream cannot overwrite its still-decaying reverb bus"
+	)
+	var tail_rack := renderer._effect_racks[0]
+	tail_rack._tail_floor_tapering = true
+	tail_rack._tail_floor_gain_db = 0.0
+	renderer._process(0.25)
+	var taper_advanced := is_equal_approx(
+		tail_rack._tail_floor_gain_db,
+		-SpatialAudioEffectRack.TAIL_FLOOR_TAPER_DB_PER_SECOND * 0.25
+	)
+	tail_rack.prepare_for_input()
+	_expect_rule(
+		&"A30",
+		taper_advanced
+		and is_zero_approx(tail_rack._tail_floor_gain_db)
+		and is_zero_approx(AudioServer.get_bus_volume_db(tail_rack.bus_index)),
+		"an undriven one-shot exponentially retires its artifact floor and a new input starts at unity"
+	)
+	var prediction_key := LocalAudioPrediction.sequence_key(3131)
+	var prediction_packet := AcousticEventPacket.sanitize({
+		"sound_id": &"renderer_tail_test",
+		"source_position": Vector3.ZERO,
+		"apparent_position": Vector3.ZERO,
+		"travel_delay_seconds": 0.0,
+		"priority": 0.5,
+		"local_prediction_key": prediction_key,
+	})
+	var started_before_prediction := renderer._voice_started_usec.count(0)
+	var prediction_started := renderer.submit_predicted(prediction_packet)
+	var unused_after_prediction := renderer._voice_started_usec.count(0)
+	var confirmation_consumed := renderer.submit(prediction_packet)
+	_expect_rule(
+		&"A31",
+		prediction_started
+		and confirmation_consumed
+		and unused_after_prediction < started_before_prediction
+		and renderer._voice_started_usec.count(0) == unused_after_prediction,
+		"owner prediction starts one pooled voice and its authoritative confirmation starts none"
 	)
 	var previous_reverb := renderer._effect_racks[0].reverb
 	renderer.reset_session()

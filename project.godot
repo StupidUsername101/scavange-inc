@@ -29,6 +29,13 @@ window/size/viewport_width=2711
 window/size/viewport_height=1140
 window/size/mode=3
 
+[layer_names]
+
+3d_physics/layer_1="World Movement"
+3d_physics/layer_3="Physical Limbs"
+3d_physics/layer_8="Rope Knots"
+3d_physics/layer_9="Foot Contact Detail"
+
 [input]
 
 move_forward={

@@ -1,6 +1,10 @@
 class_name ServerAcousticService
 extends Node
 
+const LOCAL_AUDIO_PREDICTION := preload(
+	"res://scripts/audio/local_audio_prediction.gd"
+)
+
 const FIELD_REFRESH_DISTANCE := 0.24
 const FIELD_REFRESH_DISTANCE_SQUARED := (
 	FIELD_REFRESH_DISTANCE * FIELD_REFRESH_DISTANCE
@@ -187,7 +191,8 @@ func calculate_listener_result(
 	continuous_source_id := 0,
 	pressure_strength := 0.0,
 	prepared_pressure_emission: Dictionary = {},
-	prepared_source_attachment: AcousticSourceAttachment = null
+	prepared_source_attachment: AcousticSourceAttachment = null,
+	record_pressure_metrics := true
 ) -> Dictionary:
 	var field: AcousticPropagationField
 	var source_attachment: AcousticSourceAttachment
@@ -310,7 +315,8 @@ func calculate_listener_result(
 			reference_distance,
 			prepared_pressure_emission,
 			listener_id,
-			continuous_source_id
+			continuous_source_id,
+			record_pressure_metrics
 		)
 	if graph.probe_count() <= 0:
 		direct_result["route_kind"] = &"direct"
@@ -334,7 +340,8 @@ func calculate_listener_result(
 			reference_distance,
 			prepared_pressure_emission,
 			listener_id,
-			continuous_source_id
+			continuous_source_id,
+			record_pressure_metrics
 		)
 
 	var graph_result := (
@@ -468,8 +475,49 @@ func calculate_listener_result(
 		reference_distance,
 		prepared_pressure_emission,
 		listener_id,
-		continuous_source_id
+		continuous_source_id,
+		record_pressure_metrics
 	)
+
+
+func build_local_prediction_context(
+	listener_id: int,
+	listener_position: Vector3,
+	listener_rid: RID
+) -> Dictionary:
+	if not listener_position.is_finite():
+		return {}
+	# A near-body source samples the same listener field, room response, early reflections and
+	# pressure attachment used by ordinary one-shots. The static graph and listener field are
+	# already cached; this small 5 Hz packet lets the owner start a cue without running trusted
+	# world geometry on the client or waiting for a round trip.
+	var source_position := listener_position + Vector3.DOWN * 0.35
+	var exclusions: Array[RID] = []
+	if listener_rid.is_valid():
+		exclusions.append(listener_rid)
+	var result := calculate_listener_result(
+		listener_id,
+		listener_position,
+		source_position,
+		140.0,
+		null,
+		AcousticPropagationGraph.DEFAULT_REFERENCE_DISTANCE,
+		false,
+		exclusions,
+		0,
+		1.0,
+		{},
+		null,
+		false
+	)
+	if not bool(result.get("audible", false)):
+		return {}
+	result.erase("audible")
+	result["version"] = AcousticEventPacket.VERSION
+	result["sequence"] = 0
+	result["sound_id"] = LOCAL_AUDIO_PREDICTION.CONTEXT_SOUND_ID
+	result["priority"] = 0.0
+	return AcousticEventPacket.sanitize(result)
 
 
 func _apply_single_route_environment(
@@ -594,7 +642,8 @@ func _finalize_pressure_result(
 	reference_distance: float,
 	prepared_pressure_emission: Dictionary,
 	listener_id: int,
-	continuous_source_id: int
+	continuous_source_id: int,
+	record_pressure_metrics: bool
 ) -> Dictionary:
 	_attach_hybrid_early_reflections(
 		result,
@@ -619,7 +668,7 @@ func _finalize_pressure_result(
 			pressure_strength,
 			int(result.get("source_probe_index", -1))
 		)
-		if not emission.is_empty():
+		if not emission.is_empty() and record_pressure_metrics:
 			_pressure_emission_build_count += 1
 	graph.attach_pressure_arrivals(
 		result,
@@ -632,7 +681,7 @@ func _finalize_pressure_result(
 		emission
 	)
 	var arrivals: Array = result.get("pressure_arrivals", [])
-	if not arrivals.is_empty():
+	if not arrivals.is_empty() and record_pressure_metrics:
 		_pressure_listener_event_count += 1
 		_pressure_arrival_count += arrivals.size()
 	return result

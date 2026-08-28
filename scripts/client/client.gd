@@ -3,6 +3,9 @@ extends Node
 const FIELDLINK_DISPLAY_STATE := preload(
 	"res://scripts/network/fieldlink_display_state.gd"
 )
+const LOCAL_AUDIO_PREDICTION_RUNTIME := preload(
+	"res://scripts/audio/local_audio_prediction_runtime.gd"
+)
 
 const HOST_RPC_ID = 1
 const PLAYER_PROXY_SCENE := preload("res://scenes/proxy/player_proxy.tscn")
@@ -56,6 +59,7 @@ var wrist_input_suspended := false
 var spatial_audio_renderer: SpatialAudioRenderer
 var radio_audio_renderer: RadioAudioRenderer
 var last_network_snapshot_sequence_by_stream: Dictionary[StringName, int] = {}
+var local_audio_prediction_runtime := LOCAL_AUDIO_PREDICTION_RUNTIME.new()
 
 
 func reset_session() -> void:
@@ -86,6 +90,7 @@ func reset_session() -> void:
 	primary_action_held_sent = false
 	wrist_input_suspended = false
 	last_network_snapshot_sequence_by_stream.clear()
+	local_audio_prediction_runtime.reset()
 	if is_instance_valid(spatial_audio_renderer):
 		spatial_audio_renderer.reset_session(true)
 	if is_instance_valid(radio_audio_renderer):
@@ -129,6 +134,22 @@ func get_listener_acoustic_intensity() -> float:
 	return LISTENER_ACTIVITY.combine_energy(
 		transient_intensity,
 		continuous_intensity
+	)
+
+
+func predict_local_player_sound(
+	sound_id: StringName,
+	source_position: Vector3,
+	profile_value: Dictionary = {},
+	prediction_key := 0
+) -> int:
+	_ensure_spatial_audio_renderer()
+	return local_audio_prediction_runtime.predict(
+		spatial_audio_renderer,
+		sound_id,
+		source_position,
+		profile_value,
+		prediction_key
 	)
 
 
@@ -339,8 +360,8 @@ func _physics_process(delta: float) -> void:
 		local_proxy != null
 		and local_proxy.is_wrist_interface_open()
 	)
-	_send_movement_input(yaw, pitch)
-	_process_locomotion_action_input()
+	_send_movement_input(yaw, pitch, local_proxy)
+	_process_locomotion_action_input(local_proxy)
 	if wrist_open:
 		_suspend_gameplay_input(yaw, pitch, local_proxy)
 		return
@@ -361,7 +382,8 @@ func _has_connected_multiplayer_peer() -> bool:
 
 func _send_movement_input(
 	yaw: float,
-	pitch: float
+	pitch: float,
+	local_proxy: PlayerProxy
 ) -> void:
 	var move := Input.get_vector(
 		"move_left",
@@ -369,19 +391,33 @@ func _send_movement_input(
 		"move_forward",
 		"move_back"
 	)
+	var wants_run := Input.is_action_pressed("run")
+	if local_proxy != null:
+		# The authority still owns collision, stamina, and the accepted gait sequence. Feeding the
+		# already-sampled local intent into presentation removes one network round trip from the gait
+		# clock, so the owner hears an impact on the same frame as its bob instead of after a snapshot.
+		local_proxy.set_local_locomotion_input(move, wants_run)
 	Server.rpc_id(
 		HOST_RPC_ID,
 		"receive_player_input",
 		move,
 		yaw,
 		pitch,
-		Input.is_action_pressed("run")
+		wants_run
 	)
 
 
-func _process_locomotion_action_input() -> void:
+func _process_locomotion_action_input(local_proxy: PlayerProxy) -> void:
 	if Input.is_action_just_pressed("jump"):
-		Server.rpc_id(HOST_RPC_ID, "receive_jump")
+		var prediction_key := 0
+		if local_proxy != null and local_proxy.target_on_floor:
+			prediction_key = predict_local_player_sound(
+				PhysicalSurface.jump_sound_id(
+					local_proxy.target_footstep_surface
+				),
+				local_proxy.global_position + Vector3.UP * 0.35
+			)
+		Server.rpc_id(HOST_RPC_ID, "receive_jump", prediction_key)
 
 
 func _suspend_gameplay_input(
@@ -415,15 +451,24 @@ func _suspend_gameplay_input(
 			yaw,
 			pitch
 		)
+	local_audio_prediction_runtime.stop_primary()
 
 
 func set_wrist_interface_open(value: bool) -> void:
 	if not _has_connected_multiplayer_peer():
 		return
+	var local_proxy := get_local_player_proxy()
+	var prediction_key := 0
+	if local_proxy != null:
+		prediction_key = predict_local_player_sound(
+			&"fieldlink_open" if value else &"fieldlink_close",
+			local_proxy.get_wrist_sound_source_position()
+		)
 	Server.rpc_id(
 		HOST_RPC_ID,
 		"set_wrist_interface_open",
-		value
+		value,
+		prediction_key
 	)
 
 
@@ -440,10 +485,18 @@ func set_wrist_display_page(page_value: Variant) -> void:
 func request_wrist_device_sound(sound_id: StringName) -> void:
 	if not _has_connected_multiplayer_peer():
 		return
+	var local_proxy := get_local_player_proxy()
+	var prediction_key := 0
+	if local_proxy != null:
+		prediction_key = predict_local_player_sound(
+			sound_id,
+			local_proxy.get_wrist_sound_source_position()
+		)
 	Server.rpc_id(
 		HOST_RPC_ID,
 		"request_wrist_device_sound",
-		sound_id
+		sound_id,
+		prediction_key
 	)
 
 
@@ -496,21 +549,35 @@ func _process_action_input(
 	if Input.is_action_just_pressed("reload_weapon"):
 		Server.rpc_id(HOST_RPC_ID, "reload_selected_weapon")
 
-	if (
+	var primary_action_just_pressed := (
 		Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 		and Input.is_action_just_pressed("primary_action")
-	):
+	)
+	if primary_action_just_pressed:
+		_ensure_spatial_audio_renderer()
+		var prediction_session := local_audio_prediction_runtime.begin_primary(
+			spatial_audio_renderer,
+			local_proxy
+		)
 		Server.rpc_id(
 			HOST_RPC_ID,
 			"primary_action",
 			yaw,
-			pitch
+			pitch,
+			prediction_session
 		)
 
 	var primary_action_held := (
 		Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 		and Input.is_action_pressed("primary_action")
 	)
+	if primary_action_held:
+		_ensure_spatial_audio_renderer()
+		local_audio_prediction_runtime.update_primary(
+			spatial_audio_renderer,
+			delta,
+			local_proxy
+		)
 	if primary_action_held != primary_action_held_sent:
 		primary_action_held_sent = primary_action_held
 		Server.rpc_id(
@@ -518,8 +585,11 @@ func _process_action_input(
 			"set_primary_action_held",
 			primary_action_held,
 			yaw,
-			pitch
+			pitch,
+			local_audio_prediction_runtime.primary_session()
 		)
+		if not primary_action_held:
+			local_audio_prediction_runtime.stop_primary()
 
 
 func _process_grab_input(
@@ -704,6 +774,17 @@ func on_spatial_sound_received(packet: Dictionary) -> void:
 	spatial_audio_renderer.submit(sanitized)
 
 
+@rpc("authority", "unreliable_ordered", "call_local", 7)
+func on_local_audio_prediction_context_received(context_value: Dictionary) -> void:
+	local_audio_prediction_runtime.apply_context(context_value)
+
+
+@rpc("authority", "call_local", "reliable", 3)
+func on_local_audio_prediction_rejected(prediction_key: int) -> void:
+	if is_instance_valid(spatial_audio_renderer):
+		spatial_audio_renderer.reject_prediction(prediction_key)
+
+
 @rpc("authority", "unreliable_ordered", "call_local", 6)
 func on_radio_states_received(states: Dictionary) -> void:
 	if states.is_empty() and not is_instance_valid(radio_audio_renderer):
@@ -723,14 +804,20 @@ func on_fieldlink_device_control_received(snapshot_value: Dictionary) -> void:
 
 
 @rpc("authority", "call_local", "reliable", 3)
-func on_player_wrist_state_received(
-	player_id: int,
-	open_value: bool,
-	page_value: Variant
-) -> void:
-	var proxy := player_proxys_by_player_id.get(player_id) as PlayerProxy
+func on_player_wrist_state_received(packet_value: Dictionary) -> void:
+	var packet := FIELDLINK_DISPLAY_STATE.sanitize_replication_packet(
+		packet_value
+	)
+	if packet.is_empty():
+		return
+	var proxy := player_proxys_by_player_id.get(
+		int(packet["player_id"])
+	) as PlayerProxy
 	if proxy != null:
-		proxy.apply_replicated_wrist_state(open_value, page_value)
+		proxy.apply_replicated_wrist_state(
+			bool(packet["open"]),
+			packet["page"]
+		)
 
 
 @rpc("authority", "call_local", "reliable", 3)

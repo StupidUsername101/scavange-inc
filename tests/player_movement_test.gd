@@ -20,7 +20,8 @@ class RecordingServerPlayer:
 	func _emit_gameplay_sound(
 		sound_id: StringName,
 		_max_distance: float,
-		_priority: float
+		_priority: float,
+		_local_prediction_key := 0
 	) -> void:
 		emitted_sound_ids.append(sound_id)
 
@@ -39,6 +40,7 @@ func _run() -> void:
 	_test_wall_collision_velocity()
 	_test_shared_gait_clock()
 	_test_authoritative_jump_arc()
+	await _test_authoritative_split_support_trip()
 	await _test_authoritative_step_traversal()
 	await _test_authored_entrance_traversal()
 	_finish()
@@ -301,7 +303,8 @@ func _test_authoritative_jump_arc() -> void:
 	_expect(
 		is_equal_approx(player.velocity.x, carried_velocity.x)
 		and is_equal_approx(player.velocity.z, carried_velocity.z)
-		and is_equal_approx(player.velocity.y, ServerPlayer.JUMP_VELOCITY),
+		and is_equal_approx(player.velocity.y, ServerPlayer.JUMP_VELOCITY)
+		and player.jump_sequence == 1,
 		"the authoritative takeoff tick carries existing horizontal momentum"
 	)
 	_expect(
@@ -313,8 +316,9 @@ func _test_authoritative_jump_arc() -> void:
 		public_state.has("gait_cycle")
 		and public_state.has("gait_stride_distance")
 		and public_state.has("gait_active")
+		and int(public_state.get("jump_sequence", -1)) == 1
 		and is_equal_approx(float(public_state.get("stamina_ratio", -1.0)), 1.0),
-		"authoritative movement snapshots replicate the shared gait clock and END ratio"
+		"authoritative movement snapshots replicate the shared gait, jump-expression sequence, and END ratio"
 	)
 
 	var launch_horizontal := Vector2(player.velocity.x, player.velocity.z)
@@ -330,6 +334,75 @@ func _test_authoritative_jump_arc() -> void:
 		"airborne simulation uses a stable ballistic arc without erasing momentum"
 	)
 	player.free()
+
+
+func _test_authoritative_split_support_trip() -> void:
+	var wide_floor := _add_static_box(
+		"TripWideFloor",
+		Vector3(4.0, 0.2, 4.0),
+		Vector3(0.0, -0.1, 0.0)
+	)
+	var player := _make_physics_player(
+		Vector3(0.0, ServerPlayer.STANDING_COLLISION_HEIGHT * 0.5, 0.0)
+	)
+	await physics_frame
+	_expect(
+		not bool(player.call("_landing_lacks_required_support")),
+		"a biped landing on a broad surface finds independent support under both feet"
+	)
+	wide_floor.free()
+	var single_foot_perch := _add_static_box(
+		"TripSingleFootPerch",
+		Vector3(0.18, 0.2, 1.2),
+		Vector3(-ServerPlayer.TRIP_SUPPORT_LATERAL_OFFSET, -0.1, 0.0)
+	)
+	await physics_frame
+	_expect(
+		bool(player.call("_landing_lacks_required_support")),
+		"a biped landing with empty space beneath its second foot reports lost support"
+	)
+	player.global_position.y = (
+		ServerPlayer.STANDING_COLLISION_HEIGHT * 0.5 + 0.01
+	)
+	player.on_floor = false
+	player.air_time = ServerPlayer.TRIP_MIN_AIR_TIME + 0.01
+	player.velocity = Vector3(1.0, -1.0, 0.0)
+	player.server_physics_tick(STEP)
+	var trip_state := player.to_state_dict()
+	_expect(
+		player.ragdoll_active
+		and player.trip_sequence == 1
+		and bool(trip_state.get("ragdoll_active", false))
+		and int(trip_state.get("trip_sequence", 0)) == 1
+		and (trip_state.get("trip_direction", Vector3.ZERO) as Vector3).length() > 0.9,
+		"support loss starts and replicates one trip even below the loud-landing audio threshold"
+	)
+	player.call("_update_trip_state", ServerPlayer.TRIP_RECOVERY_SECONDS + STEP)
+	player.on_floor = true
+	player.velocity = Vector3(0.0, 0.0, -ServerPlayer.WALK_SPEED)
+	player.gait.distance_since_step = (
+		player.gait.stride_distance - ServerPlayer.WALK_SPEED * STEP * 0.5
+	)
+	player.call("_update_footsteps", STEP)
+	_expect(
+		player.ragdoll_active and player.trip_sequence == 2,
+		"a real gait footfall also trips when its second support ray finds empty space"
+	)
+
+	var one_leg_loadout := FULL_BODY.duplicate(true) as CharacterLoadout
+	one_leg_loadout.right_leg = null
+	player.set_body_loadout(one_leg_loadout)
+	_expect(
+		not bool(player.call("_landing_lacks_required_support")),
+		"a one-legged loadout never fails a check for a nonexistent second foot"
+	)
+	player.call("_update_trip_state", ServerPlayer.TRIP_RECOVERY_SECONDS + STEP)
+	_expect(
+		not player.ragdoll_active,
+		"the authoritative trip state recovers after its bounded incapacitation window"
+	)
+	player.free()
+	single_foot_perch.free()
 
 
 func _test_authoritative_step_traversal() -> void:

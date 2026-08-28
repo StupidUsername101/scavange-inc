@@ -5,7 +5,10 @@ const MAX_PLAYERS := 4
 const MAX_BROWSER_RESULTS := 50
 
 const GAME_TAG := "scavange-inc"
-const PROTOCOL_VERSION := "1"
+# Increment whenever an RPC method, channel, or replicated payload changes incompatibly. Steam
+# lobby compatibility is checked before creating the transport, so mismatched source revisions are
+# rejected at the browser instead of connecting far enough to fail inside SceneMultiplayer.
+const PROTOCOL_VERSION := "2"
 
 const DATA_GAME := "game"
 const DATA_PROTOCOL := "protocol"

@@ -1,0 +1,44 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/characters/player_procedural_leg_rig.gd" id="1_rig"]
+
+[sub_resource type="StandardMaterial3D" id="Material_leg"]
+albedo_color = Color(0.21, 0.225, 0.22, 1)
+metallic = 0.16
+roughness = 0.72
+
+[sub_resource type="CapsuleMesh" id="Mesh_segment"]
+material = SubResource("Material_leg")
+radius = 0.125
+height = 1.0
+radial_segments = 12
+rings = 6
+
+[sub_resource type="BoxMesh" id="Mesh_foot"]
+material = SubResource("Material_leg")
+size = Vector3(0.27, 0.13, 0.42)
+
+[node name="ProceduralLegRig" type="Node3D"]
+script = ExtResource("1_rig")
+
+[node name="LeftLeg" type="Node3D" parent="."]
+
+[node name="Upper" type="MeshInstance3D" parent="LeftLeg"]
+mesh = SubResource("Mesh_segment")
+
+[node name="Lower" type="MeshInstance3D" parent="LeftLeg"]
+mesh = SubResource("Mesh_segment")
+
+[node name="Foot" type="MeshInstance3D" parent="LeftLeg"]
+mesh = SubResource("Mesh_foot")
+
+[node name="RightLeg" type="Node3D" parent="."]
+
+[node name="Upper" type="MeshInstance3D" parent="RightLeg"]
+mesh = SubResource("Mesh_segment")
+
+[node name="Lower" type="MeshInstance3D" parent="RightLeg"]
+mesh = SubResource("Mesh_segment")
+
+[node name="Foot" type="MeshInstance3D" parent="RightLeg"]
+mesh = SubResource("Mesh_foot")

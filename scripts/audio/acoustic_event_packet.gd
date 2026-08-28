@@ -1,6 +1,10 @@
 class_name AcousticEventPacket
 extends RefCounted
 
+const LOCAL_PREDICTION_KEYS := preload(
+	"res://scripts/audio/local_audio_prediction_keys.gd"
+)
+
 const VERSION := 4
 const MAX_SOUND_ID_LENGTH := 96
 const MAX_MODIFIER_IDS := 12
@@ -146,6 +150,11 @@ static func sanitize(value: Variant) -> Dictionary:
 		),
 		"modifier_ids": modifier_ids,
 	}
+	var local_prediction_key := LOCAL_PREDICTION_KEYS.sanitize_key(
+		packet.get("local_prediction_key")
+	)
+	if local_prediction_key > 0:
+		result["local_prediction_key"] = local_prediction_key
 	var early_reflections := _sanitize_early_reflections(
 		packet.get("early_reflections", [])
 	)

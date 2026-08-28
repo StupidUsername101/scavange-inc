@@ -1,8 +1,10 @@
-[gd_scene load_steps=9 format=3 uid="uid://d7ua7jmq566a"]
+[gd_scene load_steps=10 format=3 uid="uid://d7ua7jmq566a"]
 
 [ext_resource type="Script" uid="uid://c6ucunx40lk05" path="res://scripts/client/player_proxy.gd" id="1_435og"]
 [ext_resource type="Script" path="res://scripts/client/player_inventory_hud.gd" id="2_hud"]
 [ext_resource type="Script" path="res://scripts/client/ocular_vision_controller.gd" id="3_vision"]
+[ext_resource type="PackedScene" path="res://scenes/proxy/player_procedural_leg_rig.tscn" id="4_legs"]
+[ext_resource type="Script" path="res://scripts/characters/player_ragdoll_3d.gd" id="5_ragdoll"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_torso"]
 size = Vector3(0.7, 0.85, 0.4)
@@ -14,10 +16,6 @@ height = 0.56
 [sub_resource type="CapsuleMesh" id="CapsuleMesh_arm"]
 radius = 0.11
 height = 0.82
-
-[sub_resource type="CapsuleMesh" id="CapsuleMesh_leg"]
-radius = 0.14
-height = 0.88
 
 [sub_resource type="SphereMesh" id="SphereMesh_edit_aim_hit"]
 radius = 0.065
@@ -38,47 +36,46 @@ position = Vector3(0, 0.555758, 0)
 
 [node name="BodyVisual" type="Node3D" parent="."]
 
-[node name="Torso" type="MeshInstance3D" parent="BodyVisual"]
+[node name="UpperBodyPose" type="Node3D" parent="BodyVisual"]
+
+[node name="Torso" type="MeshInstance3D" parent="BodyVisual/UpperBodyPose"]
 position = Vector3(0, 0.15, 0)
 mesh = SubResource("BoxMesh_torso")
 
-[node name="Head" type="MeshInstance3D" parent="BodyVisual"]
+[node name="Head" type="MeshInstance3D" parent="BodyVisual/UpperBodyPose"]
 position = Vector3(0, 0.78, 0)
 mesh = SubResource("SphereMesh_head")
 
-[node name="LeftArm" type="MeshInstance3D" parent="BodyVisual"]
+[node name="LeftArm" type="MeshInstance3D" parent="BodyVisual/UpperBodyPose"]
 position = Vector3(-0.47, 0.16, 0)
 mesh = SubResource("CapsuleMesh_arm")
 
-[node name="WristMount" type="Node3D" parent="BodyVisual/LeftArm"]
+[node name="WristMount" type="Node3D" parent="BodyVisual/UpperBodyPose/LeftArm"]
 position = Vector3(0, -0.34, -0.11)
 rotation = Vector3(0, 3.14159, 0)
 scale = Vector3(0.82, 0.82, 0.82)
 
-[node name="RightArm" type="MeshInstance3D" parent="BodyVisual"]
+[node name="RightArm" type="MeshInstance3D" parent="BodyVisual/UpperBodyPose"]
 position = Vector3(0.47, 0.16, 0)
 mesh = SubResource("CapsuleMesh_arm")
 
-[node name="WristMount" type="Node3D" parent="BodyVisual/RightArm"]
+[node name="WristMount" type="Node3D" parent="BodyVisual/UpperBodyPose/RightArm"]
 position = Vector3(0, -0.34, -0.11)
 rotation = Vector3(0, 3.14159, 0)
 scale = Vector3(0.82, 0.82, 0.82)
 
-[node name="LeftLeg" type="MeshInstance3D" parent="BodyVisual"]
-position = Vector3(-0.2, -0.62, 0)
-mesh = SubResource("CapsuleMesh_leg")
+[node name="ProceduralLegRig" parent="BodyVisual" instance=ExtResource("4_legs")]
 
-[node name="RightLeg" type="MeshInstance3D" parent="BodyVisual"]
-position = Vector3(0.2, -0.62, 0)
-mesh = SubResource("CapsuleMesh_leg")
+[node name="PlayerRagdoll" type="Node3D" parent="."]
+script = ExtResource("5_ragdoll")
 
-[node name="BackpackMount" type="Node3D" parent="BodyVisual"]
+[node name="BackpackMount" type="Node3D" parent="BodyVisual/UpperBodyPose"]
 position = Vector3(0, 0.18, 0.32)
 
-[node name="EyesMount" type="Node3D" parent="BodyVisual"]
+[node name="EyesMount" type="Node3D" parent="BodyVisual/UpperBodyPose"]
 position = Vector3(0, 0.8, -0.265)
 
-[node name="HeldItemMount" type="Node3D" parent="BodyVisual"]
+[node name="HeldItemMount" type="Node3D" parent="BodyVisual/UpperBodyPose"]
 position = Vector3(0.43, 0.05, -0.32)
 rotation = Vector3(0.04, -0.08, -0.08)
 

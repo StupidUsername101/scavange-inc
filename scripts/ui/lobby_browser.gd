@@ -40,9 +40,7 @@ func _ready() -> void:
 
 	if not Server.is_steam_available():
 		refresh_button.disabled = true
-		_show_empty_state(
-			"Steam is not running. Start Steam and relaunch the game."
-		)
+		_show_empty_state(Server.get_steam_unavailable_message())
 		return
 
 	refresh_lobbies()
@@ -133,9 +131,7 @@ func refresh_lobbies() -> void:
 	if not Server.is_steam_available():
 		refresh_in_flight = false
 		refresh_button.disabled = true
-		_show_empty_state(
-			"Steam is not running. Start Steam and relaunch the game."
-		)
+		_show_empty_state(Server.get_steam_unavailable_message())
 		return
 
 	print("CLIENT: Refreshing lobbies...")

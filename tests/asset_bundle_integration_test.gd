@@ -21,11 +21,15 @@ class RecordingServerPlayer:
 	func _emit_gameplay_sound(
 		sound_id: StringName,
 		_max_distance: float,
-		_priority: float
+		_priority: float,
+		_local_prediction_key := 0
 	) -> void:
 		emitted_sound_ids.append(sound_id)
 
-	func _emit_wrist_device_sound(sound_id: StringName) -> void:
+	func _emit_wrist_device_sound(
+		sound_id: StringName,
+		_local_prediction_key := 0
+	) -> void:
 		emitted_wrist_sound_ids.append(sound_id)
 
 

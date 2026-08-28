@@ -10,7 +10,8 @@ const SPECTRAL_BLOOM_PREDELAY_FEEDBACK_LIFT := 0.08
 # Godot implements stereo spread by changing only the right reverb network's comb/all-pass delay
 # lengths. Moving this value while the delay is populated can wrap a read head immediately and
 # emit a one-sample click in the right channel. Keep that topology fixed; room geometry still
-# changes the wet energy, decay, damping, pre-delay, filters, and apparent source position.
+# changes wet energy, decay, damping, filters, and apparent source position, while pre-delay is
+# selected once before each input begins.
 const REALTIME_SAFE_REVERB_SPREAD := 0.92
 # Godot 4's Freeverb-derived return contains eight parallel feedback combs followed by all-pass
 # stages. The all-pass stages preserve RMS power; the comb bank and predelay do not. These constants
@@ -24,6 +25,22 @@ const EARLY_REFLECTION_SLOT_COUNT := 2
 const EARLY_REFLECTION_SILENT_DB := -60.0
 const EARLY_REFLECTION_RETUNE_DB := -52.0
 const EARLY_REFLECTION_DELAY_HYSTERESIS_MSEC := 3.0
+# Godot deactivates an unused audio-bus channel after it remains below -60 dB for two seconds.
+# Its Freeverb-derived comb bank can become sparse/metallic in that interval, then the engine cuts
+# the channel in one block. Preserve the useful room decay, but taper an undriven return once it is
+# already very quiet so both the numerical residue and the eventual engine cutoff are inaudible.
+const TAIL_FLOOR_TAPER_START_DB := -60.0
+const TAIL_FLOOR_SILENT_DB := -80.0
+const TAIL_FLOOR_TAPER_DB_PER_SECOND := 24.0
+# The last few hundred milliseconds of a feedback reverb are no longer a useful geometric echo:
+# lossy program residue and sparse comb modes can become a bright, detached hiss as the dry signal
+# disappears. Real rooms also lose high frequencies faster than lows. A post-return low-pass darkens
+# only that already-retiring residue; it is bypassed for every driven sample and never changes the
+# populated reverb topology.
+const TAIL_FLOOR_DARKEN_OVER_DB := 30.0
+const TAIL_FLOOR_MIN_CUTOFF_HZ := 850.0
+const TAIL_FLOOR_MIN_PROTECTED_SECONDS := 0.20
+const TAIL_FLOOR_FORCE_TAPER_MARGIN_SECONDS := 0.15
 
 ## Persistent DSP rack shared by short spatial voices and continuous radios. Dedicated buses are
 ## built once; packet updates only mutate existing effect parameters.
@@ -35,6 +52,7 @@ var lowpass: AudioEffectLowPassFilter
 var highpass: AudioEffectHighPassFilter
 var early_delay: AudioEffectDelay
 var reverb: AudioEffectReverb
+var tail_lowpass: AudioEffectLowPassFilter
 var spectrum_analyzer: AudioEffectSpectrumAnalyzer
 var spectrum_analyzer_instance: AudioEffectSpectrumAnalyzerInstance
 var _distortion_effect_index := -1
@@ -42,10 +60,17 @@ var _equalizer_effect_index := 0
 var _lowpass_effect_index := 1
 var _highpass_effect_index := 2
 var _reverb_effect_index := 3
+var _tail_lowpass_effect_index := 4
 var _early_delay_effect_index := -1
 var _spectrum_effect_index := -1
 var _persistent_processing := false
 var _early_reflection_ids := PackedInt32Array([-1, -1])
+var _tail_floor_gain_db := 0.0
+var _tail_floor_tapering := false
+var _tail_floor_armed := false
+var _tail_floor_undriven_seconds := 0.0
+var _tail_expected_decay_seconds := 0.25
+var _reverb_topology_initialized := false
 
 
 static func attach(bus_name: StringName, include_distortion := false) -> SpatialAudioEffectRack:
@@ -189,6 +214,18 @@ func _apply_acoustic(
 	)
 	var target_reverb_dry := reverb_mix.x
 	var target_reverb_wet := reverb_mix.y * return_normalization
+	_tail_expected_decay_seconds = lerpf(
+		_tail_expected_decay_seconds,
+		clampf(
+			SafeVariant.finite_float_or(
+				packet.get("reverb_decay_seconds"),
+				0.25
+			),
+			AcousticEnvironmentModel.MIN_REVERB_TIME_SECONDS,
+			AcousticEnvironmentModel.MAX_REVERB_TIME_SECONDS
+		),
+		weight
+	)
 	if reverb != null:
 		reverb.dry = lerpf(reverb.dry, target_reverb_dry, weight)
 		reverb.wet = lerpf(reverb.wet, target_reverb_wet, weight)
@@ -198,11 +235,18 @@ func _apply_acoustic(
 			weight
 		)
 		reverb.damping = lerpf(reverb.damping, bloom_response.y, weight)
-		reverb.predelay_msec = lerpf(
-			reverb.predelay_msec,
-			clampf(float(packet.get("reverb_predelay_msec", 8.0)), 0.0, 500.0),
-			weight
-		)
+		# Pre-delay is a delay-line read position, not an ordinary mix coefficient. Retuning it while
+		# program or Hall samples occupy the line produces a tiny pitch bend/zipper that resembles
+		# Doppler as probe targets change. Initialize it before a voice starts and keep that topology
+		# stable for the lifetime of the input; room send, feedback, damping, colour, and level remain
+		# continuously responsive.
+		if not _reverb_topology_initialized:
+			reverb.predelay_msec = clampf(
+				float(packet.get("reverb_predelay_msec", 8.0)),
+				0.0,
+				500.0
+			)
+			_reverb_topology_initialized = true
 		reverb.predelay_feedback = lerpf(
 			reverb.predelay_feedback,
 			bloom_response.z,
@@ -355,6 +399,82 @@ func sample_spectrum_range(from_hz: float, to_hz: float) -> Vector2:
 	)
 
 
+func prepare_for_input() -> void:
+	# New input must never inherit the previous voice's tail attenuation. The old return is already
+	# below the taper threshold, and the new transient masks that tiny reset without an allocation or
+	# rebuilding populated DSP delay lines on the hot path.
+	_tail_floor_gain_db = 0.0
+	_tail_floor_tapering = false
+	_tail_floor_armed = true
+	_tail_floor_undriven_seconds = 0.0
+	_reverb_topology_initialized = false
+	if bus_index >= 0:
+		AudioServer.set_bus_volume_db(bus_index, 0.0)
+		if tail_lowpass != null:
+			tail_lowpass.cutoff_hz = AcousticPathModifier.MAX_FILTER_HZ
+		AudioServer.set_bus_effect_enabled(
+			bus_index,
+			_tail_lowpass_effect_index,
+			false
+		)
+
+
+func update_tail_floor(input_driven: bool, delta: float) -> void:
+	if bus_index < 0:
+		return
+	if input_driven:
+		# A tail filter is enabled on the first undriven frame, before the gain taper starts. A
+		# continuous source can legitimately disappear for one unreliable snapshot and return during
+		# that hold. Reset the whole retirement state on that transition; checking only the gain left
+		# the post-reverb low-pass engaged and permanently darkened the resumed program/Hall.
+		if _tail_floor_undriven_seconds > 0.0:
+			prepare_for_input()
+		else:
+			_tail_floor_armed = true
+		return
+	if not _tail_floor_armed:
+		return
+	_tail_floor_undriven_seconds += maxf(delta, 0.0)
+	if not _tail_floor_tapering:
+		var tail_peak_db := maxf(
+			AudioServer.get_bus_peak_volume_left_db(bus_index, 0),
+			AudioServer.get_bus_peak_volume_right_db(bus_index, 0)
+		)
+		var protected_seconds := maxf(
+			_tail_expected_decay_seconds,
+			TAIL_FLOOR_MIN_PROTECTED_SECONDS
+		)
+		if (
+			_tail_floor_undriven_seconds < TAIL_FLOOR_MIN_PROTECTED_SECONDS
+			or (
+				tail_peak_db > TAIL_FLOOR_TAPER_START_DB
+				and _tail_floor_undriven_seconds
+				< protected_seconds + TAIL_FLOOR_FORCE_TAPER_MARGIN_SECONDS
+			)
+		):
+			return
+		_tail_floor_tapering = true
+		AudioServer.set_bus_effect_enabled(
+			bus_index,
+			_tail_lowpass_effect_index,
+			true
+		)
+	_tail_floor_gain_db = move_toward(
+		_tail_floor_gain_db,
+		TAIL_FLOOR_SILENT_DB,
+		TAIL_FLOOR_TAPER_DB_PER_SECOND * maxf(delta, 0.0)
+	)
+	var gain_darken_progress := clampf(
+		-_tail_floor_gain_db / TAIL_FLOOR_DARKEN_OVER_DB,
+		0.0,
+		1.0
+	)
+	_apply_tail_lowpass(gain_darken_progress)
+	AudioServer.set_bus_volume_db(bus_index, _tail_floor_gain_db)
+	if _tail_floor_gain_db <= TAIL_FLOOR_SILENT_DB + 0.001:
+		_tail_floor_armed = false
+
+
 func reset_state() -> void:
 	# Audio effects own delay-line state outside the stream player. Rebuilding only at a session
 	# boundary guarantees that an old room/radio tail cannot bleed into the next world. This is
@@ -365,8 +485,28 @@ func reset_state() -> void:
 		-1
 	):
 		AudioServer.remove_bus_effect(bus_index, effect_index)
+	_tail_floor_gain_db = 0.0
+	_tail_floor_tapering = false
+	_tail_floor_armed = false
+	_tail_floor_undriven_seconds = 0.0
+	_tail_expected_decay_seconds = 0.25
+	_reverb_topology_initialized = false
+	AudioServer.set_bus_volume_db(bus_index, 0.0)
 	_early_reflection_ids = PackedInt32Array([-1, -1])
 	_ensure_effect_layout(_persistent_processing)
+
+
+func _apply_tail_lowpass(progress: float) -> void:
+	if tail_lowpass == null:
+		return
+	# The curved response preserves the clear early echo, then retires hiss/comb residue before it
+	# can become perceptually separate from the musical tail.
+	progress = pow(clampf(progress, 0.0, 1.0), 0.72)
+	tail_lowpass.cutoff_hz = exp(lerpf(
+		log(AcousticPathModifier.MAX_FILTER_HZ),
+		log(TAIL_FLOOR_MIN_CUTOFF_HZ),
+		progress
+	))
 
 
 func _apply_early_reflections(
@@ -520,7 +660,7 @@ static func _distortion_mode(mode_index: int) -> int:
 
 
 func _ensure_effect_layout(include_distortion: bool) -> void:
-	var expected_count := 7 if include_distortion else 5
+	var expected_count := 8 if include_distortion else 6
 	var valid := AudioServer.get_bus_effect_count(bus_index) == expected_count
 	var offset := 1 if include_distortion else 0
 	if valid and include_distortion:
@@ -539,6 +679,8 @@ func _ensure_effect_layout(include_distortion: bool) -> void:
 					is AudioEffectDelay
 					and AudioServer.get_bus_effect(bus_index, offset + 4)
 					is AudioEffectReverb
+					and AudioServer.get_bus_effect(bus_index, offset + 5)
+					is AudioEffectLowPassFilter
 				)
 				or (
 					include_distortion
@@ -548,6 +690,8 @@ func _ensure_effect_layout(include_distortion: bool) -> void:
 					is AudioEffectDelay
 					and AudioServer.get_bus_effect(bus_index, offset + 5)
 					is AudioEffectReverb
+					and AudioServer.get_bus_effect(bus_index, offset + 6)
+					is AudioEffectLowPassFilter
 				)
 			)
 		)
@@ -579,6 +723,10 @@ func _ensure_effect_layout(include_distortion: bool) -> void:
 		delay.feedback_active = false
 		AudioServer.add_bus_effect(bus_index, delay)
 		AudioServer.add_bus_effect(bus_index, AudioEffectReverb.new())
+		var tail_filter := AudioEffectLowPassFilter.new()
+		tail_filter.cutoff_hz = AcousticPathModifier.MAX_FILTER_HZ
+		tail_filter.resonance = 0.5
+		AudioServer.add_bus_effect(bus_index, tail_filter)
 
 	_distortion_effect_index = 0 if include_distortion else -1
 	_equalizer_effect_index = 1 if include_distortion else 0
@@ -593,6 +741,7 @@ func _ensure_effect_layout(include_distortion: bool) -> void:
 	_reverb_effect_index = (
 		_early_delay_effect_index + 1
 	)
+	_tail_lowpass_effect_index = _reverb_effect_index + 1
 	distortion = (
 		AudioServer.get_bus_effect(bus_index, _distortion_effect_index)
 		as AudioEffectDistortion
@@ -619,6 +768,15 @@ func _ensure_effect_layout(include_distortion: bool) -> void:
 		bus_index,
 		_reverb_effect_index
 	) as AudioEffectReverb
+	tail_lowpass = AudioServer.get_bus_effect(
+		bus_index,
+		_tail_lowpass_effect_index
+	) as AudioEffectLowPassFilter
+	AudioServer.set_bus_effect_enabled(
+		bus_index,
+		_tail_lowpass_effect_index,
+		false
+	)
 	if reverb != null:
 		# Delay topology is initialized once while the bus is silent, never rewritten on the hot path.
 		reverb.spread = REALTIME_SAFE_REVERB_SPREAD

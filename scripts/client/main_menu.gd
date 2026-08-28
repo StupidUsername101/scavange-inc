@@ -30,10 +30,19 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	host_button.pressed.connect(_on_host_pressed)
 	browser_button.pressed.connect(_on_browser_pressed)
-	training_room_button.pressed.connect(_on_training_room_pressed)
-	level_editor_button.pressed.connect(_on_level_editor_pressed)
+	# Shipping builds contain the playable client/server world, not the ML room or asset editor.
+	# A custom export feature keeps development launches unchanged while ensuring the trimmed
+	# package cannot navigate to resources deliberately omitted from its PCK.
+	var runtime_only := OS.has_feature("game_runtime")
+	training_room_button.visible = not runtime_only
+	level_editor_button.visible = not runtime_only
+	if not runtime_only:
+		training_room_button.pressed.connect(_on_training_room_pressed)
+		level_editor_button.pressed.connect(_on_level_editor_pressed)
 	exit_button.pressed.connect(_on_exit_pressed)
 	Server.lobby_status_changed.connect(_on_lobby_status_changed)
+	if not Server.is_steam_available():
+		status_label.text = Server.get_steam_unavailable_message()
 
 
 func _exit_tree() -> void:

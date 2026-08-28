@@ -52,15 +52,17 @@ func _run() -> void:
 	var continuous := (
 		float(result["score_l"]) < MAX_IMPULSE_SCORE
 		and float(result["score_r"]) < MAX_IMPULSE_SCORE
+		and is_equal_approx(_rack.reverb.predelay_msec, 10.0)
 	)
 	print(
-		"DSP continuity: frames=%d score_l=%.2f score_r=%.2f step_l=%.6f step_r=%.6f"
+		"DSP continuity: frames=%d score_l=%.2f score_r=%.2f step_l=%.6f step_r=%.6f predelay=%.2fms"
 		% [
 			_samples.size(),
 			float(result["score_l"]),
 			float(result["score_r"]),
 			float(result["step_l"]),
 			float(result["step_r"]),
+			_rack.reverb.predelay_msec,
 		]
 	)
 	if enough_audio and continuous:
@@ -104,9 +106,10 @@ func _make_tone_player() -> AudioStreamPlayer:
 
 
 func _update_production_rack(delta: float) -> void:
-	# The old rack copied these alternating geometry values into Godot's populated right-channel
-	# comb/all-pass lengths and emitted a one-sample spark. Drive the public production path hard so
-	# this fails if live spread mutation is ever reintroduced.
+	# Geometry snapshots may change both stereo spread and late-field pre-delay while a listener is
+	# moving. Neither may retune a populated delay topology: spread changes the right comb/all-pass
+	# network, while pre-delay moves a live read head and produces a Doppler-like zipper. Drive both
+	# targets hard so this probe protects the production path rather than one historical symptom.
 	var high_target := int(floor(_elapsed / 0.25)) % 2 == 0
 	var weight := 1.0 - exp(-EFFECT_FOLLOW_SPEED * maxf(delta, 0.0))
 	_rack.approach_acoustic({
@@ -117,7 +120,7 @@ func _update_production_rack(delta: float) -> void:
 		"reverb_room_size": 0.63,
 		"reverb_damping": 0.42,
 		"reverb_spread": 0.18 if high_target else 0.98,
-		"reverb_predelay_msec": 24.0,
+		"reverb_predelay_msec": 10.0 if high_target else 96.0,
 		"reverb_predelay_feedback": 0.36,
 		"reverb_hipass": 0.08,
 	}, weight)

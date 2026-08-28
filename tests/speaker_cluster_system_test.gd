@@ -475,6 +475,7 @@ func _test_authoritative_cluster() -> void:
 			== int(wall_offset_dominance.get("loudest_emitter_id", -2)),
 			"the real large-bunker wall keeps its nearest physical cabinet directionally dominant without removing diffuse room energy"
 		)
+		await _test_large_bunker_renderer_lifecycle(hall_states)
 		large_cluster.set_powered(false)
 	var outside_states: Dictionary = {}
 	var threshold_states: Dictionary = {}
@@ -868,6 +869,128 @@ func _test_authoritative_cluster() -> void:
 		and cluster.control_revision > previous_revision,
 		"shared Fieldlink controls authoritatively pause, resume, and regulate the whole array"
 	)
+
+
+func _test_large_bunker_renderer_lifecycle(raw_states: Dictionary) -> void:
+	var immediate_states: Dictionary = {}
+	for emitter_id: int in raw_states:
+		var packet := (raw_states[emitter_id] as Dictionary).duplicate(true)
+		packet["start_delay_seconds"] = 0.0
+		immediate_states[emitter_id] = packet
+	var renderer := RadioAudioRenderer.new()
+	root.add_child(renderer)
+	renderer.submit_snapshot(immediate_states)
+	renderer._process(1.0 / 60.0)
+	var debug := renderer.get_debug_state()
+	var direct_paths_are_full_band := true
+	for slot_index: int in range(renderer._slot_item_ids.size()):
+		if renderer._slot_item_ids[slot_index] < 0:
+			continue
+		var rack := renderer._effect_racks[slot_index]
+		direct_paths_are_full_band = (
+			direct_paths_are_full_band
+			and is_zero_approx(AudioServer.get_bus_volume_db(rack.bus_index))
+			and not AudioServer.is_bus_effect_enabled(
+				rack.bus_index,
+				rack._tail_lowpass_effect_index
+			)
+		)
+	var group_slot := renderer._shared_program_group_slot(
+		INDUSTRIAL_LAYOUT.LARGE_BUNKER_SHARED_PROGRAM_GROUP_ID
+	)
+	var wet_path_is_live := false
+	if group_slot >= 0:
+		var wet_rack := renderer._shared_program_racks[group_slot]
+		wet_path_is_live = (
+			renderer._shared_program_players[group_slot].playing
+			and wet_rack.reverb.wet > 0.001
+			and is_zero_approx(AudioServer.get_bus_volume_db(wet_rack.bus_index))
+			and not AudioServer.is_bus_effect_enabled(
+				wet_rack.bus_index,
+				wet_rack._tail_lowpass_effect_index
+			)
+		)
+	_expect(
+		int(debug.get("active_count", 0)) == 4
+		and int(debug.get("active_shared_late_field_count", 0)) == 1
+		and direct_paths_are_full_band
+		and wet_path_is_live,
+		"the real four-speaker bunker renderer keeps four localized dry paths and one live full-band Hall return"
+	)
+
+	# One absent unreliable snapshot must remain a level interpolation event. It cannot transition
+	# either the direct cabinets or their shared Hall rack into post-tail filtering while audio input
+	# is still flowing.
+	renderer.submit_snapshot({})
+	renderer._process(0.05)
+	renderer.submit_snapshot(immediate_states)
+	renderer._process(0.05)
+	var recovered_full_band := true
+	for slot_index: int in range(renderer._slot_item_ids.size()):
+		if renderer._slot_item_ids[slot_index] < 0:
+			continue
+		var rack := renderer._effect_racks[slot_index]
+		recovered_full_band = (
+			recovered_full_band
+			and not AudioServer.is_bus_effect_enabled(
+				rack.bus_index,
+				rack._tail_lowpass_effect_index
+			)
+		)
+	if group_slot >= 0:
+		var wet_rack := renderer._shared_program_racks[group_slot]
+		recovered_full_band = (
+			recovered_full_band
+			and not AudioServer.is_bus_effect_enabled(
+				wet_rack.bus_index,
+				wet_rack._tail_lowpass_effect_index
+			)
+		)
+	_expect(
+		recovered_full_band,
+		"a skipped bunker snapshot cannot leave the resumed cabinets or shared Hall return darkened"
+	)
+
+	# Also cross the complete pause boundary: voices release, their returns settle, then the same
+	# authoritative program revision resumes from its updated timeline. No pooled bus state may leak
+	# into or attenuate the restarted array.
+	renderer.submit_snapshot({})
+	renderer._process(1.0)
+	renderer._process(2.5)
+	renderer.submit_snapshot(immediate_states)
+	renderer._process(1.0 / 60.0)
+	var settled_resume_is_clean := (
+		int(renderer.get_debug_state().get("active_count", 0)) == 4
+	)
+	for slot_index: int in range(renderer._slot_item_ids.size()):
+		if renderer._slot_item_ids[slot_index] < 0:
+			continue
+		var rack := renderer._effect_racks[slot_index]
+		settled_resume_is_clean = (
+			settled_resume_is_clean
+			and is_zero_approx(AudioServer.get_bus_volume_db(rack.bus_index))
+			and not AudioServer.is_bus_effect_enabled(
+				rack.bus_index,
+				rack._tail_lowpass_effect_index
+			)
+		)
+	if group_slot >= 0:
+		var wet_rack := renderer._shared_program_racks[group_slot]
+		settled_resume_is_clean = (
+			settled_resume_is_clean
+			and renderer._shared_program_players[group_slot].playing
+			and is_zero_approx(AudioServer.get_bus_volume_db(wet_rack.bus_index))
+			and not AudioServer.is_bus_effect_enabled(
+				wet_rack.bus_index,
+				wet_rack._tail_lowpass_effect_index
+			)
+		)
+	_expect(
+		settled_resume_is_clean,
+		"the bunker can resume after complete silence without inheriting a retired Hall bus"
+	)
+	renderer.reset_session()
+	renderer.free()
 
 
 func _combined_energy_db(states: Dictionary) -> float:

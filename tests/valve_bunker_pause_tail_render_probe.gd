@@ -38,6 +38,16 @@ func _run() -> void:
 	if cluster == null or not cluster.set_powered(true):
 		_fail("Valve reference array could not start")
 		return
+	if (
+		cluster._playlist.is_empty()
+		or not cluster.apply_fieldlink_command(
+			null,
+			&"play_track",
+			{"track_index": 0}
+		)
+	):
+		_fail("Valve reference array could not select its explicit test program")
+		return
 
 	var listener_position := (
 		complex.global_transform

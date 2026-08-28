@@ -50,6 +50,13 @@ const LANDING_SOUND_MAX_DISTANCE := 30.0
 const LANDING_SOUND_PRIORITY := 0.4
 const LANDING_MIN_AIR_TIME := 0.18
 const LANDING_MIN_IMPACT_SPEED := 2.0
+const TRIP_MIN_AIR_TIME := 0.05
+const TRIP_RECOVERY_SECONDS := 1.65
+const TRIP_SUPPORT_LATERAL_OFFSET := 0.22
+const TRIP_SUPPORT_FORWARD_LEAD_SECONDS := 0.035
+const TRIP_SUPPORT_MAX_FORWARD_LEAD := 0.22
+const TRIP_SUPPORT_PROBE_UP := 0.30
+const TRIP_SUPPORT_PROBE_DOWN := 1.35
 const WRIST_SOUND_HOVER_COOLDOWN_MSEC := 80
 const WRIST_SOUND_CLICK_COOLDOWN_MSEC := 90
 const WRIST_SOUND_FEEDBACK_COOLDOWN_MSEC := 220
@@ -67,6 +74,9 @@ const DEFAULT_WRIST_DEVICE := preload(
 const PHYSICAL_SURFACE := preload("res://scripts/audio/physical_surface.gd")
 const FIELDLINK_DISPLAY_STATE := preload(
 	"res://scripts/network/fieldlink_display_state.gd"
+)
+const LOCAL_AUDIO_PREDICTION := preload(
+	"res://scripts/audio/local_audio_prediction.gd"
 )
 
 #######################################################
@@ -89,6 +99,12 @@ var move_input: Vector2 = Vector2.ZERO
 var look_yaw: float = 0.0
 var look_pitch: float = 0.0
 var wants_jump: bool = false
+var jump_sequence := 0
+var trip_sequence := 0
+var ragdoll_active := false
+var trip_recovery_remaining := 0.0
+var trip_direction := Vector3.FORWARD
+var pending_jump_audio_prediction_key := 0
 var on_floor := false
 var grab_movement_multiplier := 1.0
 var body_movement_multiplier := 1.0
@@ -107,6 +123,8 @@ var weapon_reload_slot := -1
 var weapon_reload_insert_emitted := false
 var weapon_reload_insert_sound_id: StringName = &""
 var primary_action_held := false
+var primary_audio_prediction_session := 0
+var primary_audio_prediction_shot_index := 1
 var weapon_rng := RandomNumberGenerator.new()
 var gait := PlayerGait.new()
 var footstep_surface: StringName = &"concrete"
@@ -164,8 +182,11 @@ func setup(_player_id: int, spawn_pos: Vector3) -> void:
 		+ player_id * PLAYER_RANDOM_SEED_FACTOR
 	)
 	
-func request_jump() -> void:
+func request_jump(local_prediction_key := 0) -> void:
 	wants_jump = true
+	pending_jump_audio_prediction_key = LOCAL_AUDIO_PREDICTION.sanitize_key(
+		local_prediction_key
+	)
 
 func set_input(
 	input: Vector2,
@@ -195,21 +216,49 @@ func set_look_direction(yaw: float, pitch: float) -> void:
 	grabber.rotation.x = look_pitch
 
 
-func set_primary_action_held(value: bool) -> void:
+func set_primary_action_held(value: bool, prediction_session := 0) -> void:
 	primary_action_held = value and not wrist_interface_open
-
-
-func set_wrist_interface_open(value: bool) -> void:
-	var next_open := value and has_equipped_wrist_device()
-	if next_open == wrist_interface_open:
+	if not primary_action_held:
+		primary_audio_prediction_session = 0
+		primary_audio_prediction_shot_index = 1
 		return
+	primary_audio_prediction_session = clampi(
+		prediction_session,
+		0,
+		LOCAL_AUDIO_PREDICTION.WEAPON_MAX_SESSION
+	)
+	primary_audio_prediction_shot_index = 1
+
+
+func current_automatic_audio_prediction_key() -> int:
+	if primary_audio_prediction_session <= 0:
+		return 0
+	return LOCAL_AUDIO_PREDICTION.weapon_shot_key(
+		primary_audio_prediction_session,
+		primary_audio_prediction_shot_index
+	)
+
+
+func advance_automatic_audio_prediction() -> void:
+	primary_audio_prediction_shot_index = mini(
+		primary_audio_prediction_shot_index + 1,
+		LOCAL_AUDIO_PREDICTION.WEAPON_MAX_SHOT
+	)
+
+
+func set_wrist_interface_open(value: bool, local_prediction_key := 0) -> bool:
+	var next_open := value and has_equipped_wrist_device() and not ragdoll_active
+	if next_open == wrist_interface_open:
+		return false
 	wrist_interface_open = next_open
 	_emit_wrist_device_sound(
-		&"fieldlink_open" if wrist_interface_open else &"fieldlink_close"
+		&"fieldlink_open" if wrist_interface_open else &"fieldlink_close",
+		local_prediction_key
 	)
 	if not wrist_interface_open:
-		return
-	primary_action_held = false
+		return true
+	set_primary_action_held(false)
+	return true
 
 
 func set_wrist_display_page(page_value: Variant) -> bool:
@@ -222,7 +271,10 @@ func set_wrist_display_page(page_value: Variant) -> bool:
 	return true
 
 
-func request_wrist_device_sound(sound_id: StringName) -> bool:
+func request_wrist_device_sound(
+	sound_id: StringName,
+	local_prediction_key := 0
+) -> bool:
 	if not wrist_interface_open or not has_equipped_wrist_device():
 		return false
 	var cue_index := _requested_wrist_sound_index(sound_id)
@@ -236,7 +288,7 @@ func request_wrist_device_sound(sound_id: StringName) -> bool:
 	):
 		return false
 	last_requested_wrist_sound_msec[cue_index] = now_msec
-	_emit_wrist_device_sound(sound_id)
+	_emit_wrist_device_sound(sound_id, local_prediction_key)
 	return true
 
 
@@ -884,6 +936,12 @@ func _get_public_inventory_state() -> Dictionary:
 
 func server_physics_tick(delta: float) -> void:
 	rotation.y = look_yaw
+	_update_trip_state(delta)
+	if ragdoll_active:
+		move_input = Vector2.ZERO
+		wants_run = false
+		wants_jump = false
+		primary_action_held = false
 	
 	var was_on_floor := on_floor
 	on_floor = false
@@ -940,12 +998,14 @@ func server_physics_tick(delta: float) -> void:
 		air_time = 0.0
 
 		if is_launching:
+			jump_sequence += 1
 			velocity.y = jump_velocity
 			if jump_velocity > LANDING_MIN_IMPACT_SPEED:
 				_emit_gameplay_sound(
 					_jump_sound_id(footstep_surface),
 					JUMP_SOUND_MAX_DISTANCE,
-					JUMP_SOUND_PRIORITY
+					JUMP_SOUND_PRIORITY,
+					pending_jump_audio_prediction_key
 				)
 		else:
 			velocity.y = FLOOR_STICK_VELOCITY
@@ -957,6 +1017,7 @@ func server_physics_tick(delta: float) -> void:
 		)
 
 	wants_jump = false
+	pending_jump_audio_prediction_key = 0
 
 	var horizontal_motion := Vector3(velocity.x, 0.0, velocity.z) * delta
 	_move_and_collide_with_slide(
@@ -974,21 +1035,101 @@ func server_physics_tick(delta: float) -> void:
 		if normal.y > FLOOR_CONTACT_NORMAL_Y:
 			on_floor = true
 			footstep_surface = _get_footstep_surface(vertical_col.get_collider())
-			if (
-				not was_on_floor
+			var contacted_from_air := not was_on_floor
+			var accepted_landing := (
+				contacted_from_air
 				and air_time >= LANDING_MIN_AIR_TIME
 				and landing_impact_speed >= LANDING_MIN_IMPACT_SPEED
-			):
+			)
+			if accepted_landing:
 				_emit_gameplay_sound(
 					_landing_sound_id(footstep_surface),
 					LANDING_SOUND_MAX_DISTANCE,
 					LANDING_SOUND_PRIORITY
 				)
+			if (
+				contacted_from_air
+				and air_time >= TRIP_MIN_AIR_TIME
+				and _landing_lacks_required_support()
+			):
+				_begin_trip()
 			if velocity.y < 0.0:
 				velocity.y = 0.0
 
 		_try_push_body(vertical_col)
 	_update_footsteps(delta)
+
+
+func _update_trip_state(delta: float) -> void:
+	if not ragdoll_active:
+		return
+	trip_recovery_remaining = maxf(
+		trip_recovery_remaining - maxf(delta, 0.0),
+		0.0
+	)
+	if trip_recovery_remaining > 0.0:
+		return
+	ragdoll_active = false
+
+
+func _begin_trip() -> void:
+	if ragdoll_active:
+		return
+	ragdoll_active = true
+	trip_sequence += 1
+	trip_recovery_remaining = TRIP_RECOVERY_SECONDS
+	var horizontal_velocity := Vector3(velocity.x, 0.0, velocity.z)
+	trip_direction = (
+		horizontal_velocity.normalized()
+		if horizontal_velocity.length_squared() > MOVEMENT_INPUT_THRESHOLD_SQUARED
+		else -global_basis.z
+	)
+	# Deterministic lateral imbalance stops repeated straight-down mannequin falls while keeping all
+	# peers on the same expressive trip direction.
+	var lateral_sign := -1.0 if posmod(trip_sequence + player_id, 2) == 0 else 1.0
+	trip_direction = (
+		trip_direction + global_basis.x * lateral_sign * 0.28
+	).normalized()
+	wrist_interface_open = false
+	set_primary_action_held(false)
+
+
+func _landing_lacks_required_support() -> bool:
+	# A one-legged loadout has no phantom second foot to fail. Its locomotion can use the same
+	# independent contact contract, while a genuine biped must find support under both landing feet.
+	if (
+		body_loadout == null
+		or body_loadout.left_leg == null
+		or body_loadout.right_leg == null
+	):
+		return false
+	var horizontal_velocity := Vector3(velocity.x, 0.0, velocity.z)
+	var forward_lead := horizontal_velocity * TRIP_SUPPORT_FORWARD_LEAD_SECONDS
+	forward_lead = forward_lead.limit_length(TRIP_SUPPORT_MAX_FORWARD_LEAD)
+	var left_supported := _has_landing_support(
+		-global_basis.x * TRIP_SUPPORT_LATERAL_OFFSET + forward_lead
+	)
+	var right_supported := _has_landing_support(
+		global_basis.x * TRIP_SUPPORT_LATERAL_OFFSET + forward_lead
+	)
+	return not left_supported or not right_supported
+
+
+func _has_landing_support(horizontal_offset: Vector3) -> bool:
+	if not is_inside_tree() or get_world_3d() == null:
+		return true
+	var query := PhysicsRayQueryParameters3D.new()
+	query.from = global_position + horizontal_offset + Vector3.UP * TRIP_SUPPORT_PROBE_UP
+	query.to = global_position + horizontal_offset - Vector3.UP * TRIP_SUPPORT_PROBE_DOWN
+	query.collision_mask = CharacterContactLayers.MOVEMENT_SURFACE
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	query.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return false
+	var normal: Vector3 = hit.get("normal", Vector3.ZERO)
+	return normal.y > FLOOR_CONTACT_NORMAL_Y
 
 
 static func _movement_direction(input: Vector2, yaw: float) -> Vector3:
@@ -1055,6 +1196,9 @@ static func calculate_horizontal_velocity(
 
 
 func _update_footsteps(delta: float) -> void:
+	if ragdoll_active:
+		gait.advance(0.0, false, false, delta)
+		return
 	var horizontal_speed_squared := velocity.x * velocity.x + velocity.z * velocity.z
 	var completed_steps := gait.advance(
 		sqrt(horizontal_speed_squared),
@@ -1067,8 +1211,13 @@ func _update_footsteps(delta: float) -> void:
 	_emit_gameplay_sound(
 		_footstep_sound_id(footstep_surface),
 		FOOTSTEP_MAX_DISTANCE,
-		FOOTSTEP_PRIORITY
+		FOOTSTEP_PRIORITY,
+		LOCAL_AUDIO_PREDICTION.gait_step_key(gait.step_sequence)
 	)
+	# Foot support is event-driven like the gait itself: two bounded rays at a real footfall, never a
+	# polling cost on every physics frame. If the new foot has nowhere to land, authority trips once.
+	if _landing_lacks_required_support():
+		_begin_trip()
 
 
 static func _get_footstep_surface(collider: Object) -> StringName:
@@ -1090,7 +1239,8 @@ static func _landing_sound_id(surface: StringName) -> StringName:
 func _emit_gameplay_sound(
 	sound_id: StringName,
 	max_distance: float,
-	priority: float
+	priority: float,
+	local_prediction_key := 0
 ) -> void:
 	if not multiplayer.is_server():
 		return
@@ -1104,44 +1254,37 @@ func _emit_gameplay_sound(
 		max_distance,
 		0.0,
 		null,
-		priority
+		priority,
+		-1.0,
+		player_id,
+		local_prediction_key
 	)
 
 
-func _emit_wrist_device_sound(sound_id: StringName) -> void:
+func _emit_wrist_device_sound(
+	sound_id: StringName,
+	local_prediction_key := 0
+) -> void:
 	if not multiplayer.is_server():
 		return
 	var server := get_node_or_null("/root/Server")
 	if server == null or not server.has_method("emit_spatial_sound"):
 		return
-	var max_distance := 16.0
-	var priority := 0.4
-	var pressure_strength := 0.06
-	match sound_id:
-		&"fieldlink_open", &"fieldlink_close":
-			max_distance = 20.0
-			priority = 0.45
-			pressure_strength = 0.12
-		&"fieldlink_hover":
-			max_distance = 8.0
-			priority = 0.22
-			# Tiny cursor ticks still receive path/room DSP, but do not need an
-			# additional baked pressure wavefront on every hover.
-			pressure_strength = 0.0
-		&"fieldlink_click":
-			max_distance = 12.0
-			priority = 0.32
-			pressure_strength = 0.035
+	var profile := LOCAL_AUDIO_PREDICTION.player_cue_profile(sound_id)
+	if profile.is_empty():
+		return
 	server.call(
 		"emit_spatial_sound",
 		sound_id,
 		get_audio_listener_position()
 		+ Vector3.UP * WRIST_SOUND_SOURCE_HEIGHT_OFFSET,
-		max_distance,
-		WRIST_SOUND_OUTPUT_GAIN_DB,
+		float(profile["max_distance"]),
+		float(profile["volume_db"]),
 		null,
-		priority,
-		pressure_strength
+		float(profile["priority"]),
+		float(profile["pressure_strength"]),
+		player_id,
+		local_prediction_key
 	)
 
 func _try_push_body(col: KinematicCollision3D) -> void:
@@ -1272,9 +1415,14 @@ func to_state_dict() -> Dictionary:
 		"rot": global_rotation,
 		"vel": velocity,
 		"on_floor": on_floor,
+		"jump_sequence": jump_sequence,
+		"ragdoll_active": ragdoll_active,
+		"trip_sequence": trip_sequence,
+		"trip_direction": trip_direction,
 		"gait_cycle": gait.get_cycle(),
 		"gait_stride_distance": gait.stride_distance,
 		"gait_active": gait.active,
+		"footstep_surface": footstep_surface,
 		"health_ratio": health / MAX_HEALTH,
 		"stamina_ratio": stamina / MAX_STAMINA,
 		"inventory": _get_public_inventory_state(),

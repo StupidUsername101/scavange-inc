@@ -474,7 +474,7 @@ func _test_random_waypoint_limits() -> void:
 	room.target_rng.seed = 123456
 	var origin := Vector3(1.0, 3.0, -1.0)
 	for _sample_index in range(128):
-		var waypoint := room._choose_random_target_waypoint(origin)
+		var waypoint: Vector3 = room._choose_random_target_waypoint(origin)
 		_expect(
 			origin.distance_to(waypoint) <= 2.50001,
 			"random waypoint respects the configured maximum jump distance"

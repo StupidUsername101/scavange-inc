@@ -5,11 +5,11 @@ extends SceneTree
 
 const BAKER := preload("res://tools/asset_collision_baker.gd")
 const MANIFEST_PATH := "res://tools/asset_collision_manifest.json"
-const NATURE_IDS := PackedStringArray([
+const NATURE_IDS := [
 	"nature_pine_trunk",
 	"nature_broadleaf_trunk",
 	"nature_stone",
-])
+]
 
 
 func _init() -> void:

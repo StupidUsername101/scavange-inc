@@ -58,6 +58,7 @@ const SHARED_REVERB_PARAMETER_KEYS := [
 	&"reverb_predelay_msec",
 	&"reverb_predelay_feedback",
 	&"reverb_hipass",
+	&"reverb_decay_seconds",
 ]
 const SHARED_REVERB_ACCUMULATOR_KEYS := [
 	&"reverb_room_size_sum",
@@ -65,6 +66,7 @@ const SHARED_REVERB_ACCUMULATOR_KEYS := [
 	&"reverb_predelay_msec_sum",
 	&"reverb_predelay_feedback_sum",
 	&"reverb_hipass_sum",
+	&"reverb_decay_seconds_sum",
 ]
 const STATIC_STREAM_SOURCE: AudioStreamWAV = preload(
 	"res://assets/third_party/pizza_doggy/audio/rot/radio_static_loop.wav"
@@ -328,6 +330,7 @@ static func _new_shared_program_acoustic_accumulator() -> Dictionary:
 		"reverb_predelay_msec_sum": 0.0,
 		"reverb_predelay_feedback_sum": 0.0,
 		"reverb_hipass_sum": 0.0,
+		"reverb_decay_seconds_sum": 0.0,
 		"band_power_sum": Vector3.ZERO,
 		"lowpass_log_sum": 0.0,
 		"highpass_log_sum": 0.0,
@@ -438,6 +441,12 @@ static func _finalize_shared_program_acoustics(accumulator: Dictionary) -> Dicti
 		"reverb_predelay_msec": float(accumulator["reverb_predelay_msec_sum"]) / parameter_weight_sum,
 		"reverb_predelay_feedback": float(accumulator["reverb_predelay_feedback_sum"]) / parameter_weight_sum,
 		"reverb_hipass": float(accumulator["reverb_hipass_sum"]) / parameter_weight_sum,
+		"reverb_decay_seconds": clampf(
+			float(accumulator["reverb_decay_seconds_sum"])
+			/ parameter_weight_sum,
+			AcousticEnvironmentModel.MIN_REVERB_TIME_SECONDS,
+			AcousticEnvironmentModel.MAX_REVERB_TIME_SECONDS
+		),
 	}
 
 
@@ -453,6 +462,8 @@ static func _shared_reverb_default(key: StringName) -> float:
 			return 0.25
 		&"reverb_hipass":
 			return 0.05
+		&"reverb_decay_seconds":
+			return 0.25
 	return 0.0
 
 
@@ -660,6 +671,7 @@ func _process(delta: float) -> void:
 	var volume_weight := _follow_weight(VOLUME_FOLLOW_SPEED, delta)
 	for slot_index: int in range(_players.size()):
 		if _slot_item_ids[slot_index] < 0:
+			_effect_racks[slot_index].update_tail_floor(false, delta)
 			continue
 		if (
 			_slot_pending_revisions[slot_index] >= 0
@@ -773,6 +785,11 @@ func _process(delta: float) -> void:
 				_slot_shared_program_group_ids[slot_index] >= 0
 			)
 			rack.approach_radio_distortion(effect_target, effect_weight)
+		# A missing authoritative snapshot starts the voice's ordinary level fade, but the player is
+		# still feeding real samples into this rack during that fade. Tail cleanup belongs after the
+		# input has actually stopped; starting it from transport state filtered live music and made a
+		# one-packet gap audible.
+		rack.update_tail_floor(player.playing, delta)
 		# Animate from the track's baked source envelope, not the listener's attenuated/filtered
 		# signal. This keeps every master and every cabinet responsive even when room DSP removes
 		# most of a visual-analysis band. Unknown newly-added tracks retain the live FFT fallback.
@@ -883,6 +900,10 @@ func _update_shared_program_late_fields(delta: float) -> void:
 			spectral_bloom,
 			false,
 			true
+		)
+		_shared_program_racks[group_slot].update_tail_floor(
+			player.playing,
+			delta
 		)
 		if (
 			_shared_program_group_active[group_slot] == 0
@@ -1353,6 +1374,7 @@ func _activate_pending(slot_index: int) -> void:
 	var program_changed := _slot_song_paths[slot_index] != song_path
 	var was_playing := player.playing
 	var previous_volume_db := player.volume_db
+	_effect_racks[slot_index].prepare_for_input()
 	player.stop()
 	player.stream = stream
 	player.global_position = _target_positions[slot_index]
@@ -1475,6 +1497,7 @@ func _activate_shared_program_late_field(
 	):
 		return
 	player.stop()
+	_shared_program_racks[group_slot].prepare_for_input()
 	player.stream = stream
 	player.volume_db = (
 		_shared_program_target_volumes_db[group_slot] - NEW_VOICE_FADE_IN_DB

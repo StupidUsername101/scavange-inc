@@ -34,6 +34,9 @@ const ACOUSTIC_STATIC_BAKE_CACHE_PATH := (
 const STEAM_JOIN_COMMAND := preload(
 	"res://scripts/network/steam_join_command.gd"
 )
+const FIELDLINK_DISPLAY_STATE := preload(
+	"res://scripts/network/fieldlink_display_state.gd"
+)
 const MULTIPLAYER_CHANNELS := preload(
 	"res://scripts/network/multiplayer_channel_contract.gd"
 )
@@ -42,6 +45,9 @@ const REPLICATION_SCHEDULE := preload(
 )
 const PHYSICAL_IMPACT_RESPONSE := preload(
 	"res://scripts/audio/physical_impact_response.gd"
+)
+const LOCAL_AUDIO_PREDICTION := preload(
+	"res://scripts/audio/local_audio_prediction.gd"
 )
 const STEAM_PRESENCE_CONNECT := "connect"
 const STEAM_PRESENCE_STATUS := "status"
@@ -119,6 +125,8 @@ var lobby_owner_id := 0
 var lobby_state := LobbyState.IDLE
 var steam_available := false
 var steam_peer: SteamMultiplayerPeer
+var steam_init_status := -1
+var steam_init_message := "Steam has not been initialized."
 var lobby_operation_generation := 0
 var session_teardown_active := false
 var acoustic_service: ServerAcousticService
@@ -160,8 +168,40 @@ func _ready() -> void:
 		_on_join_game_requested
 	)
 
-	var init: bool = Steam.steamInit(STEAM_APP_ID, true)
-	steam_available = init and Steam.isSteamRunning()
+	# Give Steamworks an app identity without depending on the caller's working directory. The
+	# adjacent steam_appid.txt remains useful to external Steam tooling, but is no longer our only
+	# source of truth when a tester moves the executable.
+	OS.set_environment("SteamAppId", str(STEAM_APP_ID))
+	OS.set_environment("SteamGameId", str(STEAM_APP_ID))
+	# This node already pumps Steam.run_callbacks() below, so callbacks have one explicit owner.
+	var init_response: Dictionary = Steam.steamInitEx(STEAM_APP_ID, false)
+	steam_init_status = int(init_response.get("status", 1))
+	steam_init_message = str(
+		init_response.get("verbal", "Steam returned no initialization detail.")
+	).strip_edges()
+	var steam_client_running := Steam.isSteamRunning()
+	var steam_user_logged_on := false
+	var steam_user_id := 0
+	# SteamUser is unavailable after a failed API initialization; do not turn a useful init response
+	# into follow-on interface errors while collecting diagnostics.
+	if steam_init_status == 0 and steam_client_running:
+		steam_user_logged_on = Steam.loggedOn()
+		steam_user_id = Steam.getSteamID()
+	# A successful SteamAPI_Init is the availability boundary: all Steam interfaces have been
+	# acquired at that point. BLoggedOn and the user ID are useful diagnostics, but they can lag
+	# behind initialization while the client finishes restoring its online session. Treating either
+	# as an initialization requirement made fast exported builds report Steam as unavailable even
+	# though the same project connected after the editor's slower launch path.
+	steam_available = steam_init_status == 0 and steam_client_running
+	if steam_available:
+		steam_init_message = "Steam connected."
+	elif steam_init_status == 0:
+		if not steam_client_running:
+			steam_init_message = "Steam initialized, but its desktop client is not reachable."
+		elif not steam_user_logged_on:
+			steam_init_message = "Steam is reachable, but the account is offline."
+		else:
+			steam_init_message = "Steam connected without a valid user ID."
 	if steam_available:
 		_clear_lobby_presence()
 		var launch_lobby_id := _get_launch_lobby_id()
@@ -171,9 +211,10 @@ func _ready() -> void:
 				launch_lobby_id
 			)
 
-	print("Steam init: ", init)
-	print("Steam running: ", Steam.isSteamRunning())
-	print("Steam ID: ", Steam.getSteamID() if steam_available else 0)
+	print("Steam init response: ", init_response)
+	print("Steam running: ", steam_client_running)
+	print("Steam logged on: ", steam_user_logged_on)
+	print("Steam ID: ", steam_user_id if steam_available else 0)
 
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -195,7 +236,11 @@ func _physics_process(delta: float) -> void:
 	for player: ServerPlayer in server_players_by_player_id.values():
 		player.server_physics_tick(delta)
 		if player.wants_automatic_fire():
-			try_primary_action(player)
+			var prediction_key := player.current_automatic_audio_prediction_key()
+			if try_primary_action(player, prediction_key):
+				player.advance_automatic_audio_prediction()
+			else:
+				_reject_local_audio_prediction(player, prediction_key)
 		_update_player_edit_aim(player)
 
 	for enemy: ServerEnemy in server_enemies_by_enemy_id.values():
@@ -233,6 +278,11 @@ func publish_states() -> void:
 	_publish_drone_states(snapshot_sequence)
 	_publish_projectile_states(snapshot_sequence)
 	_publish_radio_states()
+	if REPLICATION_SCHEDULE.is_due(
+		snapshot_sequence,
+		REPLICATION_SCHEDULE.LOCAL_AUDIO_CONTEXT_INTERVAL_TICKS
+	):
+		_publish_local_audio_prediction_contexts()
 	if REPLICATION_SCHEDULE.is_due(
 		snapshot_sequence,
 		REPLICATION_SCHEDULE.BULK_PHYSICS_INTERVAL_TICKS
@@ -415,6 +465,30 @@ func _publish_radio_states() -> void:
 		)
 
 
+func _publish_local_audio_prediction_contexts() -> void:
+	if not LOCAL_AUDIO_PREDICTION.ENABLED:
+		return
+	for player_id: int in server_players_by_player_id:
+		var listener := server_players_by_player_id[player_id]
+		if not is_instance_valid(listener):
+			continue
+		var player_state := GameState.get_player_state(player_id)
+		if player_state == null or player_state.peer_id <= 0:
+			continue
+		var context := acoustic_service.build_local_prediction_context(
+			player_id,
+			listener.get_audio_listener_position(),
+			listener.get_rid()
+		)
+		if context.is_empty():
+			continue
+		Client.rpc_id(
+			player_state.peer_id,
+			"on_local_audio_prediction_context_received",
+			context
+		)
+
+
 func spawn_server_world() -> void:
 	if server_world != null:
 		return
@@ -489,6 +563,23 @@ func get_sending_player() -> ServerPlayer:
 	return server_players_by_player_id.get(
 		player_id
 	) as ServerPlayer
+
+
+func _reject_local_audio_prediction(
+	player: ServerPlayer,
+	local_prediction_key: int
+) -> void:
+	var prediction_key := LOCAL_AUDIO_PREDICTION.sanitize_key(local_prediction_key)
+	if player == null or prediction_key == 0:
+		return
+	var player_state := GameState.get_player_state(player.player_id)
+	if player_state == null or player_state.peer_id <= 0:
+		return
+	Client.rpc_id(
+		player_state.peer_id,
+		"on_local_audio_prediction_rejected",
+		prediction_key
+	)
 
 func spawn_server_player(
 	player_id: int,
@@ -789,7 +880,9 @@ func emit_spatial_sound(
 	base_volume_db := 0.0,
 	source_modifier: AcousticPathModifier = null,
 	priority := 0.5,
-	pressure_strength := -1.0
+	pressure_strength := -1.0,
+	origin_player_id := -1,
+	local_prediction_key := 0
 ) -> int:
 	if (
 		not multiplayer.is_server()
@@ -808,6 +901,15 @@ func emit_spatial_sound(
 		)
 	)
 	var safe_priority := clampf(priority, 0.0, 1.0)
+	var safe_prediction_key := LOCAL_AUDIO_PREDICTION.sanitize_key(
+		local_prediction_key
+	)
+	var safe_origin_player_id := (
+		origin_player_id
+		if safe_prediction_key > 0
+		and server_players_by_player_id.has(origin_player_id)
+		else -1
+	)
 	var safe_pressure_strength := resolve_spatial_pressure_strength(
 		pressure_strength,
 		safe_max_distance,
@@ -892,6 +994,8 @@ func emit_spatial_sound(
 		if not pressure_arrivals.is_empty():
 			result["pressure_arrivals"] = pressure_arrivals
 		result["priority"] = safe_priority
+		if player_id == safe_origin_player_id:
+			result["local_prediction_key"] = safe_prediction_key
 		Client.rpc_id(
 			player_state.peer_id,
 			"on_spatial_sound_received",
@@ -906,19 +1010,11 @@ static func resolve_spatial_pressure_strength(
 	base_volume_db: float,
 	priority: float
 ) -> float:
-	if requested_strength >= 0.0:
-		return clampf(requested_strength, 0.0, 1.0)
-	# Reach is the best semantic loudness hint available to every sound registration. The square
-	# root keeps small physical sounds present without letting footsteps behave like detonations.
-	var reach := clampf(inverse_lerp(10.0, 140.0, max_distance), 0.0, 1.0)
-	var level := clampf(inverse_lerp(-18.0, 6.0, base_volume_db), 0.0, 1.0)
-	return clampf(
-		0.10
-		+ sqrt(reach) * 0.25
-		+ level * 0.12
-		+ clampf(priority, 0.0, 1.0) * 0.10,
-		0.10,
-		0.62
+	return LOCAL_AUDIO_PREDICTION.resolve_pressure_strength(
+		requested_strength,
+		max_distance,
+		base_volume_db,
+		priority
 	)
 
 
@@ -2085,9 +2181,12 @@ func _get_player_edit_aim_color(player_id: int) -> Color:
 	return palette[posmod(player_id, palette.size())]
 
 
-func try_primary_action(player: ServerPlayer) -> void:
+func try_primary_action(
+	player: ServerPlayer,
+	local_prediction_key := 0
+) -> bool:
 	if player == null:
-		return
+		return false
 	# Close world-space controls must remain usable while a firearm occupies the
 	# selected inventory slot. Only colliders that explicitly opt in receive this
 	# priority, so ordinary targets still get the weapon action.
@@ -2112,22 +2211,24 @@ func try_primary_action(player: ServerPlayer) -> void:
 		and priority_collider.has_method("server_primary_action")
 	):
 		priority_collider.call("server_primary_action", player, priority_hit)
-		return
+		return false
 	var gun_result := player.try_fire_selected_gun()
 	if bool(gun_result.get("handled", false)):
-		if bool(gun_result.get("fired", false)):
+		var fired := bool(gun_result.get("fired", false))
+		if fired:
 			_spawn_player_gun_projectiles(
 				player,
 				gun_result.get("profiles", []),
 				int(gun_result.get("installed_barrel_count", 1)),
-				gun_result.get("fire_sound", {})
+				gun_result.get("fire_sound", {}),
+				local_prediction_key
 			)
-		return
+		return fired
 
 	var held_body := get_grabbed_body(player.grabber) as RigidBody3D
 	if held_body != null and held_body.has_method("server_held_primary_action"):
 		held_body.call("server_held_primary_action", player)
-		return
+		return false
 	var hit := priority_hit
 	if hit.is_empty():
 		var origin := player.grabber.get_grab_origin()
@@ -2142,7 +2243,7 @@ func try_primary_action(player: ServerPlayer) -> void:
 		query.collide_with_areas = false
 		hit = player.get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
-		return
+		return false
 
 	var collider := hit.get("collider") as Node
 	if collider != null and collider.has_method("server_primary_action"):
@@ -2150,12 +2251,12 @@ func try_primary_action(player: ServerPlayer) -> void:
 		if held_item != null and held_item.definition is RopeDefinition:
 			rope_placements_by_player_id.erase(player.player_id)
 		collider.call("server_primary_action", player, hit)
-		return
+		return false
 	if _try_rope_primary_action(player, held_body, hit):
-		return
+		return false
 
 	if held_body == null or not held_body.is_in_group("drone_parts"):
-		return
+		return false
 
 	var drone := collider as ServerDrone
 	if (
@@ -2163,7 +2264,7 @@ func try_primary_action(player: ServerPlayer) -> void:
 		or not drone.is_edit_preview
 		or drone.edit_session == null
 	):
-		return
+		return false
 
 	drone.edit_session.call(
 		"try_install_part",
@@ -2171,6 +2272,7 @@ func try_primary_action(player: ServerPlayer) -> void:
 		held_body,
 		hit
 	)
+	return false
 
 
 func _is_near_priority_primary_interaction(player: ServerPlayer) -> bool:
@@ -2188,7 +2290,8 @@ func _spawn_player_gun_projectiles(
 	player: ServerPlayer,
 	profiles_value: Variant,
 	installed_barrel_count: int,
-	fire_sound: Dictionary = {}
+	fire_sound: Dictionary = {},
+	local_prediction_key := 0
 ) -> void:
 	var profiles: Array = (
 		profiles_value as Array
@@ -2293,7 +2396,9 @@ func _spawn_player_gun_projectiles(
 				),
 				-1.0,
 				1.0
-			)
+			),
+			player.player_id,
+			local_prediction_key
 		)
 
 
@@ -2789,7 +2894,7 @@ func _apply_grab_rotation(
 
 func start_steam_host() -> void:
 	if not is_steam_available():
-		_emit_lobby_status("Steam is not running.", true)
+		_emit_lobby_status(get_steam_unavailable_message(), true)
 		return
 	if lobby_state != LobbyState.IDLE:
 		_emit_lobby_status("A lobby operation is already active.", true)
@@ -2812,7 +2917,7 @@ func start_steam_host() -> void:
 
 func join_steam_lobby(target_lobby_id: int) -> void:
 	if not is_steam_available():
-		_emit_lobby_status("Steam is not running.", true)
+		_emit_lobby_status(get_steam_unavailable_message(), true)
 		return
 	if target_lobby_id <= 0:
 		_emit_lobby_status("That lobby ID is invalid.", true)
@@ -2849,6 +2954,15 @@ func cancel_pending_lobby_join() -> void:
 
 func is_steam_available() -> bool:
 	return steam_available and Steam.isSteamRunning()
+
+
+func get_steam_unavailable_message() -> String:
+	if is_steam_available():
+		return "Steam connected."
+	var detail := steam_init_message.strip_edges()
+	if detail.is_empty():
+		detail = "No initialization detail was returned."
+	return "Steam unavailable: %s" % detail
 
 
 func _on_lobby_created(connect_result: int, created_lobby_id: int) -> void:
@@ -3492,7 +3606,7 @@ func _get_lobby_join_error(response: int) -> String:
 			return "Steam could not join the lobby (response %d)." % response
 
 @rpc("any_peer", "call_local", "reliable", 3)
-func receive_jump() -> void:
+func receive_jump(local_prediction_key := 0) -> void:
 	if not multiplayer.is_server():
 		return
 
@@ -3501,7 +3615,10 @@ func receive_jump() -> void:
 	if player == null:
 		return
 
-	player.request_jump()
+	if not player.on_floor:
+		_reject_local_audio_prediction(player, local_prediction_key)
+		return
+	player.request_jump(local_prediction_key)
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
@@ -3564,17 +3681,24 @@ func drop_equipment(equipment_slot: String) -> void:
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
-func set_wrist_interface_open(value: bool) -> void:
+func set_wrist_interface_open(value: bool, local_prediction_key := 0) -> void:
 	if not multiplayer.is_server():
 		return
 	var player := get_sending_player()
 	if player != null:
-		player.set_wrist_interface_open(value)
+		var changed := player.set_wrist_interface_open(
+			value,
+			local_prediction_key
+		)
+		if not changed:
+			_reject_local_audio_prediction(player, local_prediction_key)
 		Client.rpc(
 			"on_player_wrist_state_received",
-			player.player_id,
-			player.wrist_interface_open,
-			player.wrist_display_page
+			FIELDLINK_DISPLAY_STATE.make_replication_packet(
+				player.player_id,
+				player.wrist_interface_open,
+				player.wrist_display_page
+			)
 		)
 
 
@@ -3587,19 +3711,27 @@ func set_wrist_display_page(page_value: Variant) -> void:
 		return
 	Client.rpc(
 		"on_player_wrist_state_received",
-		player.player_id,
-		player.wrist_interface_open,
-		player.wrist_display_page
+		FIELDLINK_DISPLAY_STATE.make_replication_packet(
+			player.player_id,
+			player.wrist_interface_open,
+			player.wrist_display_page
+		)
 	)
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
-func request_wrist_device_sound(sound_id: StringName) -> void:
+func request_wrist_device_sound(
+	sound_id: StringName,
+	local_prediction_key := 0
+) -> void:
 	if not multiplayer.is_server():
 		return
 	var player := get_sending_player()
-	if player != null:
-		player.request_wrist_device_sound(sound_id)
+	if player != null and not player.request_wrist_device_sound(
+		sound_id,
+		local_prediction_key
+	):
+		_reject_local_audio_prediction(player, local_prediction_key)
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
@@ -3670,23 +3802,10 @@ func reload_selected_weapon() -> void:
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
-func primary_action(yaw: float, pitch: float) -> void:
-	if not multiplayer.is_server():
-		return
-
-	var player := get_sending_player()
-	if player == null:
-		return
-
-	player.set_look_direction(yaw, pitch)
-	try_primary_action(player)
-
-
-@rpc("any_peer", "call_local", "reliable", 3)
-func set_primary_action_held(
-	held: bool,
+func primary_action(
 	yaw: float,
-	pitch: float
+	pitch: float,
+	prediction_session := 0
 ) -> void:
 	if not multiplayer.is_server():
 		return
@@ -3696,7 +3815,31 @@ func set_primary_action_held(
 		return
 
 	player.set_look_direction(yaw, pitch)
-	player.set_primary_action_held(held)
+	var prediction_key := (
+		LOCAL_AUDIO_PREDICTION.weapon_shot_key(prediction_session, 0)
+		if prediction_session > 0
+		else 0
+	)
+	if not try_primary_action(player, prediction_key):
+		_reject_local_audio_prediction(player, prediction_key)
+
+
+@rpc("any_peer", "call_local", "reliable", 3)
+func set_primary_action_held(
+	held: bool,
+	yaw: float,
+	pitch: float,
+	prediction_session := 0
+) -> void:
+	if not multiplayer.is_server():
+		return
+
+	var player := get_sending_player()
+	if player == null:
+		return
+
+	player.set_look_direction(yaw, pitch)
+	player.set_primary_action_held(held, prediction_session)
 
 
 @rpc("any_peer", "call_local", "reliable", 3)

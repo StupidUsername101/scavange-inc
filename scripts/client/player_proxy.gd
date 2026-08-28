@@ -35,11 +35,17 @@ const RIGHT_WRIST_POSE_ROTATION := Vector3(0.9, 0.0, -0.86)
 const WRIST_PRESENTATION_SCENE := preload(
 	"res://scenes/proxy/wrist_terminal_presentation.tscn"
 )
+const TRIP_CAMERA_BLEND_SPEED := 7.5
+const TRIP_CAMERA_ROLL := deg_to_rad(16.0)
+const TRIP_CAMERA_DROP := 0.34
 const REMOTE_WRIST_DISPLAY := preload(
 	"res://scripts/client/wrist_terminal_remote_display.gd"
 )
 const FIELDLINK_DISPLAY_STATE := preload(
 	"res://scripts/network/fieldlink_display_state.gd"
+)
+const LOCAL_AUDIO_PREDICTION := preload(
+	"res://scripts/audio/local_audio_prediction.gd"
 )
 
 #######################################################
@@ -50,16 +56,28 @@ const FIELDLINK_DISPLAY_STATE := preload(
 @onready var camera_pivot: Node3D = $HeadPivot
 @onready var camera: Camera3D = $HeadPivot/Camera3D
 @onready var audio_listener: AudioListener3D = $AudioListener3D
-@onready var left_arm_visual: MeshInstance3D = $BodyVisual/LeftArm
-@onready var right_arm_visual: MeshInstance3D = $BodyVisual/RightArm
-@onready var left_wrist_mount: Node3D = $BodyVisual/LeftArm/WristMount
-@onready var right_wrist_mount: Node3D = $BodyVisual/RightArm/WristMount
-@onready var left_leg_visual: MeshInstance3D = $BodyVisual/LeftLeg
-@onready var right_leg_visual: MeshInstance3D = $BodyVisual/RightLeg
+@onready var body_visual: Node3D = $BodyVisual
+@onready var upper_body_pose: Node3D = $BodyVisual/UpperBodyPose
+@onready var torso_visual: MeshInstance3D = $BodyVisual/UpperBodyPose/Torso
+@onready var head_visual: MeshInstance3D = $BodyVisual/UpperBodyPose/Head
+@onready var left_arm_visual: MeshInstance3D = $BodyVisual/UpperBodyPose/LeftArm
+@onready var right_arm_visual: MeshInstance3D = $BodyVisual/UpperBodyPose/RightArm
+@onready var left_wrist_mount: Node3D = $BodyVisual/UpperBodyPose/LeftArm/WristMount
+@onready var right_wrist_mount: Node3D = $BodyVisual/UpperBodyPose/RightArm/WristMount
+@onready var procedural_leg_rig: PlayerProceduralLegRig = (
+	$BodyVisual/ProceduralLegRig
+)
+@onready var left_leg_visual: Node3D = (
+	$BodyVisual/ProceduralLegRig/LeftLeg
+)
+@onready var right_leg_visual: Node3D = (
+	$BodyVisual/ProceduralLegRig/RightLeg
+)
+@onready var player_ragdoll = $PlayerRagdoll
 @onready var edit_aim_hit: MeshInstance3D = $EditAimHit
-@onready var backpack_mount: Node3D = $BodyVisual/BackpackMount
-@onready var eyes_mount: Node3D = $BodyVisual/EyesMount
-@onready var held_item_mount: Node3D = $BodyVisual/HeldItemMount
+@onready var backpack_mount: Node3D = $BodyVisual/UpperBodyPose/BackpackMount
+@onready var eyes_mount: Node3D = $BodyVisual/UpperBodyPose/EyesMount
+@onready var held_item_mount: Node3D = $BodyVisual/UpperBodyPose/HeldItemMount
 @onready var first_person_item_mount: Node3D = (
 	$HeadPivot/Camera3D/FirstPersonItemMount
 )
@@ -80,9 +98,20 @@ var visual_gait_cycle := 0.5
 var target_gait_stride_distance := PlayerGait.WALK_STEP_DISTANCE
 var target_gait_active := false
 var gait_initialized := false
+var last_predicted_gait_step_sequence := -1
+var target_footstep_surface: StringName = PhysicalSurface.CONCRETE
+var local_move_input := Vector2.ZERO
+var local_run_input := false
+var local_predicted_horizontal_speed := 0.0
 var target_stamina_ratio := 1.0
 
 var target_on_floor := false
+var target_jump_sequence := 0
+var target_ragdoll_active := false
+var target_trip_sequence := 0
+var target_trip_direction := Vector3.FORWARD
+var presented_trip_sequence := -1
+var trip_camera_weight := 0.0
 
 var mouse_sensitivity := 0.002
 var look_yaw := 0.0
@@ -109,6 +138,8 @@ var held_item_state: Dictionary = {}
 var held_item_signature := ""
 var has_left_arm := true
 var has_right_arm := true
+var has_left_leg := true
+var has_right_leg := true
 var target_wrist_interface_open := false
 var target_wrist_display_page: StringName = FIELDLINK_DISPLAY_STATE.PAGE_HOME
 var local_wrist_interface_open := false
@@ -128,6 +159,7 @@ func _ready() -> void:
 	target_rotation = global_rotation
 
 	camera_pivot_rest_position = camera_pivot.position
+	procedural_leg_rig.set_expression_identity(player_id)
 	edit_aim_hit.material_override = _create_edit_aim_material()
 	edit_aim_hit.visible = false
 
@@ -239,6 +271,8 @@ func consume_grab_rotation_input() -> Vector2:
 
 func apply_server_state(state: Dictionary) -> void:
 	player_id = SafeVariant.integral_int_or(state.get("player_id", -1), -1)
+	if procedural_leg_rig != null:
+		procedural_leg_rig.set_expression_identity(player_id)
 	var current_position := global_position if is_inside_tree() else position
 	var current_rotation := global_rotation if is_inside_tree() else rotation
 
@@ -254,6 +288,28 @@ func apply_server_state(state: Dictionary) -> void:
 	time_since_last_state = 0.0
 	
 	target_on_floor = SafeVariant.strict_bool_or(state.get("on_floor", false), false)
+	target_jump_sequence = maxi(
+		SafeVariant.integral_int_or(
+			state.get("jump_sequence", target_jump_sequence),
+			target_jump_sequence
+		),
+		0
+	)
+	target_ragdoll_active = SafeVariant.strict_bool_or(
+		state.get("ragdoll_active", false),
+		false
+	)
+	target_trip_sequence = maxi(
+		SafeVariant.integral_int_or(
+			state.get("trip_sequence", target_trip_sequence),
+			target_trip_sequence
+		),
+		0
+	)
+	target_trip_direction = SafeVariant.vector3_strict_or(
+		state.get("trip_direction", target_trip_direction),
+		target_trip_direction
+	)
 	var next_gait_cycle := maxf(
 		SafeVariant.finite_float_or(
 			state.get("gait_cycle"),
@@ -272,8 +328,12 @@ func apply_server_state(state: Dictionary) -> void:
 		state.get("gait_active", false),
 		false
 	)
+	target_footstep_surface = PhysicalSurface.normalize(
+		state.get("footstep_surface", target_footstep_surface)
+	)
 	if not gait_initialized:
 		visual_gait_cycle = next_gait_cycle
+		last_predicted_gait_step_sequence = floori(next_gait_cycle)
 		gait_initialized = true
 	target_gait_cycle = next_gait_cycle
 	target_edit_aim_active = SafeVariant.strict_bool_or(
@@ -524,10 +584,17 @@ func _apply_limb_state(limbs: Dictionary) -> void:
 
 	has_left_arm = bool(limbs.get("left_arm", true))
 	has_right_arm = bool(limbs.get("right_arm", true))
+	has_left_leg = bool(limbs.get("left_leg", true))
+	has_right_leg = bool(limbs.get("right_leg", true))
 	left_arm_visual.visible = has_left_arm
 	right_arm_visual.visible = has_right_arm
-	left_leg_visual.visible = limbs.get("left_leg", true)
-	right_leg_visual.visible = limbs.get("right_leg", true)
+	procedural_leg_rig.set_limb_presence(has_left_leg, has_right_leg)
+	player_ragdoll.set_limb_presence(
+		has_left_arm,
+		has_right_arm,
+		has_left_leg,
+		has_right_leg
+	)
 	_update_held_item_mount()
 	_reparent_wrist_visual()
 	if wrist_presentation != null:
@@ -558,6 +625,7 @@ func _update_held_item_mount() -> void:
 				local_wrist_interface_open
 				or target_wrist_interface_open
 			)
+			and not target_ragdoll_active
 		)
 
 
@@ -585,6 +653,76 @@ func is_wrist_interface_open() -> bool:
 	return local_wrist_interface_open
 
 
+func get_wrist_sound_source_position() -> Vector3:
+	if is_instance_valid(audio_listener):
+		return audio_listener.global_position + Vector3.DOWN * 0.12
+	return global_position + Vector3.UP * 0.44
+
+
+func get_weapon_sound_source_position() -> Vector3:
+	if is_instance_valid(camera):
+		return (
+			camera.global_position
+			- camera.global_basis.z.normalized() * 0.92
+			+ Vector3.DOWN * 0.18
+		)
+	return global_position + Vector3.UP * 0.45
+
+
+func get_weapon_audio_prediction_profile() -> Dictionary:
+	if (
+		SafeVariant.finite_float_or(
+			target_player_state.get("weapon_reload_ratio"),
+			0.0
+		) > 0.0001
+		or not (has_left_arm or has_right_arm)
+	):
+		return {}
+	var inventory := PlayerInventoryRules.sanitize_public_inventory(
+		target_player_state.get("inventory", {})
+	)
+	var entries: Array = inventory.get("entries", [])
+	var selected_slot := int(inventory.get("selected_slot", 0))
+	if selected_slot < 0 or selected_slot >= entries.size():
+		return {}
+	var entry: Dictionary = entries[selected_slot]
+	var definition := PlayerInventoryRules.get_definition(entry) as GunItemDefinition
+	if definition == null:
+		return {}
+	var state := definition.normalize_instance_state(
+		SafeVariant.dictionary_copy(entry.get("instance_state", {}))
+	)
+	var rounds := int(state.get("rounds", 0))
+	if rounds <= 0:
+		return {}
+	var build := definition.get_build(state)
+	if not build.is_compatible():
+		return {}
+	var ballistic_profiles := build.get_ballistic_profiles()
+	var sound_profile := build.get_fire_sound_profile()
+	if ballistic_profiles.is_empty() or sound_profile.is_empty():
+		return {}
+	var result := sound_profile.duplicate(false)
+	result["automatic"] = build.is_automatic()
+	result["rounds_per_second"] = maxf(
+		SafeVariant.finite_float_or(
+			(ballistic_profiles[0] as Dictionary).get("rounds_per_second"),
+			1.0
+		),
+		0.1
+	)
+	result["available_rounds"] = rounds
+	result["rounds_per_trigger"] = ballistic_profiles.size()
+	return result
+
+
+func set_local_locomotion_input(move_input: Vector2, wants_run: bool) -> void:
+	if not is_local_player:
+		return
+	local_move_input = move_input.limit_length(1.0)
+	local_run_input = wants_run
+
+
 # Shared entry point for the keyboard and technical-object interfaces. Server-
 # driven devices can open the same view through the replicated wrist state.
 func open_wrist_interface() -> bool:
@@ -609,6 +747,7 @@ func _can_use_wrist_device() -> bool:
 	return (
 		has_equipped_wrist_device()
 		and (has_left_arm or has_right_arm)
+		and not target_ragdoll_active
 	)
 
 
@@ -891,11 +1030,50 @@ static func _apply_remote_arm_pose(
 	)
 
 func update_headbob(delta: float) -> void:
-	var horizontal_speed := Vector2(
+	var replicated_horizontal_speed := Vector2(
 		target_velocity.x,
 		target_velocity.z
 	).length()
-	var is_moving := target_gait_active and target_on_floor
+	var horizontal_speed := replicated_horizontal_speed
+	var stride_distance := maxf(
+		target_gait_stride_distance,
+		PlayerGait.MINIMUM_STRIDE_DISTANCE
+	)
+	var is_moving := (
+		target_gait_active
+		and target_on_floor
+		and not target_ragdoll_active
+	)
+	# A listen-server owner is still a local presentation client. Using the authoritative branch for
+	# that one peer made host gait feedback follow a different clock than joining clients and hid the
+	# split during local testing. Reconciliation keys make the prediction safe regardless of whether
+	# the authority packet arrives before or after this phase crossing.
+	var predicts_from_local_intent := is_local_player
+	if predicts_from_local_intent:
+		var input_strength := clampf(local_move_input.length(), 0.0, 1.0)
+		if target_ragdoll_active:
+			input_strength = 0.0
+		var wish_speed := (
+			ServerPlayer.RUN_SPEED if local_run_input else ServerPlayer.WALK_SPEED
+		) * input_strength
+		var predicted_velocity := ServerPlayer.calculate_horizontal_velocity(
+			Vector3(local_predicted_horizontal_speed, 0.0, 0.0),
+			Vector3.RIGHT if input_strength > 0.001 else Vector3.ZERO,
+			wish_speed,
+			true,
+			delta
+		)
+		local_predicted_horizontal_speed = predicted_velocity.length()
+		horizontal_speed = local_predicted_horizontal_speed
+		stride_distance = PlayerGait.get_stride_distance(local_run_input)
+		is_moving = (
+			target_on_floor
+			and not target_ragdoll_active
+			and horizontal_speed * horizontal_speed
+			>= PlayerGait.MINIMUM_SPEED_SQUARED
+		)
+	else:
+		local_predicted_horizontal_speed = replicated_horizontal_speed
 	headbob_weight = move_toward(
 		headbob_weight,
 		1.0 if is_moving else 0.0,
@@ -905,7 +1083,7 @@ func update_headbob(delta: float) -> void:
 		inverse_lerp(
 			PlayerGait.WALK_STEP_DISTANCE,
 			PlayerGait.RUN_STEP_DISTANCE,
-			target_gait_stride_distance
+			stride_distance
 		),
 		0.0,
 		1.0
@@ -927,10 +1105,7 @@ func update_headbob(delta: float) -> void:
 				0.0
 			)
 		return
-	var stride_distance := maxf(
-		target_gait_stride_distance,
-		PlayerGait.MINIMUM_STRIDE_DISTANCE
-	)
+	stride_distance = maxf(stride_distance, PlayerGait.MINIMUM_STRIDE_DISTANCE)
 	var cycles_per_second := (
 		horizontal_speed / stride_distance
 		if is_moving
@@ -942,6 +1117,11 @@ func update_headbob(delta: float) -> void:
 		+ cycles_per_second * time_since_last_state
 	)
 	var cycle_error := predicted_cycle - visual_gait_cycle
+	if predicts_from_local_intent and is_moving:
+		# The received owner snapshot describes an earlier simulation instant. Never drag an active
+		# locally-integrated gait backwards toward that stale phase; the monotonically increasing server
+		# sequence still catches up and reconciles the predicted sound key without replaying it.
+		cycle_error = maxf(cycle_error, 0.0)
 	if absf(cycle_error) >= HEADBOB_PHASE_SNAP_CYCLES:
 		visual_gait_cycle = predicted_cycle
 	else:
@@ -950,6 +1130,7 @@ func update_headbob(delta: float) -> void:
 			0.0,
 			1.0
 		)
+	_predict_local_footstep(is_moving)
 
 	var walk_bob_offset := PlayerGait.calculate_bob_offset(
 		visual_gait_cycle,
@@ -974,6 +1155,30 @@ func update_headbob(delta: float) -> void:
 			visual_gait_cycle,
 			headbob_run_weight
 		)
+
+
+func _predict_local_footstep(is_moving: bool) -> void:
+	if not is_local_player or not gait_initialized:
+		return
+	var current_step_sequence := floori(visual_gait_cycle)
+	if current_step_sequence < last_predicted_gait_step_sequence:
+		last_predicted_gait_step_sequence = current_step_sequence
+		return
+	if not is_moving or current_step_sequence <= last_predicted_gait_step_sequence:
+		return
+	# A multi-step correction means a snapshot discontinuity, not several physical impacts. Catch
+	# up silently; ordinary one-step crossings are the exact phase shared with the camera bob.
+	if current_step_sequence - last_predicted_gait_step_sequence == 1:
+		var client := get_node_or_null("/root/Client")
+		if client != null and client.has_method("predict_local_player_sound"):
+			client.call(
+				"predict_local_player_sound",
+				PhysicalSurface.footstep_sound_id(target_footstep_surface),
+				global_position + Vector3.UP * 0.35,
+				{},
+				LOCAL_AUDIO_PREDICTION.gait_step_key(current_step_sequence)
+			)
+	last_predicted_gait_step_sequence = current_step_sequence
 	
 func set_local_player(value: bool) -> void:
 	is_local_player = value
@@ -1102,6 +1307,10 @@ func _process(delta: float) -> void:
 			target_gait_cycle = server_player.gait.get_cycle()
 			target_gait_stride_distance = server_player.gait.stride_distance
 			target_gait_active = server_player.gait.active
+			target_jump_sequence = server_player.jump_sequence
+			target_ragdoll_active = server_player.ragdoll_active
+			target_trip_sequence = server_player.trip_sequence
+			target_trip_direction = server_player.trip_direction
 			target_stamina_ratio = clampf(
 				server_player.stamina / maxf(ServerPlayer.MAX_STAMINA, 0.001),
 				0.0,
@@ -1116,6 +1325,9 @@ func _process(delta: float) -> void:
 				update_headbob(delta)
 			else:
 				rotation.y = server_player.rotation.y
+			_update_procedural_legs(delta, server_player)
+			_sync_trip_presentation()
+			_update_trip_camera(delta)
 
 			return
 
@@ -1146,6 +1358,98 @@ func _process(delta: float) -> void:
 			target_rotation.y,
 			weight
 		)
+	_update_procedural_legs(delta)
+	_sync_trip_presentation()
+	_update_trip_camera(delta)
+
+
+func _sync_trip_presentation() -> void:
+	if player_ragdoll == null or body_visual == null:
+		return
+	if target_ragdoll_active:
+		if is_local_player and local_wrist_interface_open:
+			_set_wrist_interface_open(false, false)
+		if (
+			not player_ragdoll.is_active()
+			or presented_trip_sequence != target_trip_sequence
+		):
+			presented_trip_sequence = target_trip_sequence
+			player_ragdoll.start_ragdoll(
+				_ragdoll_source_visuals(),
+				target_velocity,
+				target_trip_direction
+			)
+			_update_held_item_mount()
+		body_visual.visible = false
+		return
+	if player_ragdoll.is_active():
+		player_ragdoll.stop_ragdoll()
+		_update_held_item_mount()
+	body_visual.visible = true
+
+
+func _ragdoll_source_visuals() -> Dictionary:
+	return {
+		&"torso": torso_visual,
+		&"head": head_visual,
+		&"left_arm": left_arm_visual,
+		&"right_arm": right_arm_visual,
+		&"left_upper_leg": left_leg_visual.get_node("Upper"),
+		&"left_lower_leg": left_leg_visual.get_node("Lower"),
+		&"left_foot": left_leg_visual.get_node("Foot"),
+		&"right_upper_leg": right_leg_visual.get_node("Upper"),
+		&"right_lower_leg": right_leg_visual.get_node("Lower"),
+		&"right_foot": right_leg_visual.get_node("Foot"),
+	}
+
+
+func _update_trip_camera(delta: float) -> void:
+	if not is_local_player:
+		return
+	var target_weight := 1.0 if target_ragdoll_active else 0.0
+	var blend := 1.0 - exp(
+		-maxf(delta, 0.0) * TRIP_CAMERA_BLEND_SPEED
+	)
+	trip_camera_weight = lerpf(trip_camera_weight, target_weight, blend)
+	var lateral_sign := (
+		-1.0
+		if posmod(target_trip_sequence + player_id, 2) == 0
+		else 1.0
+	)
+	camera_pivot.rotation.z = TRIP_CAMERA_ROLL * lateral_sign * trip_camera_weight
+	camera_pivot.position.y -= TRIP_CAMERA_DROP * trip_camera_weight
+
+
+func _update_procedural_legs(
+	delta: float,
+	server_player: ServerPlayer = null
+) -> void:
+	if procedural_leg_rig == null:
+		return
+	if is_instance_valid(server_player):
+		procedural_leg_rig.set_query_exclusion_rid(server_player.get_rid())
+	var gait_cycle := target_gait_cycle
+	if is_local_player and gait_initialized:
+		gait_cycle = visual_gait_cycle
+	elif target_gait_active:
+		gait_cycle += (
+			Vector2(target_velocity.x, target_velocity.z).length()
+			/ maxf(
+				target_gait_stride_distance,
+				PlayerGait.MINIMUM_STRIDE_DISTANCE
+			)
+			* time_since_last_state
+		)
+	procedural_leg_rig.update_pose(
+		delta,
+		target_velocity,
+		target_on_floor,
+		gait_cycle,
+		target_gait_active,
+		target_jump_sequence
+	)
+	upper_body_pose.position = procedural_leg_rig.get_body_yield_offset()
+	upper_body_pose.rotation = procedural_leg_rig.get_body_yield_rotation()
 
 
 func _create_edit_aim_material() -> StandardMaterial3D:

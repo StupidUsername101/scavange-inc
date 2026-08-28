@@ -45,6 +45,22 @@ func _test_shared_layout_contract() -> void:
 		LAYOUT.STOREY_COUNT >= 3 and ramp_count == LAYOUT.STOREY_COUNT - 1,
 		"the replacement building has three accessible storeys and two continuous ramps"
 	)
+	var tread_descriptors := LAYOUT.stair_tread_boxes()
+	var treads_are_horizontal := true
+	for descriptor: Dictionary in tread_descriptors:
+		treads_are_horizontal = (
+			treads_are_horizontal
+			and (descriptor.get("rotation", Vector3.ZERO) as Vector3)
+			.is_zero_approx()
+		)
+	_expect(
+		tread_descriptors.size()
+		== (LAYOUT.STOREY_COUNT - 1) * LAYOUT.STAIR_TREAD_COUNT
+		and LAYOUT.foot_contact_boxes().size()
+		== descriptors.size() + tread_descriptors.size()
+		and treads_are_horizontal,
+		"smooth movement ramps expose generated horizontal presentation treads for procedural feet"
+	)
 	_expect(
 		LAYOUT.TUNNEL_LENGTH >= 40.0
 		and LAYOUT.tunnel_module_descriptors().size() == LAYOUT.TUNNEL_MODULE_COUNT
@@ -227,6 +243,29 @@ func _test_server_and_client_environment() -> void:
 	root.add_child(server_complex)
 	root.add_child(client_complex)
 	await physics_frame
+	var tread_descriptors := LAYOUT.stair_tread_boxes()
+	var first_tread: Dictionary = tread_descriptors.front()
+	var final_tread: Dictionary = tread_descriptors.back()
+	var tread_query := PhysicsRayQueryParameters3D.new()
+	tread_query.collision_mask = CharacterContactLayers.FOOT_CONTACT_DETAIL
+	var tread_contacts_are_discrete := true
+	for tread: Dictionary in [first_tread, final_tread]:
+		var tread_position: Vector3 = tread.get("position", Vector3.ZERO)
+		var tread_size: Vector3 = tread.get("size", Vector3.ZERO)
+		var expected_top := tread_position.y + tread_size.y * 0.5
+		tread_query.from = tread_position + Vector3.UP
+		tread_query.to = tread_position + Vector3.DOWN
+		var hit := root.world_3d.direct_space_state.intersect_ray(tread_query)
+		tread_contacts_are_discrete = (
+			tread_contacts_are_discrete
+			and not hit.is_empty()
+			and absf((hit.get("position", Vector3.ZERO) as Vector3).y - expected_top)
+			< 0.01
+		)
+	_expect(
+		tread_contacts_are_discrete,
+		"the production client world resolves first and final stair contacts on discrete tread tops"
+	)
 	var descriptors := LAYOUT.structural_boxes()
 	var covered_structure_names: Dictionary[StringName, bool] = {}
 	var single_shape_body_count := 0

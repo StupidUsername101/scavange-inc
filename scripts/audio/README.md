@@ -71,6 +71,28 @@ or extending audio:
     physical 3D cabinet voices. Diffuse-field recovery remains listener-space energy and cannot make
     a distant cabinet appear directionally equal to a nearby clear cabinet. Group normalization must
     preserve the original propagated pressure and shared late return while applying this split.
+30. Once an undriven room return falls beneath the useful musical tail, one shared client rule
+    progressively darkens and tapers only its residual comb/noise floor below audibility before
+    Godot's audio-bus idle shutdown. The baked RT60 is carried through synchronized group mixing and
+    prevents a fixed timer from retiring valid Hall; measured return level may begin cleanup earlier
+    only after it is already quiet. One-shots, radios, and synchronized arrays use the same rule.
+    "Undriven" means the stream player has actually stopped feeding the rack—not that one unreliable
+    source snapshot was absent. Returning input resets every tail-filter state, while populated
+    spread and pre-delay topology are never retuned under live samples. Active input, physical
+    cabinet direction, and useful early decay therefore remain untouched across movement, packet
+    gaps, and pause/resume.
+31. Locally knowable owner cues start on the input frame, using the latest server-issued listener
+    context when available and a dry free-field fallback before its first arrival. Prediction never
+    grants gameplay authority. A bounded key reconciles the owner's confirmation to exactly one
+    voice in either arrival order; remote listeners receive the ordinary unkeyed authoritative event.
+    Host and joining-client gait both integrate input sampled on the current physics frame with the
+    same movement acceleration solver as authority; an older snapshot may correct phase forward but
+    never pull an already-rendered local footfall backward in time. The fixed voice/DSP pool is built
+    during world setup, never on the first input event. If listen-server authority reaches the
+    renderer before its local presentation phase in the same frame, the keyed confirmation waits in
+    a bounded 50 ms reconciliation window. Same-frame prediction consumes it; absent prediction, the
+    original authoritative packet falls through unchanged. Unkeyed remote/world sounds never enter
+    this window.
 
 ## Static propagation bake and rollback
 
@@ -336,6 +358,40 @@ path and pay no pressure-system cost.
 Clients register local streams with a `SpatialAudioPlayer3D` node or
 `Client.register_spatial_sound()`. One-shot events send sound IDs, never resource paths.
 
+### Owner prediction and network latency
+
+Locally knowable player cues use an owner-predicted presentation layer; the acoustic simulation does
+not become client-authoritative. At 5 Hz the server sends each peer one replaceable near-body
+acoustic context on dedicated unreliable-ordered lane 7. It contains the current listener room,
+filters, first reflections, and a normalized pressure response assembled from the same cached probe
+field and static bake as ordinary events. It is neither a world-geometry copy nor permission to emit
+arbitrary sounds. The server continues to keep the actual audible-source interest set: one-shots are
+sent only to listeners for which `calculate_listener_result()` is audible, while radio/PA snapshots
+contain only currently audible continuous sources.
+
+Input/visual events that the owner can know—Fieldlink motion/UI cues, accepted-ground jump attempts,
+the shared gait phase, and each deterministic automatic-weapon shot—start immediately through the
+ordinary prewarmed voice/DSP pool. They use the latest cached context when one exists and otherwise
+start with a dry free-field packet rather than waiting for networking. Their small integer prediction
+key travels with the gameplay intent. Ammo, cooldowns, movement, equipment, source position,
+audibility, graph routing, and all remote recipients remain server-validated. The authoritative
+result returns the key only to its originating peer; that renderer consumes it as confirmation
+instead of replaying the sample. Other peers never receive the key and render the normal
+authoritative packet once. The reconciler is order-independent so host-speed loopback and a
+non-host's extrapolated gait behave the same. In the authority-first host ordering, the keyed packet
+waits for at most 50 ms for the local presentation phase instead of committing the acoustically
+delayed copy first; if no prediction arrives it falls through normally. Rejected actions discard
+any not-yet-played predicted arrivals.
+
+Remote players, impacts, world interactions, radio/PA program selection, and every cause the local
+client cannot know remain purely authoritative. Network round-trip delay is removed from predictable
+owner feedback; real speed-of-sound delay for propagated sources is intentionally not removed. If a
+prediction cannot be built because its semantic sound is not registered, the client sends key zero
+and automatically falls back to the previous server-only path. `LocalAudioPrediction.ENABLED` is the
+single rollback switch; disabling it changes no server propagation rule or packet for ordinary
+listeners. Multiplayer builds must share the same prediction-key protocol version, like every other
+RPC contract in the project.
+
 Continuous radios use a separate state stream because they must preserve track position across
 movement and late joins. `ServerRadio` chooses tracks from `assets/sounds/music`, and the server
 sends each listener a current playback offset plus the same acoustic path result used above.
@@ -444,7 +500,14 @@ deliberately keeps Godot's `spread` topology fixed at runtime: Godot realizes st
 only the right reverb network's comb/all-pass delay lengths, and resizing those populated rings emits a
 right-channel impulse. Geometry still controls wet energy, decay colour, pre-delay, filtering, and the
 apparent source; a stable decorrelation width removes the click without selecting a special bunker case.
-One-shot reverb processing is bypassed when the wet signal is silent.
+One-shot reverb processing is bypassed when the wet signal is silent. Godot otherwise keeps an
+unused bus alive for two seconds below its default -60 dB channel threshold and then deactivates it
+in one block. During that grace interval its Freeverb-derived comb return can become sparse and
+noise-like. Every rack therefore watches its post-effect peak only after the source stops driving it;
+the useful tail stays untouched down to that same -60 dB engine threshold (or its baked RT60 upper
+bound), then one allocation-free 24 dB/s bus envelope moves only the residue to -80 dB before the
+engine cutoff. A new source resets the dormant envelope before playback, so it never inherits
+attenuation from a previous voice.
 
 Continuous client voices use frame-rate-independent exponential position, volume, EQ, and filter
 convergence. The server combines simultaneous transmitted and diffracted routes in the energy domain:

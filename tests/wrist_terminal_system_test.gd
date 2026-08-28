@@ -21,6 +21,9 @@ const HELD_DEVICE_MOTION := preload(
 const TERMINAL_AIM_RING := preload(
 	"res://scripts/client/terminal_aim_ring.gd"
 )
+const FIELDLINK_DISPLAY_STATE := preload(
+	"res://scripts/network/fieldlink_display_state.gd"
+)
 
 #######################################################
 # Checks the Fieldlink's item, wearable, first-person screen, and session-control contracts.
@@ -1013,6 +1016,17 @@ func _test_client_input_contract() -> void:
 	var server_player_source := FileAccess.get_file_as_string(
 		"res://scripts/server/server_player.gd"
 	)
+	var wrist_packet := FIELDLINK_DISPLAY_STATE.make_replication_packet(
+		7,
+		true,
+		&"scanner"
+	)
+	_expect(
+		FIELDLINK_DISPLAY_STATE.sanitize_replication_packet(wrist_packet)
+		== wrist_packet
+		and FIELDLINK_DISPLAY_STATE.sanitize_replication_packet({}).is_empty(),
+		"wrist replication uses one validated packet instead of a signature-fragile RPC argument list"
+	)
 	_expect(
 		InputMap.has_action("toggle_fieldlink")
 		and _action_has_physical_key("toggle_fieldlink", KEY_TAB),
@@ -1055,8 +1069,8 @@ func _test_client_input_contract() -> void:
 		"opening Fieldlink releases grab/fire state instead of leaking gameplay input"
 	)
 	_expect(
-		client_source.contains("_send_movement_input(yaw, pitch)")
-		and client_source.contains("_process_locomotion_action_input()")
+		client_source.contains("_send_movement_input(yaw, pitch, local_proxy)")
+		and client_source.contains("_process_locomotion_action_input(local_proxy)")
 		and not server_player_source.contains(
 			"func request_jump() -> void:\n\tif wrist_interface_open:"
 		),

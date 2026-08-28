@@ -730,7 +730,13 @@ func _test_optimizer_swap_preserves_old_policy_interval() -> void:
 
 func _test_stale_turret_policy_boundary_is_discarded() -> void:
 	var trainer: TurretPPOTrainer = TurretPPOTrainer.new(515092)
-	var observation: Dictionary = _sample_observation()
+	var observation: Dictionary = _reward_observation(
+		0.9,
+		true,
+		true,
+		TurretMLAction.neutral_commands(),
+		0.0
+	)
 	var stale_sample: Dictionary = trainer.sample_runtime_action(observation)
 	var stale_revision: int = int(stale_sample.get("policy_revision", -1))
 	trainer.behavior_policy_update = stale_revision + 1

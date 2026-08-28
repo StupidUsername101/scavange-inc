@@ -13,6 +13,7 @@ func _init() -> void:
 func _run() -> void:
 	_test_segment_lengths_and_reach_clamp()
 	_test_authored_bend_and_continuity()
+	_test_reusable_solution_output()
 	_test_knee_joint_frame()
 	_test_degenerate_pose_remains_finite()
 	if failure_count == 0:
@@ -105,6 +106,38 @@ func _test_knee_joint_frame() -> void:
 		absf(frame.x.dot(frame.z)) < 0.0001
 		and absf(frame.y.dot(frame.z)) < 0.0001,
 		"hinge axis is perpendicular to both local frame axes"
+	)
+
+
+func _test_reusable_solution_output() -> void:
+	var output := LimbKinematics.TwoBoneSolution.new()
+	LimbKinematics.solve_two_bone_into(
+		output,
+		Vector3(0.0, 1.0, 0.0),
+		Vector3(0.3, 0.1, -0.2),
+		0.7,
+		0.65,
+		Vector3.FORWARD,
+		Vector3.FORWARD,
+		Vector3.DOWN
+	)
+	var first_identity := output
+	var first_bend := output.bend_direction
+	LimbKinematics.solve_two_bone_into(
+		output,
+		Vector3(0.0, 1.0, 0.0),
+		Vector3(-0.2, 0.05, -0.25),
+		0.7,
+		0.65,
+		Vector3.FORWARD,
+		first_bend,
+		Vector3.DOWN
+	)
+	_expect(
+		output == first_identity
+		and absf(output.hip.distance_to(output.knee) - 0.7) < EPSILON
+		and absf(output.knee.distance_to(output.tip) - 0.65) < EPSILON,
+		"reusable two-bone output is overwritten in place without changing solver geometry"
 	)
 
 

@@ -2,6 +2,9 @@ class_name AcousticMazeProxy
 extends Node3D
 
 const LAYOUT := preload("res://scripts/world/acoustic_maze_layout.gd")
+const FOOT_CONTACT_BUILDER := preload(
+	"res://scripts/world/foot_contact_geometry_builder.gd"
+)
 
 var _unit_box: BoxMesh
 var _materials: Dictionary[StringName, Material] = {}
@@ -16,6 +19,11 @@ func _ready() -> void:
 	_build_entrance_marker()
 	_build_lighting()
 	_build_exit_marker()
+	FOOT_CONTACT_BUILDER.build_clustered_boxes(
+		self,
+		LAYOUT.structural_boxes(),
+		"MazeFootContact"
+	)
 
 
 func _build_materials() -> void:

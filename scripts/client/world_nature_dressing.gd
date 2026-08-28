@@ -9,12 +9,44 @@ const ASSET_SCENES := {
 	&"grass": preload("res://assets/third_party/pizza_doggy/models/nature/grass_1.glb"),
 	&"stone": preload("res://assets/third_party/pizza_doggy/models/nature/stone_2.glb"),
 }
+const CONTACT_SHAPES := {
+	&"pine": preload("res://resources/world/nature_collisions/pine_tree_1_trunk_convex.tres"),
+	&"broadleaf": preload("res://resources/world/nature_collisions/tree_8_trunk_convex.tres"),
+	&"stone": preload("res://resources/world/nature_collisions/stone_2_convex.tres"),
+}
 
 const VISIBILITY_RANGE_METERS := 175.0
 
 
 func _ready() -> void:
 	_build_batches()
+	_build_foot_contact_collision()
+
+
+func _build_foot_contact_collision() -> void:
+	var bodies_by_kind: Dictionary[StringName, StaticBody3D] = {}
+	for descriptor: Dictionary in LAYOUT.collision_descriptors():
+		var asset_id: StringName = descriptor.get("asset_id", &"")
+		var shape := CONTACT_SHAPES.get(asset_id) as Shape3D
+		if shape == null:
+			continue
+		var collision_kind: StringName = descriptor.get(
+			"collision_kind",
+			&"nature"
+		)
+		var body := bodies_by_kind.get(collision_kind) as StaticBody3D
+		if body == null:
+			body = StaticBody3D.new()
+			body.name = "%sFootContact" % str(collision_kind).to_pascal_case()
+			body.collision_layer = CharacterContactLayers.FOOT_CONTACT_DETAIL
+			body.collision_mask = 0
+			add_child(body)
+			bodies_by_kind[collision_kind] = body
+		var collision := CollisionShape3D.new()
+		collision.name = str(descriptor.get("name", &"Nature")) + "Contact"
+		collision.transform = LAYOUT.descriptor_transform(descriptor)
+		collision.shape = shape
+		body.add_child(collision)
 
 
 func _build_batches() -> void:
