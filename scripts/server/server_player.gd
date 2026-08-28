@@ -66,7 +66,12 @@ const WRIST_SOUND_CLICK_COOLDOWN_MSEC := 90
 const WRIST_SOUND_FEEDBACK_COOLDOWN_MSEC := 220
 const WRIST_SOUND_SOURCE_HEIGHT_OFFSET := -0.12
 const WRIST_SOUND_OUTPUT_GAIN_DB := -5.0
-const ECHOLOCATION_CLICK_COOLDOWN_MSEC := 520
+# Mouth clicks are an expressive/rhythmic input, so a conventional half-second ability cooldown
+# feels artificial. This bucket sustains faster-than-normal musical tapping while still bounding
+# malicious RPC spam and the acoustic work it can create for other peers.
+const ECHOLOCATION_CLICK_MIN_INTERVAL_MSEC := 45
+const ECHOLOCATION_CLICK_REFILL_PER_SECOND := 12.0
+const ECHOLOCATION_CLICK_BURST_CAPACITY := 4.0
 const DISTORTION_FADE_DURATION_RATIO := 0.3
 const MIN_DISTORTION_FADE_DURATION := 0.08
 const MAX_DISTORTION_FADE_DURATION := 1.2
@@ -159,6 +164,8 @@ var last_requested_wrist_sound_msec := PackedInt64Array([
 	-100000,
 ])
 var last_echolocation_click_msec := -100000
+var echolocation_click_refill_msec := -1
+var echolocation_click_tokens := ECHOLOCATION_CLICK_BURST_CAPACITY
 
 
 func _ready() -> void:
@@ -308,11 +315,26 @@ func request_wrist_device_sound(
 
 
 func request_echolocation_click(local_prediction_key := 0) -> bool:
-	if has_equipped_eyes():
-		return false
 	var now_msec := Time.get_ticks_msec()
-	if now_msec - last_echolocation_click_msec < ECHOLOCATION_CLICK_COOLDOWN_MSEC:
+	if echolocation_click_refill_msec < 0:
+		echolocation_click_refill_msec = now_msec
+	else:
+		var elapsed_msec := maxi(now_msec - echolocation_click_refill_msec, 0)
+		echolocation_click_tokens = minf(
+			ECHOLOCATION_CLICK_BURST_CAPACITY,
+			echolocation_click_tokens
+			+ float(elapsed_msec)
+			* ECHOLOCATION_CLICK_REFILL_PER_SECOND
+			/ 1000.0
+		)
+		echolocation_click_refill_msec = now_msec
+	if (
+		now_msec - last_echolocation_click_msec
+		< ECHOLOCATION_CLICK_MIN_INTERVAL_MSEC
+		or echolocation_click_tokens < 1.0
+	):
 		return false
+	echolocation_click_tokens -= 1.0
 	last_echolocation_click_msec = now_msec
 	_emit_echolocation_click(local_prediction_key)
 	return true

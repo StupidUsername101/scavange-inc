@@ -481,7 +481,6 @@ func _process_locomotion_action_input(local_proxy: PlayerProxy) -> void:
 		Server.rpc_id(HOST_RPC_ID, "receive_jump", prediction_key)
 	if (
 		local_proxy != null
-		and not local_proxy.has_equipped_eyes()
 		and InputMap.has_action(EyelessAcousticPerception.INPUT_ACTION)
 		and Input.is_action_just_pressed(
 			EyelessAcousticPerception.INPUT_ACTION
@@ -495,7 +494,7 @@ func request_echolocation_click(local_proxy: PlayerProxy = null) -> void:
 		return
 	if local_proxy == null:
 		local_proxy = get_local_player_proxy()
-	if local_proxy == null or local_proxy.has_equipped_eyes():
+	if local_proxy == null:
 		return
 	var source_position := local_proxy.get_audio_listener_position()
 	var prediction_key := predict_local_player_sound(

@@ -49,12 +49,20 @@ func _test_static_contract() -> void:
 		"eyeless echolocation owns a discoverable Q input without mutating project settings"
 	)
 	var profile := LocalAudioPrediction.player_cue_profile(&"mouth_click")
+	var mouth_streams := MOUTH_CLICK_AUDIO.streams()
+	var has_recorded_klong := false
+	for stream: AudioStream in mouth_streams:
+		if stream.resource_path.begins_with(
+			MOUTH_CLICK_AUDIO.RECORDING_DIRECTORY + "/"
+		):
+			has_recorded_klong = true
+			break
 	_expect(
 		GameAudioLibrary.registered_sound_ids().has(&"mouth_click")
-		and not MOUTH_CLICK_AUDIO.streams().is_empty()
+		and has_recorded_klong
 		and float(profile.get("max_distance", 0.0)) >= 30.0
 		and float(profile.get("pressure_strength", 0.0)) > 0.0,
-		"the mouth click has a playable fallback and one shared spatial-acoustic profile"
+		"a recorded mouth klong loads through the shared spatial-acoustic profile"
 	)
 
 
@@ -181,18 +189,27 @@ func _test_local_perception_lifecycle() -> void:
 func _test_server_click_gate() -> void:
 	var player := SERVER_PLAYER_SCENE.instantiate() as ServerPlayer
 	root.add_child(player)
-	_expect(
-		not player.request_echolocation_click(),
-		"a sighted player cannot emit the special echolocation action"
-	)
+	var sighted_accepted := player.request_echolocation_click()
 	var dropped_eyes := player.try_unequip_to_world(
 		PlayerInventoryRules.EYES_SLOT
 	)
-	var accepted := player.request_echolocation_click()
+	var musical_cadence_accepted := true
+	# 125 ms is a sixteenth note at 120 BPM. Simulate a full bar without sleeping so the test
+	# covers sustained expression rather than merely consuming the initial burst allowance.
+	for _beat: int in range(16):
+		player.last_echolocation_click_msec -= 125
+		player.echolocation_click_refill_msec -= 125
+		musical_cadence_accepted = (
+			player.request_echolocation_click()
+			and musical_cadence_accepted
+		)
 	var throttled := player.request_echolocation_click()
 	_expect(
-		not dropped_eyes.is_empty() and accepted and not throttled,
-		"the authority accepts clicks only while eyeless and rate-limits repeated requests"
+		sighted_accepted
+		and not dropped_eyes.is_empty()
+		and musical_cadence_accepted
+		and not throttled,
+		"mouth clicks work with or without eyes at musical cadence while packet spam is bounded"
 	)
 	player.free()
 

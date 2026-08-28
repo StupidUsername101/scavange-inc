@@ -107,7 +107,8 @@ screen, scanner-family CRT treatment, Tab access, public technical-interface ope
 local/remote arm-pose isolation, camera presentation, shared-gait bob inheritance,
 critically damped heavy-arm hold sway, moving-screen pointer alignment, and gameplay input lockout.
 
-The eyeless acoustic-perception suite checks the Q input fallback, authoritative sight/cooldown gate,
+The eyeless acoustic-perception suite checks the Q input fallback, sight-independent authoritative click,
+musical-cadence token-bucket allowance and abusive-repeat rejection,
 mouth-click audio registration, draw order above the black ocular view, final apparent-position sound
 impressions, continuous-source refresh, first-hit-only near-field contours, and immediate cleanup when
 eyes are equipped again.

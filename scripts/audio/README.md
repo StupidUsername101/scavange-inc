@@ -480,10 +480,13 @@ scalar envelope over the existing fixed pools—no extra player, DSP bus, stream
 Characters without equipped eyes receive an `EyelessAcousticPerception` layer above the black ocular
 view. One-shots enter it only when the fixed spatial renderer actually admits and starts their final
 listener-specific packet; continuous speakers provide their already-filtered spectrum level at 15 Hz.
-Both use `apparent_position`, never the omniscient source position. Pressing Q while eyeless requests a
-server-validated `mouth_click`; the click is audible to everyone through this same system and permits
-one local 88-ray, first-hit-only near-field echo sweep. The sweep has an authoritative 520 ms cooldown,
-never runs continuously, stops at the first wall, and supplements ordinary sound direction with short
+Both use `apparent_position`, never the omniscient source position. Pressing Q always requests a
+server-validated `mouth_click`, making it an ordinary audible expression for sighted and eyeless
+players alike. A 12-click/second token bucket with short burst headroom preserves musical input while
+bounding malicious RPC/acoustic spam; it is intentionally not an ability-style cooldown. While
+eyeless, that same click permits one local 88-ray, first-hit-only near-field echo
+sweep. The sweep follows the same bounded rhythmic input, never runs continuously, stops at the first
+wall, and supplements ordinary sound direction with short
 organic contour fragments. Recorded variations are discovered from
 `res://assets/sounds/player/mouth_clicks`; the existing terminal click is development fallback only.
 
