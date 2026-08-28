@@ -322,16 +322,15 @@ func _test_lobby_browser_behavior() -> void:
 	var incompatible_snapshot := valid_snapshot.duplicate()
 	incompatible_snapshot["protocol"] = "old-protocol"
 	_expect(
-		not browser._apply_lobby_snapshot(101, incompatible_snapshot)
-		and not browser.lobby_cards_by_id.has(101),
-		"a live metadata change removes an incompatible lobby"
+		browser._apply_lobby_snapshot(101, incompatible_snapshot)
+		and browser.lobby_cards_by_id.has(101),
+		"discovery does not hide a lobby because replicated protocol metadata is stale"
 	)
-	browser._apply_lobby_snapshot(101, valid_snapshot)
 	browser._on_lobby_data_update(false, 101, 101)
 	_expect(
-		not browser.lobby_cards_by_id.has(101)
-		and browser.empty_label.visible,
-		"a failed live metadata refresh removes its stale card and updates the summary"
+		browser.lobby_cards_by_id.has(101)
+		and not browser.empty_label.visible,
+		"a failed metadata refresh preserves the directly discovered lobby"
 	)
 
 	var card_scene := load("res://scenes/UI/lobby_card.tscn") as PackedScene
@@ -448,9 +447,9 @@ func _test_transport_wiring() -> void:
 	)
 	_expect(
 		not browser_source.contains(
-			"Steam.addRequestLobbyListFilterSlotsAvailable(1)"
+			"Steam.addRequestLobbyList"
 		),
-		"mutable availability is validated locally instead of hiding lobby IDs during discovery"
+		"browser submits an entirely unfiltered Steam lobby request"
 	)
 
 

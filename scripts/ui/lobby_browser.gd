@@ -36,7 +36,6 @@ var refresh_in_flight := false
 var join_in_flight := false
 var lobby_match_list_received := false
 var discovered_lobby_ids: Dictionary[int, bool] = {}
-var rejected_lobby_count := 0
 
 
 func _ready() -> void:
@@ -100,13 +99,10 @@ func _on_lobby_data_update(success: bool, lobby_id: int, member_id: int) -> void
 		pending_lobby_ids.erase(lobby_id)
 
 	if not success:
-		_remove_lobby_card(lobby_id)
 		if was_pending:
 			_finish_lobby_data_batch()
-		elif lobby_cards_by_id.is_empty():
-			_show_empty_state("No compatible open lobbies found.")
 		else:
-			status_label.text = "%d open lobby(s)" % lobby_cards_by_id.size()
+			status_label.text = "%d Steam lobby(s)" % lobby_cards_by_id.size()
 		return
 		
 	var steam_member_count: int = Steam.getNumLobbyMembers(lobby_id)
@@ -114,7 +110,7 @@ func _on_lobby_data_update(success: bool, lobby_id: int, member_id: int) -> void
 		Steam.getLobbyData(lobby_id, LobbyRules.DATA_PLAYERS),
 		steam_member_count
 	)
-	var is_visible := _apply_lobby_snapshot(lobby_id, {
+	_apply_lobby_snapshot(lobby_id, {
 		"name": Steam.getLobbyData(lobby_id, LobbyRules.DATA_NAME),
 		"members": maxi(steam_member_count, advertised_member_count),
 		"capacity": Steam.getLobbyMemberLimit(lobby_id),
@@ -122,15 +118,10 @@ func _on_lobby_data_update(success: bool, lobby_id: int, member_id: int) -> void
 		"protocol": Steam.getLobbyData(lobby_id, LobbyRules.DATA_PROTOCOL),
 		"open": Steam.getLobbyData(lobby_id, LobbyRules.DATA_OPEN),
 	})
-	if was_pending and not is_visible:
-		rejected_lobby_count += 1
-
 	if was_pending:
 		_finish_lobby_data_batch()
-	elif lobby_cards_by_id.is_empty():
-		_show_empty_state("No compatible open lobbies found.")
 	else:
-		status_label.text = "%d open lobby(s)" % lobby_cards_by_id.size()
+		status_label.text = "%d Steam lobby(s)" % lobby_cards_by_id.size()
 
 
 func refresh_lobbies() -> void:
@@ -148,7 +139,6 @@ func refresh_lobbies() -> void:
 	lobby_match_list_received = false
 	pending_lobby_ids.clear()
 	discovered_lobby_ids.clear()
-	rejected_lobby_count = 0
 	for card: LobbyCard in lobby_cards_by_id.values():
 		if is_instance_valid(card):
 			if card.get_parent() != null:
@@ -159,23 +149,12 @@ func refresh_lobbies() -> void:
 	refresh_button.disabled = true
 	status_label.text = "Searching Steam and friend lobbies..."
 
-	# Spacewar's public lobby index is shared by a large number of test projects. A friend's
-	# current lobby is authoritative and bypasses that noisy global result set, while the metadata
-	# validation in _apply_lobby_snapshot still prevents incompatible projects from being joined.
+	# Friend lobbies are queued first so the relevant session stays at the top even under Spacewar.
+	# Discovery deliberately does not reject any candidate based on asynchronously replicated data.
 	_queue_friend_lobby_candidates()
-		
-	Steam.addRequestLobbyListDistanceFilter(Steam.LOBBY_DISTANCE_FILTER_WORLDWIDE)
-	Steam.addRequestLobbyListResultCountFilter(
-		LobbyRules.MAX_BROWSER_RESULTS
-	)
-	Steam.addRequestLobbyListStringFilter(
-		LobbyRules.DATA_GAME,
-		LobbyRules.GAME_TAG,
-		Steam.LOBBY_COMPARISON_EQUAL
-	)
-	# Only the immutable game tag is filtered by Steam. Protocol, availability, and capacity are
-	# validated from the returned snapshot so a delayed metadata update cannot make a friend's
-	# otherwise valid lobby disappear before we ever receive its ID.
+
+	# No Steam-side filters. App 480 is noisy, but filtering mutable lobby metadata caused valid
+	# friend sessions to vanish. The server validates the game/protocol after Steam admits Join.
 	Steam.requestLobbyList()
 
 	var this_generation: int = refresh_generation
@@ -204,20 +183,10 @@ func _apply_lobby_snapshot(lobby_id: int, snapshot: Dictionary) -> bool:
 		SafeVariant.integral_int_or(snapshot.get("capacity", 0), 0),
 		0
 	)
-	var is_visible := (
-		str(snapshot.get("open", "0")) == "1"
-		and LobbyRules.is_compatible_lobby(
-			str(snapshot.get("game_tag", "")),
-			str(snapshot.get("protocol", "")),
-			members,
-			capacity
-		)
-	)
-	if is_visible:
-		_add_lobby_card(lobby_id, lobby_name, members, capacity)
-	else:
-		_remove_lobby_card(lobby_id)
-	return is_visible
+	if capacity <= 0:
+		capacity = LobbyRules.MAX_PLAYERS
+	_add_lobby_card(lobby_id, lobby_name, members, capacity)
+	return true
 
 
 static func extract_friend_lobby_id(
@@ -272,7 +241,13 @@ func _queue_friend_lobby_candidate(friend_id: int) -> bool:
 		Steam.getFriendRichPresence(friend_id, STEAM_PRESENCE_GROUP),
 		Steam.getFriendRichPresence(friend_id, STEAM_PRESENCE_CONNECT)
 	)
-	return _queue_lobby_candidate(lobby_id)
+	var friend_name := Steam.getFriendPersonaName(friend_id).strip_edges()
+	var fallback_name := (
+		"%s's game" % friend_name
+		if not friend_name.is_empty()
+		else "Friend's game"
+	)
+	return _queue_lobby_candidate(lobby_id, fallback_name)
 
 
 func _on_friend_rich_presence_update(friend_id: int, _app_id: int) -> void:
@@ -287,9 +262,13 @@ func _on_friend_rich_presence_update(friend_id: int, _app_id: int) -> void:
 		lobby_match_list_received = true
 		refresh_button.disabled = true
 	status_label.text = "Loading friend lobby..."
+	_finish_lobby_data_batch()
 
 
-func _queue_lobby_candidate(lobby_id: int) -> bool:
+func _queue_lobby_candidate(
+	lobby_id: int,
+	fallback_name: String = "Steam lobby"
+) -> bool:
 	if (
 		lobby_id <= 0
 		or lobby_id == Server.lobby_id
@@ -298,12 +277,17 @@ func _queue_lobby_candidate(lobby_id: int) -> bool:
 	):
 		return false
 	discovered_lobby_ids[lobby_id] = true
+	_add_lobby_card(
+		lobby_id,
+		fallback_name,
+		1,
+		LobbyRules.MAX_PLAYERS
+	)
 	pending_lobby_ids[lobby_id] = true
 	if Steam.requestLobbyData(lobby_id):
 		return true
 	pending_lobby_ids.erase(lobby_id)
-	rejected_lobby_count += 1
-	return false
+	return true
 
 
 func _on_refresh_timeout(generation: int) -> void:
@@ -372,16 +356,10 @@ func _finish_lobby_data_batch() -> void:
 	refresh_in_flight = false
 	refresh_button.disabled = not Server.is_steam_available()
 	if lobby_cards_by_id.is_empty():
-		if discovered_lobby_ids.is_empty():
-			_show_empty_state("Steam found no game or friend lobbies.")
-		else:
-			_show_empty_state(
-				"Steam found %d candidate(s), but none were compatible and open."
-				% discovered_lobby_ids.size()
-			)
+		_show_empty_state("Steam found no lobbies.")
 	else:
 		empty_label.hide()
-		status_label.text = "%d open lobby(s)" % lobby_cards_by_id.size()
+		status_label.text = "%d Steam lobby(s)" % lobby_cards_by_id.size()
 
 
 func _show_empty_state(message: String) -> void:
