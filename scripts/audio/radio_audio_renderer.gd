@@ -1,6 +1,14 @@
 class_name RadioAudioRenderer
 extends Node
 
+signal acoustic_perception_sample(
+	source_id: int,
+	apparent_position: Vector3,
+	received_intensity: float,
+	band_gain: Vector3,
+	enclosure: float
+)
+
 const LISTENER_ACTIVITY := preload(
 	"res://scripts/audio/listener_acoustic_activity.gd"
 )
@@ -41,6 +49,7 @@ const SPECTRAL_BLOOM_ATTACK_SPEED := 3.0
 const SPECTRAL_BLOOM_RELEASE_SPEED := 1.25
 const LISTENER_ACOUSTIC_ATTACK_SPEED := 18.0
 const LISTENER_ACOUSTIC_RELEASE_SPEED := 4.0
+const ACOUSTIC_PERCEPTION_SAMPLE_SECONDS := 1.0 / 15.0
 const CONTINUOUS_MIX_BUS := &"ScavangeContinuousWorldAudio"
 const CONTINUOUS_LIMITER_CEILING_DB := -0.3
 const CONTINUOUS_LIMITER_RELEASE_SECONDS := 0.08
@@ -121,6 +130,7 @@ var _generation := 0
 var _foreground_duck_envelope := 0.0
 var _foreground_duck_hold_remaining := 0.0
 var _listener_acoustic_intensity := 0.0
+var _acoustic_perception_sample_remaining := 0.0
 
 
 func _ready() -> void:
@@ -566,6 +576,7 @@ func reset_session() -> void:
 	_foreground_duck_envelope = 0.0
 	_foreground_duck_hold_remaining = 0.0
 	_listener_acoustic_intensity = 0.0
+	_acoustic_perception_sample_remaining = 0.0
 
 
 func get_debug_state() -> Dictionary:
@@ -664,6 +675,10 @@ func request_foreground_transient_space(
 
 func _process(delta: float) -> void:
 	_update_foreground_duck(delta)
+	_acoustic_perception_sample_remaining -= maxf(delta, 0.0)
+	var publish_perception_sample := _acoustic_perception_sample_remaining <= 0.0
+	if publish_perception_sample:
+		_acoustic_perception_sample_remaining = ACOUSTIC_PERCEPTION_SAMPLE_SECONDS
 	var listener_acoustic_energy := 0.0
 	var now_usec := Time.get_ticks_usec()
 	var position_weight := _follow_weight(POSITION_FOLLOW_SPEED, delta)
@@ -752,6 +767,28 @@ func _process(delta: float) -> void:
 			body_magnitude,
 			brilliance_magnitude
 		)
+		if (
+			publish_perception_sample
+			and player.playing
+			and received_acoustic_intensity > 0.001
+		):
+			acoustic_perception_sample.emit(
+				_slot_item_ids[slot_index],
+				player.global_position,
+				received_acoustic_intensity,
+				SafeVariant.vector3_strict_or(
+					effect_target.get("band_gain"),
+					Vector3.ONE
+				),
+				clampf(
+					SafeVariant.finite_float_or(
+						effect_target.get("environment_enclosure"),
+						0.0
+					),
+					0.0,
+					1.0
+				)
+			)
 		listener_acoustic_energy += (
 			received_acoustic_intensity * received_acoustic_intensity
 		)

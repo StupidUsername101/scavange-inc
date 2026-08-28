@@ -8,6 +8,7 @@ godot --headless --path . --script res://tests/drone_runtime_integration_test.gd
 godot --headless --path . --script res://tests/limb_kinematics_test.gd
 godot --headless --path . --script res://tests/lobby_system_test.gd
 godot --headless --path . --script res://tests/player_equipment_system_test.gd
+godot --headless --path . --script res://tests/eyeless_acoustic_perception_test.gd
 godot --headless --path . --script res://tests/wrist_terminal_system_test.gd
 godot --headless --path . --script res://tests/player_movement_test.gd
 godot --headless --path . --script res://tests/player_procedural_leg_rig_test.gd
@@ -105,6 +106,11 @@ ordinary physical/equipped item paths, compact hover-hinted UI, lazily allocated
 screen, scanner-family CRT treatment, Tab access, public technical-interface opening,
 local/remote arm-pose isolation, camera presentation, shared-gait bob inheritance,
 critically damped heavy-arm hold sway, moving-screen pointer alignment, and gameplay input lockout.
+
+The eyeless acoustic-perception suite checks the Q input fallback, authoritative sight/cooldown gate,
+mouth-click audio registration, draw order above the black ocular view, final apparent-position sound
+impressions, continuous-source refresh, first-hit-only near-field contours, and immediate cleanup when
+eyes are equipped again.
 
 The player-movement suite checks accelerated ground movement and braking,
 momentum-preserving takeoff and airborne coasting, speed-neutral air steering,

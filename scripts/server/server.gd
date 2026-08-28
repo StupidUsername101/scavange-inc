@@ -3936,6 +3936,17 @@ func request_wrist_device_sound(
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
+func request_echolocation_click(local_prediction_key := 0) -> void:
+	if not multiplayer.is_server():
+		return
+	var player := get_sending_player()
+	if player != null and not player.request_echolocation_click(
+		local_prediction_key
+	):
+		_reject_local_audio_prediction(player, local_prediction_key)
+
+
+@rpc("any_peer", "call_local", "reliable", 3)
 func request_fieldlink_device_control(contact_value: StringName) -> void:
 	if not multiplayer.is_server():
 		return

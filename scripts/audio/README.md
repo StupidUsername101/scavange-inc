@@ -477,6 +477,16 @@ the radios loud enough to mask it. The short hold preserves the footstep's hard 
 exponential release leaves the music dominant; quiet or distant radios are untouched. This uses one
 scalar envelope over the existing fixed pools—no extra player, DSP bus, stream, or sample buffer.
 
+Characters without equipped eyes receive an `EyelessAcousticPerception` layer above the black ocular
+view. One-shots enter it only when the fixed spatial renderer actually admits and starts their final
+listener-specific packet; continuous speakers provide their already-filtered spectrum level at 15 Hz.
+Both use `apparent_position`, never the omniscient source position. Pressing Q while eyeless requests a
+server-validated `mouth_click`; the click is audible to everyone through this same system and permits
+one local 88-ray, first-hit-only near-field echo sweep. The sweep has an authoritative 520 ms cooldown,
+never runs continuously, stops at the first wall, and supplements ordinary sound direction with short
+organic contour fragments. Recorded variations are discovered from
+`res://assets/sounds/player/mouth_clicks`; the existing terminal click is development fallback only.
+
 For a door, vent or transmissive wall, connect the probes on either side with an
 `AcousticPortal3D`. Its `AcousticMaterial` controls low/mid/high transmission, volume loss,
 filter limits, resonance and reverb send. `additional_modifier` can add a named effect such as a

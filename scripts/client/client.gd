@@ -34,6 +34,14 @@ const REPLICATION_SCHEDULE := preload(
 )
 
 signal spatial_sound_received(packet: Dictionary)
+signal acoustic_perception_event_rendered(packet: Dictionary)
+signal acoustic_perception_continuous_sample(
+	source_id: int,
+	apparent_position: Vector3,
+	received_intensity: float,
+	band_gain: Vector3,
+	enclosure: float
+)
 
 #######################################################
 # Collects local input, sends player intents to the authority, and owns the lifecycle of
@@ -234,6 +242,30 @@ func collect_nearby_fieldlink_devices(
 	return result
 
 
+func collect_echolocation_targets(
+	origin: Vector3,
+	maximum_distance: float
+) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	if not origin.is_finite():
+		return result
+	var bounded_range := clampf(maximum_distance, 0.0, 32.0)
+	var range_squared := bounded_range * bounded_range
+	for item_proxy: ItemProxy in item_proxies_by_item_id.values():
+		if (
+			not is_instance_valid(item_proxy)
+			or not item_proxy.visible
+			or item_proxy.global_position.distance_squared_to(origin) > range_squared
+		):
+			continue
+		result.append({
+			"target_id": item_proxy.item_id,
+			"world_position": item_proxy.global_position,
+			"is_eyes": item_proxy.item_definition is EyeDefinition,
+		})
+	return result
+
+
 static func _append_fieldlink_contact(
 	result: Array[Dictionary],
 	seen_contact_ids: Dictionary[StringName, bool],
@@ -316,6 +348,9 @@ func _ensure_spatial_audio_renderer() -> void:
 	spatial_audio_renderer.foreground_transient_started.connect(
 		_on_foreground_transient_started
 	)
+	spatial_audio_renderer.acoustic_perception_event_rendered.connect(
+		_on_acoustic_perception_event_rendered
+	)
 
 
 func _on_foreground_transient_started(
@@ -329,12 +364,35 @@ func _on_foreground_transient_started(
 		)
 
 
+func _on_acoustic_perception_event_rendered(packet: Dictionary) -> void:
+	acoustic_perception_event_rendered.emit(packet)
+
+
 func _ensure_radio_audio_renderer() -> void:
 	if is_instance_valid(radio_audio_renderer):
 		return
 	radio_audio_renderer = RadioAudioRenderer.new()
 	radio_audio_renderer.name = "RadioAudioRenderer"
 	add_child(radio_audio_renderer)
+	radio_audio_renderer.acoustic_perception_sample.connect(
+		_on_acoustic_perception_continuous_sample
+	)
+
+
+func _on_acoustic_perception_continuous_sample(
+	source_id: int,
+	apparent_position: Vector3,
+	received_intensity: float,
+	band_gain: Vector3,
+	enclosure: float
+) -> void:
+	acoustic_perception_continuous_sample.emit(
+		source_id,
+		apparent_position,
+		received_intensity,
+		band_gain,
+		enclosure
+	)
 
 
 @rpc("authority", "reliable", "call_local")
@@ -421,6 +479,34 @@ func _process_locomotion_action_input(local_proxy: PlayerProxy) -> void:
 				local_proxy.global_position + Vector3.UP * 0.35
 			)
 		Server.rpc_id(HOST_RPC_ID, "receive_jump", prediction_key)
+	if (
+		local_proxy != null
+		and not local_proxy.has_equipped_eyes()
+		and InputMap.has_action(EyelessAcousticPerception.INPUT_ACTION)
+		and Input.is_action_just_pressed(
+			EyelessAcousticPerception.INPUT_ACTION
+		)
+	):
+		request_echolocation_click(local_proxy)
+
+
+func request_echolocation_click(local_proxy: PlayerProxy = null) -> void:
+	if not _has_connected_multiplayer_peer():
+		return
+	if local_proxy == null:
+		local_proxy = get_local_player_proxy()
+	if local_proxy == null or local_proxy.has_equipped_eyes():
+		return
+	var source_position := local_proxy.get_audio_listener_position()
+	var prediction_key := predict_local_player_sound(
+		EyelessAcousticPerception.MOUTH_CLICK_SOUND_ID,
+		source_position
+	)
+	Server.rpc_id(
+		HOST_RPC_ID,
+		"request_echolocation_click",
+		prediction_key
+	)
 
 
 func _suspend_gameplay_input(

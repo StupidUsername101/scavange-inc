@@ -4,6 +4,10 @@ extends Node
 ## Registers the curated one-shot game sounds once per client world. Playback stays allocation-free:
 ## the existing SpatialAudioRenderer owns a fixed voice/DSP pool and chooses variations in-place.
 
+const MOUTH_CLICK_AUDIO := preload(
+	"res://scripts/audio/mouth_click_audio_catalog.gd"
+)
+
 const SURFACE_SPECS: Array[Dictionary] = [
 	{
 		"surface": &"concrete",
@@ -346,6 +350,16 @@ func _ready() -> void:
 			float(spec.get("pitch_max", 1.03)),
 			float(spec.get("start_offset_seconds", 0.0))
 		)
+	_register(
+		client,
+		&"mouth_click",
+		MOUTH_CLICK_AUDIO.streams(),
+		-1.0,
+		0.97,
+		1.04,
+		0.0,
+		0.42
+	)
 
 
 func _register(
@@ -392,7 +406,7 @@ func _exit_tree() -> void:
 
 
 static func registered_sound_ids() -> Array[StringName]:
-	var result: Array[StringName] = []
+	var result: Array[StringName] = [&"mouth_click"]
 	for surface_spec: Dictionary in SURFACE_SPECS:
 		var surface := str(surface_spec.get("surface", &"concrete"))
 		result.append(StringName("footstep_%s" % surface))

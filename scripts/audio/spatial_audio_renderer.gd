@@ -2,6 +2,7 @@ class_name SpatialAudioRenderer
 extends Node
 
 signal foreground_transient_started(strength: float, received_volume_db: float)
+signal acoustic_perception_event_rendered(packet: Dictionary)
 
 const LISTENER_ACTIVITY := preload(
 	"res://scripts/audio/listener_acoustic_activity.gd"
@@ -495,6 +496,11 @@ func _play_packet(packet: Dictionary) -> bool:
 		entry.get("start_offset_seconds", 0.0)
 	)
 	player.play(start_offset_seconds)
+	# Perception consumes the exact voice that actually reached the listener, after travel delay,
+	# registration gain, voice admission, and path placement. This is deliberately downstream of
+	# the server solver instead of maintaining a parallel notion of what was audible.
+	packet["rendered_volume_db"] = player.volume_db
+	acoustic_perception_event_rendered.emit(packet)
 	if not pressure_layer:
 		_listener_acoustic_intensity = LISTENER_ACTIVITY.combine_energy(
 			_listener_acoustic_intensity,

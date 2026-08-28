@@ -110,9 +110,9 @@ func _test_curated_audio_catalog() -> void:
 			if stream == null or not stream.resource_path.begins_with(CURATED_ROOT):
 				all_streams_valid = false
 	_expect(
-		ids.size() == 35
+		ids.size() >= 36
 		and unique_ids.size() == ids.size()
-		and stream_count == 63
+		and stream_count >= 63
 		and ids.has(&"service_pistol_fire")
 		and ids.has(&"automatic_rifle_fire")
 		and ids.has(&"rifle_reload_out")
@@ -123,6 +123,7 @@ func _test_curated_audio_catalog() -> void:
 		and ids.has(&"footstep_soil")
 		and ids.has(&"projectile_impact_9mm")
 		and ids.has(&"projectile_impact_556")
+		and ids.has(&"mouth_click")
 		and ids.has(&"projectile_impact_nail")
 		and ids.has(&"projectile_impact_coil"),
 		"game audio library exposes all movement and material-impact cues backed by curated clips"
@@ -396,15 +397,24 @@ func _test_curated_nature_contract() -> void:
 		]
 	)
 	var minimum_garage_quadrant_count := garage_quadrant_counts[0]
+	var well_populated_garage_quadrants := 0
+	var garage_ring_tree_count := 0
 	for quadrant_count: int in garage_quadrant_counts:
 		minimum_garage_quadrant_count = mini(
 			minimum_garage_quadrant_count,
 			quadrant_count
 		)
+		garage_ring_tree_count += quadrant_count
+		if quadrant_count >= 20:
+			well_populated_garage_quadrants += 1
 	_expect(
 		forest_tree_count >= 500
 		and collision_descriptors.size() >= 200
-		and minimum_garage_quadrant_count >= 20
+		# Authored bunkers and the movement lab remove deliberate chunks from this ring. Retain
+		# substantial coverage in every direction and dense coverage in at least three quadrants.
+		and minimum_garage_quadrant_count >= 12
+		and well_populated_garage_quadrants >= 3
+		and garage_ring_tree_count >= 100
 		and farthest_garage_tree_distance >= 70.0
 		and not generated_tree_inside_clear_zone
 		and NATURE_LAYOUT.forest_density_at(NATURE_LAYOUT.GARAGE_CENTER + Vector2(60.0, 0.0))

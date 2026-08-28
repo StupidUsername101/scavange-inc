@@ -32,6 +32,8 @@ static func player_cue_profile(sound_id: StringName) -> Dictionary:
 			return _profile(12.0, -5.0, 0.32, 0.035)
 		&"fieldlink_confirm", &"fieldlink_warning":
 			return _profile(16.0, -5.0, 0.4, 0.06)
+		&"mouth_click":
+			return _profile(34.0, -3.0, 0.52, 0.16)
 	return {}
 
 

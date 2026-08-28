@@ -66,6 +66,7 @@ const WRIST_SOUND_CLICK_COOLDOWN_MSEC := 90
 const WRIST_SOUND_FEEDBACK_COOLDOWN_MSEC := 220
 const WRIST_SOUND_SOURCE_HEIGHT_OFFSET := -0.12
 const WRIST_SOUND_OUTPUT_GAIN_DB := -5.0
+const ECHOLOCATION_CLICK_COOLDOWN_MSEC := 520
 const DISTORTION_FADE_DURATION_RATIO := 0.3
 const MIN_DISTORTION_FADE_DURATION := 0.08
 const MAX_DISTORTION_FADE_DURATION := 1.2
@@ -157,6 +158,7 @@ var last_requested_wrist_sound_msec := PackedInt64Array([
 	-100000,
 	-100000,
 ])
+var last_echolocation_click_msec := -100000
 
 
 func _ready() -> void:
@@ -302,6 +304,17 @@ func request_wrist_device_sound(
 		return false
 	last_requested_wrist_sound_msec[cue_index] = now_msec
 	_emit_wrist_device_sound(sound_id, local_prediction_key)
+	return true
+
+
+func request_echolocation_click(local_prediction_key := 0) -> bool:
+	if has_equipped_eyes():
+		return false
+	var now_msec := Time.get_ticks_msec()
+	if now_msec - last_echolocation_click_msec < ECHOLOCATION_CLICK_COOLDOWN_MSEC:
+		return false
+	last_echolocation_click_msec = now_msec
+	_emit_echolocation_click(local_prediction_key)
 	return true
 
 
@@ -1432,6 +1445,29 @@ func _emit_wrist_device_sound(
 		sound_id,
 		get_audio_listener_position()
 		+ Vector3.UP * WRIST_SOUND_SOURCE_HEIGHT_OFFSET,
+		float(profile["max_distance"]),
+		float(profile["volume_db"]),
+		null,
+		float(profile["priority"]),
+		float(profile["pressure_strength"]),
+		player_id,
+		local_prediction_key
+	)
+
+
+func _emit_echolocation_click(local_prediction_key := 0) -> void:
+	if not multiplayer.is_server():
+		return
+	var server := get_node_or_null("/root/Server")
+	if server == null or not server.has_method("emit_spatial_sound"):
+		return
+	var profile := LOCAL_AUDIO_PREDICTION.player_cue_profile(&"mouth_click")
+	if profile.is_empty():
+		return
+	server.call(
+		"emit_spatial_sound",
+		&"mouth_click",
+		get_audio_listener_position(),
 		float(profile["max_distance"]),
 		float(profile["volume_db"]),
 		null,

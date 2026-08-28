@@ -85,6 +85,9 @@ const LOCAL_AUDIO_PREDICTION := preload(
 @onready var vision_effect: OcularVisionController = (
 	$OcularPostProcess/VisionEffect
 )
+@onready var acoustic_perception: EyelessAcousticPerception = (
+	$AcousticPerception/Sense
+)
 
 var headbob_weight := 0.0
 var headbob_run_weight := 0.0
@@ -156,6 +159,7 @@ var wrist_request_grace_remaining := 0.0
 var wrist_mouse_look_active := false
 var wrist_mouse_look_owns_pitch := false
 var captured_mouse_motion_discard_remaining := 0
+var local_has_equipped_eyes := true
 
 func _ready() -> void:
 	target_position = global_position
@@ -167,6 +171,15 @@ func _ready() -> void:
 	character_pose.set_expression_identity(player_id)
 	edit_aim_hit.material_override = _create_edit_aim_material()
 	edit_aim_hit.visible = false
+	acoustic_perception.bind_camera(camera)
+	var client := get_node_or_null("/root/Client")
+	if client != null:
+		client.acoustic_perception_event_rendered.connect(
+			_on_acoustic_perception_event_rendered
+		)
+		client.acoustic_perception_continuous_sample.connect(
+			_on_acoustic_perception_continuous_sample
+		)
 
 	set_local_player(is_local_player)
 
@@ -380,6 +393,10 @@ func _apply_player_system_state(state: Dictionary) -> void:
 		vision_effect = get_node_or_null(
 			"OcularPostProcess/VisionEffect"
 		) as OcularVisionController
+	if acoustic_perception == null:
+		acoustic_perception = get_node_or_null(
+			"AcousticPerception/Sense"
+		) as EyelessAcousticPerception
 	target_stamina_ratio = clampf(
 		SafeVariant.finite_float_or(
 			state.get("stamina_ratio"),
@@ -424,6 +441,7 @@ func _apply_player_system_state(state: Dictionary) -> void:
 			false
 		)
 		var has_eyes := vision_effect.set_eye_entry(eye_entry)
+		local_has_equipped_eyes = has_eyes
 		var distortion_state: Dictionary = SafeVariant.dictionary_copy(
 			state.get("vision_distortion", {}),
 			false
@@ -431,6 +449,10 @@ func _apply_player_system_state(state: Dictionary) -> void:
 		vision_effect.apply_distortion_state(distortion_state)
 		if inventory_hud != null:
 			inventory_hud.visible = is_local_player and has_eyes
+		if acoustic_perception != null:
+			acoustic_perception.set_perception_active(
+				is_local_player and not has_eyes
+			)
 
 
 func _apply_equipment_state(equipment: Dictionary) -> void:
@@ -662,8 +684,42 @@ func has_equipped_wrist_device() -> bool:
 	)
 
 
+func has_equipped_eyes() -> bool:
+	return local_has_equipped_eyes
+
+
+func get_audio_listener_position() -> Vector3:
+	if is_instance_valid(audio_listener):
+		return audio_listener.global_position
+	if is_instance_valid(camera):
+		return camera.global_position
+	return global_position + Vector3.UP * 0.55
+
+
 func is_wrist_interface_open() -> bool:
 	return local_wrist_interface_open
+
+
+func _on_acoustic_perception_event_rendered(packet: Dictionary) -> void:
+	if is_local_player and acoustic_perception != null:
+		acoustic_perception.submit_acoustic_event(packet)
+
+
+func _on_acoustic_perception_continuous_sample(
+	source_id: int,
+	apparent_position: Vector3,
+	received_intensity: float,
+	band_gain: Vector3,
+	enclosure: float
+) -> void:
+	if is_local_player and acoustic_perception != null:
+		acoustic_perception.submit_continuous_sample(
+			source_id,
+			apparent_position,
+			received_intensity,
+			band_gain,
+			enclosure
+		)
 
 
 func get_wrist_sound_source_position() -> Vector3:
@@ -1150,6 +1206,10 @@ func set_local_player(value: bool) -> void:
 		audio_listener.clear_current()
 	interface_layer.visible = is_local_player
 	vision_layer.visible = is_local_player
+	if acoustic_perception != null:
+		acoustic_perception.set_perception_active(
+			is_local_player and not local_has_equipped_eyes
+		)
 
 	if is_local_player:
 		_arm_capture_transition_guard()

@@ -1,10 +1,11 @@
-[gd_scene load_steps=10 format=3 uid="uid://d7ua7jmq566a"]
+[gd_scene load_steps=11 format=3 uid="uid://d7ua7jmq566a"]
 
 [ext_resource type="Script" uid="uid://c6ucunx40lk05" path="res://scripts/client/player_proxy.gd" id="1_435og"]
 [ext_resource type="Script" path="res://scripts/client/player_inventory_hud.gd" id="2_hud"]
 [ext_resource type="Script" path="res://scripts/client/ocular_vision_controller.gd" id="3_vision"]
 [ext_resource type="PackedScene" path="res://scenes/proxy/player_procedural_leg_rig.tscn" id="4_legs"]
 [ext_resource type="Script" path="res://scripts/characters/player_ragdoll_3d.gd" id="5_ragdoll"]
+[ext_resource type="Script" path="res://scripts/client/eyeless_acoustic_perception.gd" id="6_acoustic_perception"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_torso"]
 size = Vector3(0.7, 0.85, 0.4)
@@ -115,3 +116,17 @@ grow_vertical = 2
 mouse_filter = 2
 color = Color(0, 0, 0, 1)
 script = ExtResource("3_vision")
+
+[node name="AcousticPerception" type="CanvasLayer" parent="."]
+layer = 110
+
+[node name="Sense" type="Control" parent="AcousticPerception"]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("6_acoustic_perception")
