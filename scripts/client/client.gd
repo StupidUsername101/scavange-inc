@@ -793,11 +793,6 @@ func on_radio_states_received(payload: PackedByteArray) -> void:
 	_apply_radio_state_payload(payload)
 
 
-@rpc("authority", "reliable", "call_local", 3)
-func on_radio_state_keyframe_received(payload: PackedByteArray) -> void:
-	_apply_radio_state_payload(payload)
-
-
 func _apply_radio_state_payload(payload: PackedByteArray) -> void:
 	var states := RADIO_STATE_SNAPSHOT_CODEC.decode(payload)
 	if states.is_empty() and not is_instance_valid(radio_audio_renderer):

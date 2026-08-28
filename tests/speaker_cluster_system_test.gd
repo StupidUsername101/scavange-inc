@@ -134,6 +134,13 @@ func _test_generic_array_composition() -> void:
 	var wire_payload := RADIO_STATE_SNAPSHOT_CODEC.encode(listener_states)
 	var decoded_states := RADIO_STATE_SNAPSHOT_CODEC.decode(wire_payload)
 	var verbose_wire_size := var_to_bytes(listener_states).size()
+	var wire_round_trip_is_value_preserving := true
+	for emitter_id: int in listener_states:
+		wire_round_trip_is_value_preserving = (
+			wire_round_trip_is_value_preserving
+			and RadioStatePacket.sanitize(listener_states[emitter_id])
+			== RadioStatePacket.sanitize(decoded_states.get(emitter_id, {}))
+		)
 	var ids_are_sequential := ids.size() == 12
 	for speaker_index: int in range(ids.size()):
 		ids_are_sequential = (
@@ -159,6 +166,7 @@ func _test_generic_array_composition() -> void:
 			false
 		).size() == 12
 		and decoded_states.size() == 12
+		and wire_round_trip_is_value_preserving
 		and wire_payload.size() < 4096
 		and wire_payload.size() * 4 < verbose_wire_size,
 		"one marker-driven controller discovers, IDs, collides, and renders an arbitrary twelve-speaker installation"
@@ -886,9 +894,11 @@ func _test_large_bunker_renderer_lifecycle(raw_states: Dictionary) -> void:
 		var packet := (raw_states[emitter_id] as Dictionary).duplicate(true)
 		packet["start_delay_seconds"] = 0.0
 		immediate_states[emitter_id] = packet
+	var wire_payload := RADIO_STATE_SNAPSHOT_CODEC.encode(immediate_states)
+	var transported_states := RADIO_STATE_SNAPSHOT_CODEC.decode(wire_payload)
 	var renderer := RadioAudioRenderer.new()
 	root.add_child(renderer)
-	renderer.submit_snapshot(immediate_states)
+	renderer.submit_snapshot(transported_states)
 	renderer._process(1.0 / 60.0)
 	var debug := renderer.get_debug_state()
 	var direct_paths_are_full_band := true
@@ -932,7 +942,7 @@ func _test_large_bunker_renderer_lifecycle(raw_states: Dictionary) -> void:
 	# is still flowing.
 	renderer.submit_snapshot({})
 	renderer._process(0.05)
-	renderer.submit_snapshot(immediate_states)
+	renderer.submit_snapshot(transported_states)
 	renderer._process(0.05)
 	var recovered_full_band := true
 	for slot_index: int in range(renderer._slot_item_ids.size()):
@@ -966,7 +976,7 @@ func _test_large_bunker_renderer_lifecycle(raw_states: Dictionary) -> void:
 	renderer.submit_snapshot({})
 	renderer._process(1.0)
 	renderer._process(2.5)
-	renderer.submit_snapshot(immediate_states)
+	renderer.submit_snapshot(transported_states)
 	renderer._process(1.0 / 60.0)
 	var settled_resume_is_clean := (
 		int(renderer.get_debug_state().get("active_count", 0)) == 4

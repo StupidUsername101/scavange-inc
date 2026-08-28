@@ -136,7 +136,6 @@ var acoustic_service: ServerAcousticService
 var next_spatial_sound_sequence := 0
 var network_snapshot_sequence := 0
 var fieldlink_next_command_msec_by_player_id: Dictionary[int, int] = {}
-var radio_program_revisions_by_peer_id: Dictionary[int, Dictionary] = {}
 
 
 func _ready() -> void:
@@ -468,43 +467,14 @@ func _publish_radio_states() -> void:
 				"Continuous audio snapshot exceeded its bounded wire contract"
 			)
 			continue
-		var program_revisions := _radio_program_revisions(radio_states)
-		var previous_revisions: Dictionary = (
-			radio_program_revisions_by_peer_id.get(
-				player_state.peer_id,
-				{}
-			) as Dictionary
+		# Every continuous state, including starts and stops, uses one replaceable ordered lane.
+		# A second reliable lane can overtake these snapshots and re-excite an already populated
+		# room return with stale program state. At 20 Hz, a lost transition heals on the next tick.
+		Client.rpc_id(
+			player_state.peer_id,
+			"on_radio_states_received",
+			payload
 		)
-		if program_revisions != previous_revisions:
-			radio_program_revisions_by_peer_id[
-				player_state.peer_id
-			] = program_revisions
-			# Starts, stops, track changes, and audible-set transitions receive one reliable keyframe.
-			# High-rate listener movement never uses this lane, so stale positions cannot queue.
-			Client.rpc_id(
-				player_state.peer_id,
-				"on_radio_state_keyframe_received",
-				payload
-			)
-		else:
-			Client.rpc_id(
-				player_state.peer_id,
-				"on_radio_states_received",
-				payload
-			)
-
-
-static func _radio_program_revisions(states: Dictionary) -> Dictionary:
-	var result: Dictionary[int, int] = {}
-	for raw_state: Variant in states.values():
-		if not raw_state is Dictionary:
-			continue
-		var state := raw_state as Dictionary
-		var item_id := SafeVariant.integral_int_or(state.get("item_id"), -1)
-		var revision := SafeVariant.integral_int_or(state.get("revision"), -1)
-		if item_id >= 0 and revision >= 0:
-			result[item_id] = revision
-	return result
 
 
 func _publish_local_audio_prediction_contexts() -> void:
@@ -3262,7 +3232,6 @@ func _on_peer_disconnected(peer_id: int) -> void:
 		return
 	if not multiplayer.is_server():
 		return
-	radio_program_revisions_by_peer_id.erase(peer_id)
 
 	var player_id := GameState.get_player_id(peer_id)
 	if player_id == -1:
@@ -3478,7 +3447,6 @@ func _clear_runtime_session() -> void:
 	grab_states_by_grabber_id.clear()
 	spatial_interest_by_drone_id.clear()
 	fieldlink_next_command_msec_by_player_id.clear()
-	radio_program_revisions_by_peer_id.clear()
 	spatial_hash = ServerSpatialHash3D.new(SPATIAL_CELL_SIZE)
 	sync_timer = 0.0
 	next_drone_id = 0
@@ -3600,7 +3568,6 @@ func _reset_lobby_identity() -> void:
 	lobby_owner_id = 0
 	lobby_state = LobbyState.IDLE
 	steam_peer = null
-	radio_program_revisions_by_peer_id.clear()
 
 
 func _set_offline_multiplayer_peer() -> void:

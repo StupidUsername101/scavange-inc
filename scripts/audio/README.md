@@ -94,9 +94,11 @@ or extending audio:
     original authoritative packet falls through unchanged. Unkeyed remote/world sounds never enter
     this window.
 32. Continuous-source transport carries one bounded, compressed, client-sanitized snapshot per
-    listener. High-rate position/DSP changes remain replaceable and unreliable-ordered; only a
-    start, stop, track revision, or audible-source-set transition emits one reliable keyframe.
-    Reliable movement snapshots are forbidden because their backlog reproduces stale-room audio.
+    listener on one replaceable, unreliable-ordered lane. Starts, stops, revisions, audible-set
+    transitions, position, and DSP state all repeat at 20 Hz on that same lane. A parallel reliable
+    lifecycle lane is forbidden: cross-channel overtaking can restore stale program state and
+    re-excite a populated room return. Reliable movement snapshots are likewise forbidden because
+    their backlog reproduces stale-room audio.
 
 ## Static propagation bake and rollback
 
