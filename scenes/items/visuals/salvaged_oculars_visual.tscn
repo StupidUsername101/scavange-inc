@@ -1,4 +1,6 @@
-[gd_scene format=3 uid="uid://dbme88ldwuunx"]
+[gd_scene load_steps=5 format=3 uid="uid://dbme88ldwuunx"]
+
+[ext_resource type="Script" path="res://scripts/items/ocular_expression_visual.gd" id="1_expression"]
 
 [sub_resource type="StandardMaterial3D" id="Material_lens"]
 albedo_color = Color(0.78, 0.38, 0.06, 1)
@@ -16,6 +18,7 @@ material = SubResource("Material_lens")
 size = Vector3(0.12, 0.025, 0.025)
 
 [node name="SalvagedOcularsVisual" type="Node3D" unique_id=1517151788]
+script = ExtResource("1_expression")
 
 [node name="LeftLens" type="MeshInstance3D" parent="." unique_id=516251008]
 transform = Transform3D(0.99680173, 0.07991469, 0, -0.07991469, 0.99680173, 0, 0, 0, 1, -0.1, 0.008, 0)

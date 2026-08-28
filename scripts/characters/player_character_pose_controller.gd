@@ -52,20 +52,22 @@ var _pose: CharacterPoseDefinition
 var _pose_weight := 0.0
 var _pose_left_arm_enabled := true
 var _pose_right_arm_enabled := true
+var _attention_head_rotation := Vector3.ZERO
+var _attention_weight := 0.0
 
 
 func set_expression_identity(identity: int) -> void:
 	# Integer hashing keeps the character-specific variation deterministic without sharing RNG state.
 	var key := absi(identity) + 1
 	_identity_phase = Vector3(
-		_hash_ratio(key * 1103515245 + 12345) * TAU,
-		_hash_ratio(key * 214013 + 2531011) * TAU,
-		_hash_ratio(key * 1664525 + 1013904223) * TAU
+		ExpressionDeterminism.ratio(key * 1103515245 + 12345) * TAU,
+		ExpressionDeterminism.ratio(key * 214013 + 2531011) * TAU,
+		ExpressionDeterminism.ratio(key * 1664525 + 1013904223) * TAU
 	)
 	_identity_amplitude = lerpf(
 		0.88,
 		1.12,
-		_hash_ratio(key * 22695477 + 1)
+		ExpressionDeterminism.ratio(key * 22695477 + 1)
 	)
 
 
@@ -79,6 +81,15 @@ func set_action_pose(
 	_pose_weight = clampf(weight, 0.0, 1.0)
 	_pose_left_arm_enabled = left_arm_enabled
 	_pose_right_arm_enabled = right_arm_enabled
+
+
+func set_attention_pose(head_target_rotation: Vector3, weight: float) -> void:
+	_attention_head_rotation = (
+		head_target_rotation
+		if head_target_rotation.is_finite()
+		else Vector3.ZERO
+	)
+	_attention_weight = clampf(weight, 0.0, 1.0)
 
 
 func update(
@@ -278,6 +289,10 @@ func update(
 				_pose.right_arm_rotation * _pose.right_arm_weight * action_weight
 			)
 
+	# Attention is a presentation constraint, not an authored pose channel. Applying it after the
+	# action filter lets a character continue looking at its wrist display or a nearby player.
+	target_head_rotation += _attention_head_rotation * _attention_weight
+
 	if not has_left_arm:
 		target_left_arm_rotation = Vector3.ZERO
 	if not has_right_arm:
@@ -336,11 +351,3 @@ func _sync_outputs() -> void:
 	right_arm_rotation = _right_arm_rotation_spring.value
 	camera_position = _camera_position_spring.value
 	camera_rotation = _camera_rotation_spring.value
-
-
-static func _hash_ratio(value: int) -> float:
-	var hashed := value & 0x7fffffff
-	hashed = int((hashed ^ (hashed >> 16)) * 0x45d9f3b) & 0x7fffffff
-	hashed = int((hashed ^ (hashed >> 16)) * 0x45d9f3b) & 0x7fffffff
-	hashed = hashed ^ (hashed >> 16)
-	return float(hashed & 0xffff) / 65535.0

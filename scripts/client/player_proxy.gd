@@ -24,6 +24,9 @@ const LEFT_ARM_REST_POSITION := Vector3(-0.47, 0.16, 0.0)
 const RIGHT_ARM_REST_POSITION := Vector3(0.47, 0.16, 0.0)
 const LEFT_SHOULDER_POSITION := Vector3(-0.47, 0.57, 0.0)
 const RIGHT_SHOULDER_POSITION := Vector3(0.47, 0.57, 0.0)
+const SOCIAL_GAZE_RANGE_METERS := 9.0
+const SOCIAL_GAZE_EPOCH_SECONDS := 2.6
+const SOCIAL_GAZE_ENGAGEMENT_CHANCE := 0.76
 const FIELDLINK_POSE: CharacterPoseDefinition = preload(
 	"res://resources/character_poses/fieldlink_terminal.tres"
 )
@@ -72,7 +75,7 @@ const LOCAL_AUDIO_PREDICTION := preload(
 @onready var player_ragdoll = $PlayerRagdoll
 @onready var edit_aim_hit: MeshInstance3D = $EditAimHit
 @onready var backpack_mount: Node3D = $BodyVisual/UpperBodyPose/BackpackMount
-@onready var eyes_mount: Node3D = $BodyVisual/UpperBodyPose/EyesMount
+@onready var eyes_mount: Node3D = $BodyVisual/UpperBodyPose/Head/EyesMount
 @onready var held_item_mount: Node3D = $BodyVisual/UpperBodyPose/HeldItemMount
 @onready var first_person_item_mount: Node3D = (
 	$HeadPivot/Camera3D/FirstPersonItemMount
@@ -107,6 +110,10 @@ var target_stamina_ratio := 1.0
 var target_expression_clock := 0.0
 var resolved_pose_gait_cycle := 0.5
 var character_pose := PlayerCharacterPoseController.new()
+var ocular_expression := PlayerOcularExpressionController.new()
+var ocular_social_target_player_id := -1
+var ocular_social_epoch := -1
+var target_faction_id := 0
 
 var target_on_floor := false
 var target_jump_sequence := 0
@@ -169,6 +176,7 @@ func _ready() -> void:
 	audio_listener_rest_position = audio_listener.position
 	procedural_leg_rig.set_expression_identity(player_id)
 	character_pose.set_expression_identity(player_id)
+	ocular_expression.set_expression_identity(player_id)
 	edit_aim_hit.material_override = _create_edit_aim_material()
 	edit_aim_hit.visible = false
 	acoustic_perception.bind_camera(camera)
@@ -292,6 +300,11 @@ func apply_server_state(state: Dictionary) -> void:
 	if procedural_leg_rig != null:
 		procedural_leg_rig.set_expression_identity(player_id)
 	character_pose.set_expression_identity(player_id)
+	ocular_expression.set_expression_identity(player_id)
+	target_faction_id = SafeVariant.integral_int_or(
+		state.get("faction_id", target_faction_id),
+		target_faction_id
+	)
 	var current_position := global_position if is_inside_tree() else position
 	var current_rotation := global_rotation if is_inside_tree() else rotation
 
@@ -1535,6 +1548,7 @@ func _update_character_pose(delta: float) -> void:
 	var expression_clock := target_expression_clock
 	if not multiplayer.is_server():
 		expression_clock += time_since_last_state
+	_update_ocular_expression(delta, expression_clock)
 	var pose_movement_weight := headbob_weight
 	var pose_run_weight := headbob_run_weight
 	if not is_local_player:
@@ -1599,6 +1613,114 @@ func _update_character_pose(delta: float) -> void:
 			)
 
 
+func _update_ocular_expression(delta: float, expression_clock: float) -> void:
+	var eye_visual := equipment_visuals.get(
+		PlayerInventoryRules.EYES_SLOT
+	) as OcularExpressionVisual
+	if not is_instance_valid(eye_visual):
+		character_pose.set_attention_pose(Vector3.ZERO, 0.0)
+		return
+
+	var eye_origin := eyes_mount.global_position
+	var target_world := eye_origin - upper_body_pose.global_basis.z * 4.0
+	var attention_weight := 0.20
+	var device_focus := false
+	if target_wrist_interface_open and has_equipped_wrist_device():
+		var wrist_mount := left_wrist_mount if has_left_arm else right_wrist_mount
+		if wrist_mount != null:
+			target_world = wrist_mount.global_position
+			attention_weight = 1.0
+			device_focus = true
+	else:
+		var social_target := _resolve_social_gaze_target(expression_clock)
+		if social_target != null and social_target.head_visual != null:
+			target_world = social_target.head_visual.global_position
+			attention_weight = 0.88
+
+	var local_target := upper_body_pose.global_basis.inverse() * (
+		target_world - eye_origin
+	)
+	ocular_expression.update(
+		delta,
+		expression_clock,
+		local_target,
+		attention_weight,
+		device_focus,
+		1.0 - target_stamina_ratio
+	)
+	character_pose.set_attention_pose(
+		ocular_expression.head_rotation,
+		attention_weight
+	)
+	eye_visual.apply_ocular_expression(
+		ocular_expression.left_pupil_offset,
+		ocular_expression.right_pupil_offset,
+		ocular_expression.pupil_scale,
+		ocular_expression.left_lid_openness,
+		ocular_expression.right_lid_openness,
+		ocular_expression.left_lid_tilt,
+		ocular_expression.right_lid_tilt
+	)
+
+
+func _resolve_social_gaze_target(expression_clock: float) -> PlayerProxy:
+	var client := get_node_or_null("/root/Client")
+	if client == null:
+		return null
+	var proxies_value: Variant = client.get("player_proxys_by_player_id")
+	if not proxies_value is Dictionary:
+		return null
+	var proxies: Dictionary = proxies_value
+	var epoch := floori(maxf(expression_clock, 0.0) / SOCIAL_GAZE_EPOCH_SECONDS)
+	if epoch != ocular_social_epoch:
+		ocular_social_epoch = epoch
+		ocular_social_target_player_id = -1
+		var engagement := ExpressionDeterminism.ratio(
+			(absi(player_id) + 1) * 65537 + epoch * 8191
+		)
+		if engagement <= 1.0 - SOCIAL_GAZE_ENGAGEMENT_CHANCE:
+			return null
+		var best_score := INF
+		var forward := -global_basis.z
+		for candidate_id_value: Variant in proxies:
+			var candidate_id := int(candidate_id_value)
+			if candidate_id == player_id:
+				continue
+			var candidate := proxies.get(candidate_id_value) as PlayerProxy
+			if (
+				candidate == null
+				or candidate.target_faction_id != target_faction_id
+				or candidate.target_ragdoll_active
+			):
+				continue
+			var offset := candidate.global_position - global_position
+			var distance_squared := offset.length_squared()
+			if (
+				distance_squared < 0.25
+				or distance_squared > SOCIAL_GAZE_RANGE_METERS * SOCIAL_GAZE_RANGE_METERS
+			):
+				continue
+			var distance := sqrt(distance_squared)
+			var facing := forward.dot(offset / distance)
+			if facing < -0.15:
+				continue
+			var score := distance * (1.18 - maxf(facing, 0.0) * 0.34)
+			if score < best_score:
+				best_score = score
+				ocular_social_target_player_id = candidate_id
+
+	if ocular_social_target_player_id < 0:
+		return null
+	var target := proxies.get(ocular_social_target_player_id) as PlayerProxy
+	if (
+		target == null
+		or target.target_faction_id != target_faction_id
+		or target.global_position.distance_squared_to(global_position)
+		> SOCIAL_GAZE_RANGE_METERS * SOCIAL_GAZE_RANGE_METERS
+	):
+		ocular_social_target_player_id = -1
+		return null
+	return target
 func _create_edit_aim_material() -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA

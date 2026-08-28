@@ -1,4 +1,6 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/items/ocular_expression_visual.gd" id="1_expression"]
 
 [sub_resource type="StandardMaterial3D" id="Material_lens"]
 albedo_color = Color(0.16, 0.74, 0.9, 1)
@@ -24,6 +26,7 @@ material = SubResource("Material_frame")
 size = Vector3(0.31, 0.022, 0.025)
 
 [node name="PrecisionOcularsVisual" type="Node3D"]
+script = ExtResource("1_expression")
 
 [node name="Frame" type="MeshInstance3D" parent="."]
 mesh = SubResource("Mesh_frame")
