@@ -8,7 +8,10 @@ const MIN_NORMALIZATION_GAIN_DB := -12.0
 const MAX_NORMALIZATION_GAIN_DB := 4.0
 const DEVICE_REFERENCE_GAIN_DB := 6.5
 const TRACK_MEASUREMENTS := {
+	"res://assets/sounds/music/Chill loop WAV.wav": Vector2(-29.70, -15.90),
+	"res://assets/sounds/music/Chill loop mp3.mp3": Vector2(-30.10, -16.20),
 	"res://assets/sounds/music/Kaiser Wilhelm II - Rede vom 6. August 1914.mp3": Vector2(-20.50, -3.80),
+	"res://assets/sounds/music/Nowhere to Run.mp3": Vector2(-14.40, -4.80),
 	"res://assets/sounds/music/nich gucken JUNGE.mp3": Vector2(-8.00, 1.80),
 	"res://assets/sounds/music/not so legally downloaded music/Deutsch Swing/Die Gedanken sind frei 🎶 altes Deutsches Volkslied.mp3": Vector2(-14.20, -2.20),
 	"res://assets/sounds/music/not so legally downloaded music/Deutsch Swing/Es geht alles vorüber es geht alles vorbei.mp3": Vector2(-14.60, -1.30),

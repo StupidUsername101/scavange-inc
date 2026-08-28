@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://d0c2psia1abr6"
+path="res://.godot/imported/Nowhere to Run.mp3-b90e32fdb750d9bda2ae1007e7f2d740.mp3str"
+
+[deps]
+
+source_file="res://assets/sounds/music/Nowhere to Run.mp3"
+dest_files=["res://.godot/imported/Nowhere to Run.mp3-b90e32fdb750d9bda2ae1007e7f2d740.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4
