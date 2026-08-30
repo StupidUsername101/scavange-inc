@@ -341,7 +341,9 @@ func _apply_damage_event(event: DamageEvent, notify_authority: bool) -> Dictiona
 	if bool(result.get("geometry_changed", true)):
 		for coordinate: Vector3i in changed_chunks:
 			_edited_chunks[coordinate] = true
-		_queue_chunks(field.expanded_chunk_ring(changed_chunks, remesh_neighbor_ring))
+		var remesh_chunks := _remesh_chunks_for_changed_samples(result, changed_chunks)
+		result["remesh_chunks"] = remesh_chunks
+		_queue_chunks(remesh_chunks)
 		var newly_opened_area := _record_acoustic_aperture(
 			local_position,
 			local_normal,
@@ -360,6 +362,49 @@ func _apply_damage_event(event: DamageEvent, notify_authority: bool) -> Dictiona
 			server.call("on_destructible_volume_changed", self, applied_event, result)
 	_record_event_timing(started_usec, true)
 	return result
+
+
+func _remesh_chunks_for_changed_samples(
+	result: Dictionary,
+	changed_chunks: Array[Vector3i]
+) -> Array[Vector3i]:
+	if remesh_neighbor_ring <= 0:
+		return changed_chunks.duplicate()
+	var sample_bounds: Dictionary = result.get("changed_sample_bounds", {})
+	if sample_bounds.is_empty():
+		return field.expanded_chunk_ring(changed_chunks, remesh_neighbor_ring)
+	var candidates := field.expanded_chunk_ring(changed_chunks, remesh_neighbor_ring)
+	var selected: Array[Vector3i] = []
+	var halo := SdfDualContouringMesher.SAMPLE_CACHE_HALO
+	for candidate: Vector3i in candidates:
+		if changed_chunks.has(candidate):
+			selected.append(candidate)
+			continue
+		var capture_minimum := candidate * field.brick_cells - Vector3i.ONE * halo
+		var capture_maximum := (
+			candidate * field.brick_cells
+			+ Vector3i.ONE * (field.brick_cells + halo)
+		)
+		var overlaps_changed_sample := false
+		for raw_bounds: Variant in sample_bounds.values():
+			var bounds: PackedInt32Array = raw_bounds
+			if bounds.size() < 6:
+				continue
+			if (
+				bounds[3] < capture_minimum.x
+				or bounds[0] > capture_maximum.x
+				or bounds[4] < capture_minimum.y
+				or bounds[1] > capture_maximum.y
+				or bounds[5] < capture_minimum.z
+				or bounds[2] > capture_maximum.z
+			):
+				continue
+			overlaps_changed_sample = true
+			break
+		if overlaps_changed_sample:
+			selected.append(candidate)
+	selected.sort_custom(_vector3i_less)
+	return selected
 
 
 func _queue_chunks(coordinates: Array[Vector3i]) -> void:
@@ -457,6 +502,7 @@ func _rebuild_chunk(
 		if not prepared_result.is_empty()
 		else SdfDualContouringMesher.build_chunk(field, coordinate)
 	)
+	_snap_analytic_shell_to_chunk_bounds(result, coordinate)
 	var retains_base_surface := _result_matches_untouched_base(result)
 	if base_visual != null:
 		base_visual.visible = retains_base_surface
@@ -495,6 +541,59 @@ func _rebuild_chunk(
 	var elapsed_usec := Time.get_ticks_usec() - started_usec + worker_elapsed_usec
 	_rebuild_total_usec += elapsed_usec
 	_rebuild_max_usec = maxi(_rebuild_max_usec, elapsed_usec)
+
+
+func _snap_analytic_shell_to_chunk_bounds(
+	result: Dictionary,
+	coordinate: Vector3i
+) -> void:
+	if bool(result.get("empty", true)):
+		return
+	var vertices: PackedVector3Array = result.get("vertices", PackedVector3Array())
+	if vertices.is_empty():
+		return
+	var minimum := field.brick_origin(coordinate)
+	var maximum := Vector3(
+		minf(minimum.x + field.brick_extent, field.half_extents.x),
+		minf(minimum.y + field.brick_extent, field.half_extents.y),
+		minf(minimum.z + field.brick_extent, field.half_extents.z)
+	)
+	var shell_tolerance := maxf(field.voxel_size * 0.01, 0.00001)
+	var positive_seam_band := field.voxel_size * 0.55
+	for index: int in range(vertices.size()):
+		var vertex := vertices[index]
+		if absf(field.base_distance(vertex)) > shell_tolerance:
+			continue
+		# Dual Contouring owns faces by grid edge and therefore uses halo-cell vertices up to half a
+		# voxel beyond a chunk. Two generated chunks share those faces correctly, but a retained box
+		# ends exactly at the chunk boundary. Clamp only unchanged analytic-shell vertices; damaged
+		# cavity vertices keep their cross-chunk ownership and remain watertight with generated peers.
+		# Preserve the coordinate supporting an actual outer box face. Clamping that normal axis on a
+		# partial edge brick would pull the global wall face into the volume; only its tangent axes need
+		# to terminate at this chunk's interface.
+		var on_x_shell := absf(absf(vertex.x) - field.half_extents.x) <= shell_tolerance
+		var on_y_shell := absf(absf(vertex.y) - field.half_extents.y) <= shell_tolerance
+		var on_z_shell := absf(absf(vertex.z) - field.half_extents.z) <= shell_tolerance
+		if not on_x_shell:
+			vertex.x = (
+				maximum.x
+				if vertex.x >= maximum.x - positive_seam_band
+				else maxf(vertex.x, minimum.x)
+			)
+		if not on_y_shell:
+			vertex.y = (
+				maximum.y
+				if vertex.y >= maximum.y - positive_seam_band
+				else maxf(vertex.y, minimum.y)
+			)
+		if not on_z_shell:
+			vertex.z = (
+				maximum.z
+				if vertex.z >= maximum.z - positive_seam_band
+				else maxf(vertex.z, minimum.z)
+			)
+		vertices[index] = vertex
+	result["vertices"] = vertices
 
 
 func _result_matches_untouched_base(result: Dictionary) -> bool:

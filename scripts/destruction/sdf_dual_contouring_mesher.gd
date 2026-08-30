@@ -278,6 +278,10 @@ static func build_chunk_snapshot(snapshot: Dictionary) -> Dictionary:
 					sample_grid_size
 					)
 
+	var compacted := _compact_indexed_geometry(vertices, normals, indices)
+	vertices = compacted.get("vertices", PackedVector3Array())
+	normals = compacted.get("normals", PackedVector3Array())
+	indices = compacted.get("indices", PackedInt32Array())
 	return {
 		"chunk_coordinate": chunk_coordinate,
 		"vertices": vertices,
@@ -285,6 +289,43 @@ static func build_chunk_snapshot(snapshot: Dictionary) -> Dictionary:
 		"indices": indices,
 		"triangle_count": indices.size() / 3,
 		"empty": indices.is_empty(),
+	}
+
+
+static func _compact_indexed_geometry(
+	vertices: PackedVector3Array,
+	normals: PackedVector3Array,
+	indices: PackedInt32Array
+) -> Dictionary:
+	if vertices.is_empty() or indices.is_empty():
+		return {
+			"vertices": PackedVector3Array(),
+			"normals": PackedVector3Array(),
+			"indices": PackedInt32Array(),
+		}
+	# Halo cells are necessary while faces are owned and stitched, but many of their dual vertices
+	# never enter an owned triangle. Remap once on the worker so those temporary vertices do not
+	# inflate the uploaded mesh, its bounds, surface-color allocation, or later collision work.
+	var remap := PackedInt32Array()
+	remap.resize(vertices.size())
+	remap.fill(-1)
+	var compact_vertices := PackedVector3Array()
+	var compact_normals := PackedVector3Array()
+	var compact_indices := PackedInt32Array()
+	compact_indices.resize(indices.size())
+	for index_offset: int in range(indices.size()):
+		var source_index := indices[index_offset]
+		var compact_index := remap[source_index]
+		if compact_index < 0:
+			compact_index = compact_vertices.size()
+			remap[source_index] = compact_index
+			compact_vertices.append(vertices[source_index])
+			compact_normals.append(normals[source_index])
+		compact_indices[index_offset] = compact_index
+	return {
+		"vertices": compact_vertices,
+		"normals": compact_normals,
+		"indices": compact_indices,
 	}
 
 

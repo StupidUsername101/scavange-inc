@@ -20,6 +20,7 @@ func _run() -> void:
 	root.add_child(test_root)
 	await process_frame
 	await _test_volume_replay_and_collision_swap()
+	await _test_repeated_impact_seams()
 	_test_spatial_bounds_registration()
 	_test_local_acoustic_invalidation()
 	await _test_projectile_routing()
@@ -58,11 +59,19 @@ func _test_volume_replay_and_collision_swap() -> void:
 		"seed": 991,
 	})
 	var result := server_volume.apply_authoritative_damage_event(authored_event)
+	var changed_chunks: Array[Vector3i] = result.get("changed_chunks", [])
+	var remesh_chunks: Array[Vector3i] = result.get("remesh_chunks", [])
+	var conservative_ring := server_volume.field.expanded_chunk_ring(changed_chunks, 1)
 	_expect(
 		bool(result.get("changed", false))
 		and server_volume.field.revision == 1
 		and committed_event != null,
 		"an authoritative event commits one sparse-field revision"
+	)
+	_expect(
+		not remesh_chunks.is_empty()
+		and remesh_chunks.size() < conservative_ring.size(),
+		"exact changed-sample bounds prune unrelated chunks from the contour rebuild ring"
 	)
 	_expect(
 		committed_event.world_position == DamageEvent.from_dict(
@@ -104,15 +113,28 @@ func _test_volume_replay_and_collision_swap() -> void:
 		"edited chunks replace their box render and collision with generated SDF topology"
 	)
 	_expect(
-		int(runtime_state.get("generated_visuals", 0))
-		< int(runtime_state.get("rebuild_count", 0))
+		int(runtime_state.get("rebuild_count", 0)) == remesh_chunks.size()
+		and int(runtime_state.get("generated_visuals", 0))
+		<= int(runtime_state.get("rebuild_count", 0))
 		and int(runtime_state.get("generated_bodies", 0))
 		== int(runtime_state.get("generated_visuals", 0)),
-		"unchanged seam-ring chunks retain their compact base render and collision"
+		"only required seam chunks rebuild and unchanged results retain compact base geometry"
 	)
 	_expect(
 		_generated_surface_preserves_authored_material(server_volume),
 		"generated concrete keeps the base material's sRGB, roughness, and metallic contract"
+	)
+	_expect(
+		_generated_shell_joins_retained_base(server_volume),
+		"generated shell edges terminate exactly on adjacent retained base chunks"
+	)
+	_expect(
+		_generated_meshes_have_no_unreferenced_halo(server_volume),
+		"temporary contour halo vertices are removed before render and collision upload"
+	)
+	_expect(
+		_seam_rays_hit_intact_wall(server_volume),
+		"dense rays on both sides of generated/base seams find continuous wall collision"
 	)
 	_expect(
 		int(runtime_state.get("committed_events", 0)) == 1
@@ -202,6 +224,63 @@ func _test_volume_replay_and_collision_swap() -> void:
 		"versioned compressed persistence restores only changed bricks with integrity checking"
 	)
 	DirAccess.remove_absolute(save_path)
+
+
+func _test_repeated_impact_seams() -> void:
+	var volume := DestructibleVolume3D.new()
+	volume.name = "RepeatedImpactWall"
+	volume.volume_id = &"repeated_impact_wall"
+	volume.position = Vector3(18.0, 1.5, -4.0)
+	volume.authoritative = true
+	volume.create_collision = true
+	volume.physical_surface = &"concrete"
+	volume.volume_size = Vector3(4.0, 3.0, 0.45)
+	volume.voxel_size = 0.06
+	volume.brick_cells = 12
+	volume.remesh_neighbor_ring = 1
+	test_root.add_child(volume)
+	volume.initialize_volume()
+	await physics_frame
+	var impact_points: Array[Vector2] = [
+		Vector2(-0.72, -0.42),
+		Vector2(0.0, 0.0),
+		Vector2(0.68, 0.46),
+	]
+	var all_impacts_changed := true
+	for impact_index: int in range(impact_points.size()):
+		var point := impact_points[impact_index]
+		var event := DamageEvent.from_dict({
+			"event_id": 4100 + impact_index,
+			"sequence": 4100 + impact_index,
+			"source_kind": &"repeated_seam_test",
+			"source_id": 4,
+			"world_position": volume.to_global(Vector3(point.x, point.y, 0.225)),
+			"normal": Vector3(0.0, 0.0, 1.0),
+			"direction": Vector3(0.0, 0.0, -1.0),
+			"brush_kind": DamageEvent.BRUSH_CAPSULE,
+			"radius": 0.05,
+			"length": 0.75,
+			"energy": 16.0,
+			"impulse": 3.0,
+			"penetration": 0.75,
+			"damage_tags": PackedStringArray(["ballistic"]),
+			"seed": 900 + impact_index,
+		})
+		all_impacts_changed = (
+			bool(volume.apply_authoritative_damage_event(event).get("changed", false))
+			and all_impacts_changed
+		)
+		volume.flush_pending_rebuilds()
+		await physics_frame
+	var joins_base := _generated_shell_joins_retained_base(volume)
+	var compact_meshes := _generated_meshes_have_no_unreferenced_halo(volume)
+	var collision_seams := _seam_rays_hit_intact_wall(volume)
+	_expect(
+		all_impacts_changed and joins_base and compact_meshes and collision_seams,
+		"several spaced impacts retain seamless render and collision patch unions"
+	)
+	volume.queue_free()
+	await process_frame
 
 
 func _test_spatial_bounds_registration() -> void:
@@ -451,6 +530,150 @@ func _colors_match_packed(left: Color, right: Color) -> bool:
 		and absf(left.b - right.b) <= PACKED_COLOR_TOLERANCE
 		and absf(left.a - right.a) <= PACKED_COLOR_TOLERANCE
 	)
+
+
+func _generated_shell_joins_retained_base(volume: DestructibleVolume3D) -> bool:
+	if volume == null:
+		return false
+	var generated_visuals: Dictionary = volume.get("_generated_visuals")
+	var base_visuals: Dictionary = volume.get("_base_visuals")
+	var tolerance := maxf(volume.voxel_size * 0.01, 0.00001)
+	var checked_boundary_count := 0
+	var directions: Array[Vector3i] = [
+		Vector3i.LEFT,
+		Vector3i.RIGHT,
+		Vector3i.DOWN,
+		Vector3i.UP,
+		Vector3i(0, 0, -1),
+		Vector3i(0, 0, 1),
+	]
+	for raw_coordinate: Variant in generated_visuals.keys():
+		var coordinate := raw_coordinate as Vector3i
+		var visual := generated_visuals.get(coordinate) as MeshInstance3D
+		if visual == null or visual.mesh == null:
+			return false
+		var minimum := volume.field.brick_origin(coordinate)
+		var maximum := Vector3(
+			minf(minimum.x + volume.field.brick_extent, volume.field.half_extents.x),
+			minf(minimum.y + volume.field.brick_extent, volume.field.half_extents.y),
+			minf(minimum.z + volume.field.brick_extent, volume.field.half_extents.z)
+		)
+		var vertices := _mesh_vertices(visual.mesh)
+		for vertex: Vector3 in vertices:
+			if absf(volume.field.base_distance(vertex)) <= tolerance:
+				if not AABB(minimum, maximum - minimum).grow(tolerance).has_point(vertex):
+					return false
+		for direction: Vector3i in directions:
+			var neighbor := coordinate + direction
+			if not volume.field.brick_is_valid(neighbor):
+				continue
+			var neighbor_base := base_visuals.get(neighbor) as MeshInstance3D
+			if neighbor_base == null or not neighbor_base.visible:
+				continue
+			var axis := 0 if direction.x != 0 else (1 if direction.y != 0 else 2)
+			var boundary := minimum[axis] if direction[axis] < 0 else maximum[axis]
+			var reaches_boundary := false
+			for vertex: Vector3 in vertices:
+				if (
+					absf(volume.field.base_distance(vertex)) <= tolerance
+					and absf(vertex[axis] - boundary) <= tolerance
+				):
+					reaches_boundary = true
+					break
+			if not reaches_boundary:
+				return false
+			checked_boundary_count += 1
+	return checked_boundary_count > 0
+
+
+func _mesh_vertices(mesh: Mesh) -> PackedVector3Array:
+	var vertices := PackedVector3Array()
+	for surface_index: int in range(mesh.get_surface_count()):
+		vertices.append_array(mesh.surface_get_arrays(surface_index)[Mesh.ARRAY_VERTEX])
+	return vertices
+
+
+func _generated_meshes_have_no_unreferenced_halo(volume: DestructibleVolume3D) -> bool:
+	if volume == null:
+		return false
+	var generated_visuals: Dictionary = volume.get("_generated_visuals")
+	if generated_visuals.is_empty():
+		return false
+	for visual_value: Variant in generated_visuals.values():
+		var visual := visual_value as MeshInstance3D
+		if visual == null or visual.mesh == null:
+			return false
+		for surface_index: int in range(visual.mesh.get_surface_count()):
+			var arrays := visual.mesh.surface_get_arrays(surface_index)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+			var referenced := PackedByteArray()
+			referenced.resize(vertices.size())
+			for vertex_index: int in indices:
+				if vertex_index < 0 or vertex_index >= vertices.size():
+					return false
+				referenced[vertex_index] = 1
+			for used: int in referenced:
+				if used == 0:
+					return false
+	return true
+
+
+func _seam_rays_hit_intact_wall(volume: DestructibleVolume3D) -> bool:
+	if volume == null or volume.get_world_3d() == null:
+		return false
+	var generated_visuals: Dictionary = volume.get("_generated_visuals")
+	var base_visuals: Dictionary = volume.get("_base_visuals")
+	var seam_probe_offset := volume.voxel_size * 0.08
+	var probe_count := 0
+	var directions: Array[Vector3i] = [
+		Vector3i.LEFT,
+		Vector3i.RIGHT,
+		Vector3i.DOWN,
+		Vector3i.UP,
+	]
+	for raw_coordinate: Variant in generated_visuals.keys():
+		var coordinate := raw_coordinate as Vector3i
+		var minimum := volume.field.brick_origin(coordinate)
+		var maximum := Vector3(
+			minf(minimum.x + volume.field.brick_extent, volume.field.half_extents.x),
+			minf(minimum.y + volume.field.brick_extent, volume.field.half_extents.y),
+			minf(minimum.z + volume.field.brick_extent, volume.field.half_extents.z)
+		)
+		for direction: Vector3i in directions:
+			var neighbor := coordinate + direction
+			if not volume.field.brick_is_valid(neighbor):
+				continue
+			var neighbor_base := base_visuals.get(neighbor) as MeshInstance3D
+			if neighbor_base == null or not neighbor_base.visible:
+				continue
+			var seam_axis := 0 if direction.x != 0 else 1
+			var tangent_axis := 1 if seam_axis == 0 else 0
+			var seam_coordinate := (
+				minimum[seam_axis]
+				if direction[seam_axis] < 0
+				else maximum[seam_axis]
+			)
+			for along_fraction: float in [0.2, 0.5, 0.8]:
+				for side: float in [-1.0, 1.0]:
+					var local_probe := Vector3.ZERO
+					local_probe[seam_axis] = seam_coordinate + seam_probe_offset * side
+					local_probe[tangent_axis] = lerpf(
+						minimum[tangent_axis],
+						maximum[tangent_axis],
+						along_fraction
+					)
+					if volume.field.sample_distance(local_probe) > 0.0:
+						continue
+					var query := PhysicsRayQueryParameters3D.create(
+						volume.to_global(local_probe + Vector3(0.0, 0.0, 1.0)),
+						volume.to_global(local_probe + Vector3(0.0, 0.0, -1.0))
+					)
+					query.collide_with_areas = false
+					if volume.get_world_3d().direct_space_state.intersect_ray(query).is_empty():
+						return false
+					probe_count += 1
+	return probe_count >= 4
 
 
 func _test_local_acoustic_invalidation() -> void:

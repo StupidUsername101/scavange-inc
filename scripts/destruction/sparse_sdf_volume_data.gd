@@ -267,7 +267,8 @@ func _apply_geometry_event(
 	var changed_set: Dictionary[Vector3i, bool] = {}
 	for coordinate: Vector3i in prechanged_chunks:
 		changed_set[coordinate] = true
-	var changed_samples := _apply_operations(operations, texture, event.seed, changed_set)
+	var operation_result := _apply_operations(operations, texture, event.seed, changed_set)
+	var changed_samples := int(operation_result.get("changed_samples", 0))
 	if changed_samples <= 0:
 		if not prechanged_chunks.is_empty():
 			revision += 1
@@ -306,6 +307,7 @@ func _apply_geometry_event(
 		"revision": revision,
 		"changed_chunks": changed_chunks,
 		"changed_samples": changed_samples,
+		"changed_sample_bounds": operation_result.get("changed_sample_bounds", {}),
 		"operation_count": operations.size(),
 		"normalized_energy": normalized_energy,
 		"perforated": perforated,
@@ -486,9 +488,9 @@ func _apply_operations(
 	texture: DestructionTextureDefinition,
 	seed: int,
 	changed_set: Dictionary[Vector3i, bool]
-) -> int:
+) -> Dictionary:
 	if operations.is_empty():
-		return 0
+		return {"changed_samples": 0, "changed_sample_bounds": {}}
 	# Boolean subtraction by the union of all cutters is max(base, -min(cutter distances)). Fusing
 	# the brushes means each touched sample and packed distance is read/written once, even when a
 	# brittle material authors several crack capsules.
@@ -499,6 +501,11 @@ func _apply_operations(
 	var characteristic_radii := PackedFloat32Array()
 	var secondary_radii := PackedFloat32Array()
 	var maximum_cutter_radius := 0.0
+	var changed_sample_bounds: Dictionary[Vector3i, PackedInt32Array] = {}
+	# Dual Contouring consumes one cell of sign samples plus one additional sample for central-difference
+	# normals. Distance edits deeper than this cannot affect current topology or its Hermite data, even
+	# though they remain stored for later damage. Excluding them keeps remeshing tied to the visible cut.
+	var mesh_influence_band := voxel_size * 2.5
 	var combined_bounds := _operation_bounds(operations[0]).grow(narrow_band + voxel_size)
 	for operation: Dictionary in operations:
 		var bounds_for_operation := _operation_bounds(operation).grow(narrow_band + voxel_size)
@@ -627,9 +634,39 @@ func _apply_operations(
 							if brick != null and brick.set_distance(sample_x, sample_y, sample_z, next):
 								brick_changed = true
 								changed_samples += 1
+								if (
+									(previous < 0.0) != (next < 0.0)
+									or minf(absf(previous), absf(next)) <= mesh_influence_band
+								):
+									_include_changed_sample(
+										changed_sample_bounds,
+										coordinate,
+										sample_coordinate
+									)
 				if brick_changed:
 					changed_set[coordinate] = true
-	return changed_samples
+	return {
+		"changed_samples": changed_samples,
+		"changed_sample_bounds": changed_sample_bounds,
+	}
+
+
+static func _include_changed_sample(
+	bounds_by_chunk: Dictionary[Vector3i, PackedInt32Array],
+	coordinate: Vector3i,
+	sample: Vector3i
+) -> void:
+	var bounds: PackedInt32Array = bounds_by_chunk.get(coordinate, PackedInt32Array())
+	if bounds.is_empty():
+		bounds = PackedInt32Array([sample.x, sample.y, sample.z, sample.x, sample.y, sample.z])
+	else:
+		bounds[0] = mini(bounds[0], sample.x)
+		bounds[1] = mini(bounds[1], sample.y)
+		bounds[2] = mini(bounds[2], sample.z)
+		bounds[3] = maxi(bounds[3], sample.x)
+		bounds[4] = maxi(bounds[4], sample.y)
+		bounds[5] = maxi(bounds[5], sample.z)
+	bounds_by_chunk[coordinate] = bounds
 
 
 func _apply_accumulated_damage(
