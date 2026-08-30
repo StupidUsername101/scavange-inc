@@ -104,6 +104,17 @@ func _test_volume_replay_and_collision_swap() -> void:
 		"edited chunks replace their box render and collision with generated SDF topology"
 	)
 	_expect(
+		int(runtime_state.get("generated_visuals", 0))
+		< int(runtime_state.get("rebuild_count", 0))
+		and int(runtime_state.get("generated_bodies", 0))
+		== int(runtime_state.get("generated_visuals", 0)),
+		"unchanged seam-ring chunks retain their compact base render and collision"
+	)
+	_expect(
+		_generated_surface_preserves_authored_material(server_volume),
+		"generated concrete keeps the base material's sRGB, roughness, and metallic contract"
+	)
+	_expect(
 		int(runtime_state.get("committed_events", 0)) == 1
 		and int(runtime_state.get("event_apply_max_usec", 0)) > 0
 		and int(runtime_state.get("rebuild_max_usec", 0)) > 0
@@ -246,10 +257,15 @@ func _test_service_pistol_routing() -> void:
 	var concrete_wall := field_instance.get_node_or_null(
 		"ConcreteWall"
 	) as DestructibleVolume3D
+	var metal_wall := field_instance.get_node_or_null(
+		"MetalWall"
+	) as DestructibleVolume3D
 	var profiles := _service_pistol_profiles()
 	await physics_frame
 	var projectile := ServerProjectile.new()
 	test_root.add_child(projectile)
+	var metal_projectile := ServerProjectile.new()
+	test_root.add_child(metal_projectile)
 	if concrete_wall != null and not profiles.is_empty():
 		projectile.configure(
 			3001,
@@ -263,19 +279,43 @@ func _test_service_pistol_routing() -> void:
 			0
 		)
 		projectile.server_physics_tick(0.1)
+	if metal_wall != null and not profiles.is_empty():
+		metal_projectile.configure(
+			3002,
+			profiles[0],
+			metal_wall.global_position + Vector3(0.0, 0.0, 2.0),
+			Vector3(0.0, 0.0, -1.0),
+			Vector3.ZERO,
+			[],
+			&"player",
+			8,
+			0
+		)
+		metal_projectile.server_physics_tick(0.1)
 	_expect(
 		concrete_wall != null
+		and metal_wall != null
 		and not profiles.is_empty()
 		and is_equal_approx(float(profiles[0].get("destruction_energy", 0.0)), 16.0)
 		and is_equal_approx(float(profiles[0].get("destruction_radius", 0.0)), 0.05)
 		and is_equal_approx(float(profiles[0].get("penetration_depth", 0.0)), 0.75)
 		and projectile.resolved
-		and concrete_wall.field.revision == 1,
-		"the shipped service pistol authors and applies its material-destruction profile"
+		and metal_projectile.resolved
+		and concrete_wall.field.revision == 1
+		and metal_wall.field.revision == 1,
+		"the shipped service pistol applies its destruction profile to concrete and metal"
 	)
 	if concrete_wall != null:
 		concrete_wall.flush_pending_rebuilds()
+	if metal_wall != null:
+		metal_wall.flush_pending_rebuilds()
+	_expect(
+		_generated_surface_preserves_authored_material(concrete_wall)
+		and _generated_surface_preserves_authored_material(metal_wall),
+		"rebuilt concrete and metal preserve their authored material appearance"
+	)
 	projectile.queue_free()
+	metal_projectile.queue_free()
 	field_instance.queue_free()
 	await process_frame
 
@@ -357,6 +397,60 @@ func _service_pistol_profiles() -> Array[Dictionary]:
 	return pistol.get_build(
 		pistol.make_default_instance_state()
 	).get_ballistic_profiles()
+
+
+func _generated_surface_preserves_authored_material(volume: DestructibleVolume3D) -> bool:
+	if volume == null:
+		return false
+	var profile := DestructionMaterialRegistry.profile_for(volume.physical_surface)
+	var base_material := volume.get("_surface_material") as StandardMaterial3D
+	var generated_material := volume.get("_generated_surface_material") as StandardMaterial3D
+	if (
+		base_material == null
+		or generated_material == null
+		or not _colors_match_packed(base_material.albedo_color, profile.exterior_color)
+		or not is_equal_approx(base_material.roughness, profile.roughness)
+		or not is_equal_approx(base_material.metallic, profile.metallic)
+		or not generated_material.vertex_color_use_as_albedo
+		or not generated_material.vertex_color_is_srgb
+		or not is_equal_approx(generated_material.roughness, profile.roughness)
+		or not is_equal_approx(generated_material.metallic, profile.metallic)
+	):
+		return false
+	var found_generated_surface := false
+	var found_exterior_color := false
+	for child: Node in volume.get_children():
+		var visual := child as MeshInstance3D
+		if visual == null or not visual.name.begins_with("GeneratedVisual_"):
+			continue
+		var mesh := visual.mesh as ArrayMesh
+		if mesh == null:
+			return false
+		for surface_index: int in range(mesh.get_surface_count()):
+			var arrays := mesh.surface_get_arrays(surface_index)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+			if colors.size() != vertices.size():
+				return false
+			found_generated_surface = true
+			for color: Color in colors:
+				if _colors_match_packed(color, profile.exterior_color):
+					found_exterior_color = true
+				elif not _colors_match_packed(color, profile.interior_color):
+					return false
+	return found_generated_surface and found_exterior_color
+
+
+func _colors_match_packed(left: Color, right: Color) -> bool:
+	# ArrayMesh stores this channel as normalized 8-bit color data unless a higher-precision custom
+	# format is requested. One quantization step is presentation-equivalent to the authored Color.
+	const PACKED_COLOR_TOLERANCE := 1.0 / 255.0 + 0.00001
+	return (
+		absf(left.r - right.r) <= PACKED_COLOR_TOLERANCE
+		and absf(left.g - right.g) <= PACKED_COLOR_TOLERANCE
+		and absf(left.b - right.b) <= PACKED_COLOR_TOLERANCE
+		and absf(left.a - right.a) <= PACKED_COLOR_TOLERANCE
+	)
 
 
 func _test_local_acoustic_invalidation() -> void:

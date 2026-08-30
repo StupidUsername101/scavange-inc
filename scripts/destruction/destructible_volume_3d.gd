@@ -451,18 +451,19 @@ func _rebuild_chunk(
 		return
 	var started_usec := Time.get_ticks_usec()
 	var base_visual := _base_visuals.get(coordinate) as MeshInstance3D
-	if base_visual != null:
-		base_visual.visible = false
 	var base_shape := _base_shapes.get(coordinate) as CollisionShape3D
-	if base_shape != null:
-		base_shape.set_deferred("disabled", true)
-	_remove_generated_chunk(coordinate)
 	var result := (
 		prepared_result
 		if not prepared_result.is_empty()
 		else SdfDualContouringMesher.build_chunk(field, coordinate)
 	)
-	if not bool(result.get("empty", true)):
+	var retains_base_surface := _result_matches_untouched_base(result)
+	if base_visual != null:
+		base_visual.visible = retains_base_surface
+	if base_shape != null:
+		base_shape.set_deferred("disabled", not retains_base_surface)
+	_remove_generated_chunk(coordinate)
+	if not retains_base_surface and not bool(result.get("empty", true)):
 		result["colors"] = _surface_colors_for_result(result)
 		var mesh := SdfDualContouringMesher.create_array_mesh(result)
 		if mesh != null:
@@ -494,6 +495,23 @@ func _rebuild_chunk(
 	var elapsed_usec := Time.get_ticks_usec() - started_usec + worker_elapsed_usec
 	_rebuild_total_usec += elapsed_usec
 	_rebuild_max_usec = maxi(_rebuild_max_usec, elapsed_usec)
+
+
+func _result_matches_untouched_base(result: Dictionary) -> bool:
+	if bool(result.get("empty", true)):
+		return false
+	var vertices: PackedVector3Array = result.get("vertices", PackedVector3Array())
+	if vertices.is_empty():
+		return false
+	# The seam-safety ring still gets evaluated because a neighboring cut can alter its owned faces.
+	# Keep the cheap original box only when every extracted vertex remains on the immutable analytic
+	# shell. This local equivalence test avoids replacing a broad square of unaffected presentation or
+	# collision without guessing which neighbors are safe to skip.
+	var surface_tolerance := maxf(field.voxel_size * 0.01, 0.00001)
+	for vertex: Vector3 in vertices:
+		if absf(field.base_distance(vertex)) > surface_tolerance:
+			return false
+	return true
 
 
 func _record_event_timing(started_usec: int, committed: bool) -> void:
@@ -615,6 +633,10 @@ static func _create_generated_surface_material(
 	var material := StandardMaterial3D.new()
 	material.albedo_color = Color.WHITE
 	material.vertex_color_use_as_albedo = true
+	# Destruction profiles are authored with the same sRGB Color values as StandardMaterial albedo.
+	# ArrayMesh color attributes are linear by default, so declaring their encoding prevents rebuilt
+	# chunks from appearing brighter than the untouched material in Forward+/Mobile renderers.
+	material.vertex_color_is_srgb = true
 	material.roughness = profile.roughness
 	material.metallic = profile.metallic
 	return material
