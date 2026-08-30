@@ -23,6 +23,8 @@ func _run() -> void:
 	_test_spatial_bounds_registration()
 	_test_local_acoustic_invalidation()
 	await _test_projectile_routing()
+	await _test_service_pistol_routing()
+	await _test_live_server_world_pistol_routing()
 	_finish()
 
 
@@ -217,6 +219,129 @@ func _test_projectile_routing() -> void:
 		projectile.resolved and volume.field.revision == 1,
 		"the real swept projectile routes a material event through the collision adapter"
 	)
+
+
+func _test_service_pistol_routing() -> void:
+	var field_scene := load(
+		"res://scenes/server/destruction_field_test.tscn"
+	) as PackedScene
+	var field_instance := field_scene.instantiate() as Node3D
+	field_instance.position = Vector3(10.0, 0.0, -4.0)
+	test_root.add_child(field_instance)
+	var concrete_wall := field_instance.get_node_or_null(
+		"ConcreteWall"
+	) as DestructibleVolume3D
+	var profiles := _service_pistol_profiles()
+	await physics_frame
+	var projectile := ServerProjectile.new()
+	test_root.add_child(projectile)
+	if concrete_wall != null and not profiles.is_empty():
+		projectile.configure(
+			3001,
+			profiles[0],
+			concrete_wall.global_position + Vector3(0.0, 0.0, 2.0),
+			Vector3(0.0, 0.0, -1.0),
+			Vector3.ZERO,
+			[],
+			&"player",
+			8,
+			0
+		)
+		projectile.server_physics_tick(0.1)
+	_expect(
+		concrete_wall != null
+		and not profiles.is_empty()
+		and is_equal_approx(float(profiles[0].get("destruction_energy", 0.0)), 16.0)
+		and is_equal_approx(float(profiles[0].get("destruction_radius", 0.0)), 0.05)
+		and is_equal_approx(float(profiles[0].get("penetration_depth", 0.0)), 0.75)
+		and projectile.resolved
+		and concrete_wall.field.revision == 1,
+		"the shipped service pistol authors and applies its material-destruction profile"
+	)
+	if concrete_wall != null:
+		concrete_wall.flush_pending_rebuilds()
+	projectile.queue_free()
+	field_instance.queue_free()
+	await process_frame
+
+
+func _test_live_server_world_pistol_routing() -> void:
+	var server := root.get_node_or_null("/root/Server")
+	var client := root.get_node_or_null("/root/Client")
+	if server == null or client == null:
+		_expect(false, "the live network autoloads are available for pistol destruction routing")
+		return
+	server.call("spawn_server_world")
+	var volumes: Dictionary = server.get("destructible_volumes_by_id")
+	var concrete_wall := volumes.get(
+		&"destruction_test_concrete"
+	) as DestructibleVolume3D
+	var client_world := load(
+		"res://scenes/proxy/destruction_field_test.tscn"
+	).instantiate() as Node3D
+	if concrete_wall != null:
+		client_world.global_transform = concrete_wall.get_parent_node_3d().global_transform
+	root.add_child(client_world)
+	client.set("client_world", client_world)
+	client.call("_index_client_destructible_volumes")
+	await physics_frame
+	var client_volumes: Dictionary = client.get("destructible_volumes_by_id")
+	var client_concrete_wall := client_volumes.get(
+		&"destruction_test_concrete"
+	) as DestructibleVolume3D
+	var profiles := _service_pistol_profiles()
+	var projectile: ServerProjectile
+	if concrete_wall != null and not profiles.is_empty():
+		projectile = server.call(
+			"spawn_ballistic_projectile",
+			profiles[0],
+			concrete_wall.global_position + Vector3(0.0, 0.0, 2.0),
+			Vector3(0.0, 0.0, -1.0),
+			Vector3.ZERO,
+			[],
+			&"player",
+			8,
+			null,
+			0
+		) as ServerProjectile
+	var projectile_resolved := false
+	if projectile != null:
+		projectile.server_physics_tick(0.1)
+		projectile_resolved = projectile.resolved
+	await process_frame
+	_expect(
+		concrete_wall != null
+		and projectile_resolved
+		and concrete_wall.field.revision == 1,
+		"the live server world registers its field wall and accepts a shipped pistol projectile"
+	)
+	_expect(
+		client_concrete_wall != null
+		and client_concrete_wall.field.revision == concrete_wall.field.revision
+		and client_concrete_wall.field.checksum() == concrete_wall.field.checksum(),
+		"the listen-host presentation replays the pistol edit instead of leaving an opaque proxy wall"
+	)
+	if concrete_wall != null:
+		concrete_wall.flush_pending_rebuilds()
+	if client_concrete_wall != null:
+		client_concrete_wall.flush_pending_rebuilds()
+	client.set("client_world", null)
+	client.set("destructible_volumes_by_id", {})
+	client_world.queue_free()
+	server.call("_clear_runtime_session")
+	for _cleanup_frame: int in range(3):
+		await process_frame
+
+
+func _service_pistol_profiles() -> Array[Dictionary]:
+	var pistol := load(
+		"res://resources/items/guns/basic_service_pistol.tres"
+	) as GunItemDefinition
+	if pistol == null:
+		return []
+	return pistol.get_build(
+		pistol.make_default_instance_state()
+	).get_ballistic_profiles()
 
 
 func _test_local_acoustic_invalidation() -> void:

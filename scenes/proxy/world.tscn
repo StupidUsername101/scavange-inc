@@ -101,4 +101,4 @@ position = Vector3(6, 0, -48)
 position = Vector3(150, 0.02, -10)
 
 [node name="DestructionFieldTest" parent="." instance=ExtResource("34_destruction_test")]
-position = Vector3(-22, 0, -12)
+position = Vector3(-12, 0, -10)

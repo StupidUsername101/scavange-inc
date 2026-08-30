@@ -4,6 +4,16 @@
 
 [node name="DestructionFieldTest" type="Node3D"]
 
+[node name="MaterialTestLabel" type="Label3D" parent="."]
+position = Vector3(0, 3.55, 0)
+modulate = Color(1, 0.58, 0.12, 1)
+outline_modulate = Color(0.03, 0.025, 0.02, 1)
+text = "LIVE BALLISTIC DESTRUCTION\nCONCRETE                         METAL"
+font_size = 40
+outline_size = 10
+pixel_size = 0.006
+billboard = 1
+
 [node name="ConcreteWall" type="Node3D" parent="."]
 position = Vector3(-2.75, 1.5, 0)
 script = ExtResource("1_volume")
