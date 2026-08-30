@@ -1,0 +1,29 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/destruction/destructible_volume_3d.gd" id="1_volume"]
+
+[node name="DestructionFieldTest" type="Node3D"]
+
+[node name="ConcreteWall" type="Node3D" parent="."]
+position = Vector3(-2.75, 1.5, 0)
+script = ExtResource("1_volume")
+volume_id = &"destruction_test_concrete"
+authoritative = false
+create_collision = false
+physical_surface = &"concrete"
+volume_size = Vector3(4, 3, 0.45)
+voxel_size = 0.06
+brick_cells = 12
+maximum_chunk_rebuilds_per_frame = 1
+
+[node name="MetalWall" type="Node3D" parent="."]
+position = Vector3(2.75, 1.5, 0)
+script = ExtResource("1_volume")
+volume_id = &"destruction_test_metal"
+authoritative = false
+create_collision = false
+physical_surface = &"metal"
+volume_size = Vector3(4, 3, 0.45)
+voxel_size = 0.06
+brick_cells = 12
+maximum_chunk_rebuilds_per_frame = 1

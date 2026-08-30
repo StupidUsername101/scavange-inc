@@ -1,0 +1,646 @@
+@tool
+class_name DestructibleVolume3D
+extends Node3D
+
+## Opt-in finite destructible volume. Untouched macro-chunks remain cheap boxes; only edited chunks
+## and the one-ring needed for watertight ownership are replaced by generated SDF meshes/collision.
+
+signal damage_committed(event: DamageEvent, result: Dictionary)
+signal acoustic_aperture_changed(world_bounds: AABB, revision: int)
+
+const DEFAULT_PHYSICAL_SURFACE := &"concrete"
+const MIN_SIZE := 0.01
+const MIN_DIRECTION_LENGTH_SQUARED := 0.000001
+
+@export_group("Identity")
+@export var volume_id := &"destructible"
+@export var enabled := true
+@export var authoritative := true
+@export var create_collision := true
+@export var physical_surface := DEFAULT_PHYSICAL_SURFACE
+@export var destruction_texture: DestructionTextureDefinition
+
+@export_group("Volume")
+@export var volume_size := Vector3(4.0, 3.0, 0.45)
+@export_range(0.01, 0.5, 0.005, "or_greater") var voxel_size := 0.06
+@export_range(4, 48, 1) var brick_cells := 16
+@export_range(2.0, 8.0, 0.25) var narrow_band_voxels := 4.0
+
+@export_group("Scheduling")
+@export_range(1, 8, 1) var maximum_chunk_rebuilds_per_frame := 1
+@export_range(1, 8, 1) var maximum_parallel_chunk_jobs := 2
+@export_range(0, 2, 1) var remesh_neighbor_ring := 1
+
+@export_group("Presentation")
+@export var cast_shadow := GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+
+var field: SparseSdfVolumeData
+
+var _profile: DestructionTextureDefinition
+var _surface_material: StandardMaterial3D
+var _generated_surface_material: StandardMaterial3D
+var _base_visuals: Dictionary[Vector3i, MeshInstance3D] = {}
+var _base_bodies: Dictionary[Vector3i, DestructibleCollisionBody3D] = {}
+var _base_shapes: Dictionary[Vector3i, CollisionShape3D] = {}
+var _generated_visuals: Dictionary[Vector3i, MeshInstance3D] = {}
+var _generated_bodies: Dictionary[Vector3i, DestructibleCollisionBody3D] = {}
+var _dirty_chunks: Array[Vector3i] = []
+var _dirty_chunk_set: Dictionary[Vector3i, bool] = {}
+var _active_chunk_jobs: Dictionary[Vector3i, Dictionary] = {}
+var _edited_chunks: Dictionary[Vector3i, bool] = {}
+var _accumulated_open_area := 0.0
+var _acoustic_aperture_cells: Dictionary[Vector3i, bool] = {}
+var _acoustic_aperture_open := false
+var _initialized := false
+var _rebuild_count := 0
+var _last_rebuilt_revision := 0
+var _committed_event_count := 0
+var _evaluated_event_count := 0
+var _rejected_event_count := 0
+var _event_apply_total_usec := 0
+var _event_apply_max_usec := 0
+var _rebuild_total_usec := 0
+var _rebuild_max_usec := 0
+var _maximum_queue_depth := 0
+var _queue_started_usec := 0
+var _discarded_stale_jobs := 0
+
+
+func _ready() -> void:
+	initialize_volume()
+
+
+func initialize_volume() -> void:
+	if _initialized:
+		return
+	volume_size = Vector3(
+		maxf(absf(volume_size.x), MIN_SIZE),
+		maxf(absf(volume_size.y), MIN_SIZE),
+		maxf(absf(volume_size.z), MIN_SIZE)
+	)
+	if volume_id.is_empty():
+		volume_id = StringName(name.to_snake_case())
+	_profile = (
+		destruction_texture
+		if destruction_texture != null
+		else DestructionMaterialRegistry.profile_for(physical_surface)
+	)
+	_profile.sanitize()
+	physical_surface = _profile.physical_surface
+	field = SparseSdfVolumeData.new().configure(
+		volume_size,
+		voxel_size,
+		brick_cells,
+		_profile.material_index,
+		narrow_band_voxels
+	)
+	_surface_material = _create_surface_material(_profile)
+	_generated_surface_material = _create_generated_surface_material(_profile)
+	_build_base_chunks()
+	add_to_group(&"destructible_volumes")
+	_initialized = true
+	set_process(false)
+
+
+func _process(_delta: float) -> void:
+	var remaining := maxi(maximum_chunk_rebuilds_per_frame, 1)
+	var active_coordinates: Array[Vector3i] = []
+	for coordinate: Vector3i in _active_chunk_jobs.keys():
+		active_coordinates.append(coordinate)
+	active_coordinates.sort_custom(_vector3i_less)
+	for coordinate: Vector3i in active_coordinates:
+		if remaining <= 0:
+			break
+		var state: Dictionary = _active_chunk_jobs.get(coordinate, {})
+		var task_id := int(state.get("task_id", -1))
+		if task_id < 0 or not WorkerThreadPool.is_task_completed(task_id):
+			continue
+		WorkerThreadPool.wait_for_task_completion(task_id)
+		var job := state.get("job") as SdfChunkBuildJob
+		_active_chunk_jobs.erase(coordinate)
+		if (
+			job == null
+			or int(job.snapshot.get("source_signature", -1))
+			!= field.chunk_sample_revision_signature(coordinate)
+		):
+			_discarded_stale_jobs += 1
+			_queue_chunks([coordinate])
+			continue
+		_rebuild_chunk(coordinate, job.result, job.elapsed_usec)
+		remaining -= 1
+	_schedule_chunk_jobs()
+	if _dirty_chunks.is_empty() and _active_chunk_jobs.is_empty():
+		set_process(false)
+		_queue_started_usec = 0
+
+
+func apply_authoritative_damage_event(event: DamageEvent) -> Dictionary:
+	return _apply_damage_event(event, true)
+
+
+func apply_replicated_damage_event(event: DamageEvent, expected_from_revision: int) -> Dictionary:
+	if not _initialized:
+		initialize_volume()
+	if field.revision != expected_from_revision:
+		return {
+			"changed": false,
+			"reason": &"revision_gap",
+			"expected": expected_from_revision,
+			"actual": field.revision,
+		}
+	return _apply_damage_event(event, false)
+
+
+func accepts_current_sdf_hit(world_position: Vector3, world_direction: Vector3) -> bool:
+	if not _initialized:
+		initialize_volume()
+	var local_position := to_local(world_position)
+	var local_direction := global_basis.inverse() * world_direction
+	if local_direction.length_squared() <= MIN_DIRECTION_LENGTH_SQUARED:
+		local_direction = Vector3.FORWARD
+	local_direction = local_direction.normalized()
+	# The physics ray reports the old triangle/box surface. Probe just inside and just outside the
+	# current field; a real solid boundary has negative matter on at least one side, while a stale
+	# collider over an opened hole has air on both sides.
+	var probe_distance := field.voxel_size * 0.65
+	return (
+		field.sample_distance(local_position + local_direction * probe_distance) <= 0.0
+		or field.sample_distance(local_position - local_direction * probe_distance) <= 0.0
+	)
+
+
+func flush_pending_rebuilds() -> void:
+	for coordinate: Vector3i in _active_chunk_jobs.keys():
+		var state: Dictionary = _active_chunk_jobs.get(coordinate, {})
+		var task_id := int(state.get("task_id", -1))
+		if task_id >= 0:
+			WorkerThreadPool.wait_for_task_completion(task_id)
+		var job := state.get("job") as SdfChunkBuildJob
+		if (
+			job != null
+			and int(job.snapshot.get("source_signature", -1))
+			== field.chunk_sample_revision_signature(coordinate)
+		):
+			_rebuild_chunk(coordinate, job.result, job.elapsed_usec)
+		else:
+			_queue_chunks([coordinate])
+	_active_chunk_jobs.clear()
+	while not _dirty_chunks.is_empty():
+		var coordinate: Vector3i = _dirty_chunks.pop_front() as Vector3i
+		_dirty_chunk_set.erase(coordinate)
+		_rebuild_chunk(coordinate)
+	set_process(false)
+	_queue_started_usec = 0
+
+
+func checkpoint() -> Dictionary:
+	if not _initialized:
+		initialize_volume()
+	return {
+		"volume_id": volume_id,
+		"bake_hash": bake_hash(),
+		"revision": field.revision,
+		"checksum": field.checksum(),
+		"bricks": field.changed_brick_states(),
+		"edited_chunks": _edited_chunk_array(),
+		"acoustic_open_area": _accumulated_open_area,
+		"acoustic_aperture_cells": _acoustic_aperture_cell_array(),
+	}
+
+
+func apply_checkpoint(value: Dictionary) -> bool:
+	if not _initialized:
+		initialize_volume()
+	if (
+		StringName(str(value.get("volume_id", &""))) != volume_id
+		or int(value.get("bake_hash", -1)) != bake_hash()
+	):
+		return false
+	var states: Array = value.get("bricks", [])
+	if not field.apply_checkpoint(int(value.get("revision", 0)), states):
+		return false
+	_edited_chunks.clear()
+	var raw_edited: Array = value.get("edited_chunks", [])
+	for raw_coordinate: Variant in raw_edited:
+		if raw_coordinate is Vector3i and field.brick_is_valid(raw_coordinate):
+			_edited_chunks[raw_coordinate] = true
+	_acoustic_aperture_cells.clear()
+	var raw_aperture_cells: Variant = value.get("acoustic_aperture_cells", [])
+	if raw_aperture_cells is Array:
+		for raw_cell: Variant in raw_aperture_cells:
+			if raw_cell is Vector3i:
+				_acoustic_aperture_cells[raw_cell] = true
+	_accumulated_open_area = (
+		float(_acoustic_aperture_cells.size()) * field.voxel_size * field.voxel_size
+		if not _acoustic_aperture_cells.is_empty()
+		else maxf(float(value.get("acoustic_open_area", 0.0)), 0.0)
+	)
+	_acoustic_aperture_open = _accumulated_open_area >= _profile.acoustic_aperture_area
+	_queue_chunks(field.expanded_chunk_ring(_edited_chunk_array(), remesh_neighbor_ring))
+	return true
+
+
+func bake_hash() -> int:
+	var value := hash(str(volume_id))
+	value = _hash_step(value, roundi(volume_size.x * 1000.0))
+	value = _hash_step(value, roundi(volume_size.y * 1000.0))
+	value = _hash_step(value, roundi(volume_size.z * 1000.0))
+	value = _hash_step(value, roundi(voxel_size * 100000.0))
+	value = _hash_step(value, brick_cells)
+	value = _hash_step(value, _profile.content_signature() if _profile != null else 0)
+	return value & 0x7fffffff
+
+
+func world_bounds() -> AABB:
+	var local_bounds := AABB(-volume_size * 0.5, volume_size)
+	return global_transform * local_bounds
+
+
+func debug_state() -> Dictionary:
+	return {
+		"volume_id": volume_id,
+		"bake_hash": bake_hash(),
+		"profile": _profile.texture_id if _profile != null else &"",
+		"field": field.debug_state() if field != null else {},
+		"queued_chunks": _dirty_chunks.size(),
+		"active_chunk_jobs": _active_chunk_jobs.size(),
+		"edited_chunks": _edited_chunks.size(),
+		"generated_visuals": _generated_visuals.size(),
+		"generated_bodies": _generated_bodies.size(),
+		"rebuild_count": _rebuild_count,
+		"last_rebuilt_revision": _last_rebuilt_revision,
+		"committed_events": _committed_event_count,
+		"evaluated_events": _evaluated_event_count,
+		"rejected_events": _rejected_event_count,
+		"event_apply_average_usec": (
+			float(_event_apply_total_usec) / float(_evaluated_event_count)
+			if _evaluated_event_count > 0
+			else 0.0
+		),
+		"event_apply_max_usec": _event_apply_max_usec,
+		"rebuild_average_usec": (
+			float(_rebuild_total_usec) / float(_rebuild_count)
+			if _rebuild_count > 0
+			else 0.0
+		),
+		"rebuild_max_usec": _rebuild_max_usec,
+		"maximum_queue_depth": _maximum_queue_depth,
+		"discarded_stale_jobs": _discarded_stale_jobs,
+		"oldest_queued_usec": (
+			Time.get_ticks_usec() - _queue_started_usec
+			if _queue_started_usec > 0
+			else 0
+		),
+		"acoustic_open_area": _accumulated_open_area,
+		"acoustic_aperture_open": _acoustic_aperture_open,
+	}
+
+
+func _apply_damage_event(event: DamageEvent, notify_authority: bool) -> Dictionary:
+	if not _initialized:
+		initialize_volume()
+	if not enabled or event == null or not event.is_valid():
+		_rejected_event_count += 1
+		return {"changed": false, "reason": &"disabled_or_invalid"}
+	if notify_authority and not authoritative:
+		_rejected_event_count += 1
+		return {"changed": false, "reason": &"not_authoritative"}
+	var started_usec := Time.get_ticks_usec()
+	# Authoritative geometry is evaluated from the exact packet clients will replay. This prevents
+	# sub-millimetre hit coordinates or unquantized directions from creating checksum drift.
+	var applied_event := event
+	if notify_authority:
+		var canonical_packet := event.to_dict(true)
+		canonical_packet["seed"] = DamageEvent.deterministic_seed(
+			volume_id,
+			event.sequence,
+			event.source_id,
+			event.seed
+		)
+		applied_event = DamageEvent.from_dict(canonical_packet)
+	var local_position := to_local(applied_event.world_position)
+	var inverse_basis := global_basis.inverse()
+	var local_direction := inverse_basis * applied_event.direction
+	var local_normal := inverse_basis * applied_event.normal
+	var previous_revision := field.revision
+	var result := field.apply_damage_event(
+		local_position,
+		local_direction,
+		local_normal,
+		applied_event,
+		_profile
+	)
+	result["volume_id"] = volume_id
+	result["bake_hash"] = bake_hash()
+	result["from_revision"] = previous_revision
+	if not bool(result.get("changed", false)):
+		_record_event_timing(started_usec, false)
+		return result
+	var changed_chunks: Array[Vector3i] = result.get("changed_chunks", [])
+	result["world_changed_bounds"] = _world_bounds_for_chunks(changed_chunks)
+	if bool(result.get("geometry_changed", true)):
+		for coordinate: Vector3i in changed_chunks:
+			_edited_chunks[coordinate] = true
+		_queue_chunks(field.expanded_chunk_ring(changed_chunks, remesh_neighbor_ring))
+		var newly_opened_area := _record_acoustic_aperture(
+			local_position,
+			local_normal,
+			float(result.get("aperture_radius", 0.0))
+		)
+		result["opened_area_estimate"] = newly_opened_area
+		_accumulated_open_area += newly_opened_area
+		var was_open := _acoustic_aperture_open
+		_acoustic_aperture_open = _accumulated_open_area >= _profile.acoustic_aperture_area
+		if _acoustic_aperture_open and not was_open:
+			acoustic_aperture_changed.emit(world_bounds(), field.revision)
+	damage_committed.emit(applied_event, result)
+	if notify_authority:
+		var server := get_node_or_null("/root/Server")
+		if server != null and server.has_method("on_destructible_volume_changed"):
+			server.call("on_destructible_volume_changed", self, applied_event, result)
+	_record_event_timing(started_usec, true)
+	return result
+
+
+func _queue_chunks(coordinates: Array[Vector3i]) -> void:
+	var queue_was_empty := _dirty_chunks.is_empty()
+	for coordinate: Vector3i in coordinates:
+		if _dirty_chunk_set.has(coordinate):
+			continue
+		_dirty_chunk_set[coordinate] = true
+		_dirty_chunks.append(coordinate)
+	_dirty_chunks.sort_custom(_vector3i_less)
+	if not _dirty_chunks.is_empty():
+		if queue_was_empty:
+			_queue_started_usec = Time.get_ticks_usec()
+		_maximum_queue_depth = maxi(_maximum_queue_depth, _dirty_chunks.size())
+		set_process(true)
+
+
+func _schedule_chunk_jobs() -> void:
+	var capacity := maxi(maximum_parallel_chunk_jobs, 1) - _active_chunk_jobs.size()
+	while capacity > 0 and not _dirty_chunks.is_empty():
+		var coordinate: Vector3i = _dirty_chunks.pop_front() as Vector3i
+		_dirty_chunk_set.erase(coordinate)
+		if _active_chunk_jobs.has(coordinate):
+			continue
+		var snapshot := SdfDualContouringMesher.capture_chunk(field, coordinate)
+		var job := SdfChunkBuildJob.new().configure(snapshot)
+		var task_id := WorkerThreadPool.add_task(
+			job.execute,
+			false,
+			"Destruction chunk %s" % coordinate
+		)
+		_active_chunk_jobs[coordinate] = {
+			"task_id": task_id,
+			"job": job,
+		}
+		capacity -= 1
+
+
+func _build_base_chunks() -> void:
+	for z: int in range(field.brick_counts.z):
+		for y: int in range(field.brick_counts.y):
+			for x: int in range(field.brick_counts.x):
+				var coordinate := Vector3i(x, y, z)
+				var minimum := field.brick_origin(coordinate)
+				var maximum := Vector3(
+					minf(minimum.x + field.brick_extent, field.half_extents.x),
+					minf(minimum.y + field.brick_extent, field.half_extents.y),
+					minf(minimum.z + field.brick_extent, field.half_extents.z)
+				)
+				var chunk_size := maximum - minimum
+				if chunk_size.x <= 0.0 or chunk_size.y <= 0.0 or chunk_size.z <= 0.0:
+					continue
+				var center := (minimum + maximum) * 0.5
+				var visual := MeshInstance3D.new()
+				visual.name = "BaseVisual_%d_%d_%d" % [x, y, z]
+				var mesh := BoxMesh.new()
+				mesh.size = chunk_size
+				visual.mesh = mesh
+				visual.position = center
+				visual.cast_shadow = cast_shadow
+				visual.material_override = _surface_material
+				add_child(visual)
+				_base_visuals[coordinate] = visual
+				if not create_collision:
+					continue
+				var body := DestructibleCollisionBody3D.new().configure(
+					self,
+					coordinate,
+					physical_surface
+				)
+				body.name = "BaseBody_%d_%d_%d" % [x, y, z]
+				var collision := CollisionShape3D.new()
+				var shape := BoxShape3D.new()
+				shape.size = chunk_size
+				collision.shape = shape
+				collision.position = center
+				body.add_child(collision)
+				add_child(body)
+				_base_bodies[coordinate] = body
+				_base_shapes[coordinate] = collision
+
+
+func _rebuild_chunk(
+	coordinate: Vector3i,
+	prepared_result: Dictionary = {},
+	worker_elapsed_usec := 0
+) -> void:
+	if not field.brick_is_valid(coordinate):
+		return
+	var started_usec := Time.get_ticks_usec()
+	var base_visual := _base_visuals.get(coordinate) as MeshInstance3D
+	if base_visual != null:
+		base_visual.visible = false
+	var base_shape := _base_shapes.get(coordinate) as CollisionShape3D
+	if base_shape != null:
+		base_shape.set_deferred("disabled", true)
+	_remove_generated_chunk(coordinate)
+	var result := (
+		prepared_result
+		if not prepared_result.is_empty()
+		else SdfDualContouringMesher.build_chunk(field, coordinate)
+	)
+	if not bool(result.get("empty", true)):
+		result["colors"] = _surface_colors_for_result(result)
+		var mesh := SdfDualContouringMesher.create_array_mesh(result)
+		if mesh != null:
+			var visual := MeshInstance3D.new()
+			visual.name = "GeneratedVisual_%d_%d_%d" % [coordinate.x, coordinate.y, coordinate.z]
+			visual.mesh = mesh
+			visual.cast_shadow = cast_shadow
+			visual.material_override = _generated_surface_material
+			add_child(visual)
+			_generated_visuals[coordinate] = visual
+		if create_collision:
+			var faces := SdfDualContouringMesher.create_collision_faces(result)
+			if not faces.is_empty():
+				var body := DestructibleCollisionBody3D.new().configure(
+					self,
+					coordinate,
+					physical_surface
+				)
+				body.name = "GeneratedBody_%d_%d_%d" % [coordinate.x, coordinate.y, coordinate.z]
+				var collision := CollisionShape3D.new()
+				var shape := ConcavePolygonShape3D.new()
+				shape.set_faces(faces)
+				collision.shape = shape
+				body.add_child(collision)
+				add_child(body)
+				_generated_bodies[coordinate] = body
+	_rebuild_count += 1
+	_last_rebuilt_revision = field.revision
+	var elapsed_usec := Time.get_ticks_usec() - started_usec + worker_elapsed_usec
+	_rebuild_total_usec += elapsed_usec
+	_rebuild_max_usec = maxi(_rebuild_max_usec, elapsed_usec)
+
+
+func _record_event_timing(started_usec: int, committed: bool) -> void:
+	var elapsed_usec := Time.get_ticks_usec() - started_usec
+	_evaluated_event_count += 1
+	if committed:
+		_committed_event_count += 1
+	else:
+		_rejected_event_count += 1
+	_event_apply_total_usec += elapsed_usec
+	_event_apply_max_usec = maxi(_event_apply_max_usec, elapsed_usec)
+
+
+func _remove_generated_chunk(coordinate: Vector3i) -> void:
+	var visual := _generated_visuals.get(coordinate) as MeshInstance3D
+	if visual != null:
+		visual.free()
+	_generated_visuals.erase(coordinate)
+	var body := _generated_bodies.get(coordinate) as DestructibleCollisionBody3D
+	if body != null:
+		body.free()
+	_generated_bodies.erase(coordinate)
+
+
+func _edited_chunk_array() -> Array[Vector3i]:
+	var result: Array[Vector3i] = []
+	for coordinate: Vector3i in _edited_chunks.keys():
+		result.append(coordinate)
+	result.sort_custom(_vector3i_less)
+	return result
+
+
+func _acoustic_aperture_cell_array() -> Array[Vector3i]:
+	var result: Array[Vector3i] = []
+	for coordinate: Vector3i in _acoustic_aperture_cells.keys():
+		result.append(coordinate)
+	result.sort_custom(_vector3i_less)
+	return result
+
+
+func _record_acoustic_aperture(
+	local_position: Vector3,
+	local_normal: Vector3,
+	radius: float
+) -> float:
+	if radius <= 0.0:
+		return 0.0
+	var absolute_normal := local_normal.abs()
+	var axis := 0
+	var first_coordinate := local_position.y
+	var second_coordinate := local_position.z
+	if absolute_normal.y >= absolute_normal.x and absolute_normal.y >= absolute_normal.z:
+		axis = 1
+		first_coordinate = local_position.x
+		second_coordinate = local_position.z
+	elif absolute_normal.z >= absolute_normal.x:
+		axis = 2
+		first_coordinate = local_position.x
+		second_coordinate = local_position.y
+	var first_center := roundi(first_coordinate / field.voxel_size)
+	var second_center := roundi(second_coordinate / field.voxel_size)
+	var cell_radius := ceili(radius / field.voxel_size)
+	var radius_squared := radius * radius
+	var added_cells := 0
+	for second_offset: int in range(-cell_radius, cell_radius + 1):
+		for first_offset: int in range(-cell_radius, cell_radius + 1):
+			var first_delta := (
+				float(first_center + first_offset) * field.voxel_size - first_coordinate
+			)
+			var second_delta := (
+				float(second_center + second_offset) * field.voxel_size - second_coordinate
+			)
+			if first_delta * first_delta + second_delta * second_delta > radius_squared:
+				continue
+			var key := Vector3i(axis, first_center + first_offset, second_center + second_offset)
+			if _acoustic_aperture_cells.has(key):
+				continue
+			_acoustic_aperture_cells[key] = true
+			added_cells += 1
+	return float(added_cells) * field.voxel_size * field.voxel_size
+
+
+func _world_bounds_for_chunks(coordinates: Array[Vector3i]) -> AABB:
+	if coordinates.is_empty():
+		return AABB(global_position, Vector3.ZERO)
+	var local_minimum := Vector3(INF, INF, INF)
+	var local_maximum := Vector3(-INF, -INF, -INF)
+	for coordinate: Vector3i in coordinates:
+		var minimum := field.brick_origin(coordinate)
+		var maximum := Vector3(
+			minf(minimum.x + field.brick_extent, field.half_extents.x),
+			minf(minimum.y + field.brick_extent, field.half_extents.y),
+			minf(minimum.z + field.brick_extent, field.half_extents.z)
+		)
+		local_minimum = Vector3(
+			minf(local_minimum.x, minimum.x),
+			minf(local_minimum.y, minimum.y),
+			minf(local_minimum.z, minimum.z)
+		)
+		local_maximum = Vector3(
+			maxf(local_maximum.x, maximum.x),
+			maxf(local_maximum.y, maximum.y),
+			maxf(local_maximum.z, maximum.z)
+		)
+	return global_transform * AABB(local_minimum, local_maximum - local_minimum)
+
+
+static func _create_surface_material(profile: DestructionTextureDefinition) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = profile.exterior_color
+	material.roughness = profile.roughness
+	material.metallic = profile.metallic
+	return material
+
+
+static func _create_generated_surface_material(
+	profile: DestructionTextureDefinition
+) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color.WHITE
+	material.vertex_color_use_as_albedo = true
+	material.roughness = profile.roughness
+	material.metallic = profile.metallic
+	return material
+
+
+func _surface_colors_for_result(result: Dictionary) -> PackedColorArray:
+	var vertices: PackedVector3Array = result.get("vertices", PackedVector3Array())
+	var colors := PackedColorArray()
+	colors.resize(vertices.size())
+	var base_surface_band := field.voxel_size * 1.25
+	for index: int in range(vertices.size()):
+		colors[index] = (
+			_profile.exterior_color
+			if absf(field.base_distance(vertices[index])) <= base_surface_band
+			else _profile.interior_color
+		)
+	return colors
+
+
+static func _vector3i_less(left: Vector3i, right: Vector3i) -> bool:
+	if left.z != right.z:
+		return left.z < right.z
+	if left.y != right.y:
+		return left.y < right.y
+	return left.x < right.x
+
+
+static func _hash_step(state: int, value: int) -> int:
+	return ((state ^ value) * 16777619) & 0xffffffff
