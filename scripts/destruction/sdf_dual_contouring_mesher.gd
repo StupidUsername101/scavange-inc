@@ -355,10 +355,15 @@ static func _append_owned_edge_quad(
 		quad[corner_index] = cell_indices[lookup]
 		if quad[corner_index] < 0:
 			return
+	# Godot renders clockwise triangle winding as the front face. The SDF gradient stored in the
+	# vertex normals points from solid toward air, so the geometric cross product must point against
+	# that authored normal. The previous order was mathematically CCW: collision existed, but the
+	# untouched exterior of every rebuilt chunk was back-face culled while parts of the crater's
+	# inside remained visible. That made a small bullet impact look as if the box had collapsed.
 	if first_distance < 0.0:
-		indices.append_array(PackedInt32Array([quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]))
-	else:
 		indices.append_array(PackedInt32Array([quad[0], quad[3], quad[2], quad[0], quad[2], quad[1]]))
+	else:
+		indices.append_array(PackedInt32Array([quad[0], quad[1], quad[2], quad[0], quad[2], quad[3]]))
 
 
 static func _extended_index(x: int, y: int, z: int, size: int) -> int:

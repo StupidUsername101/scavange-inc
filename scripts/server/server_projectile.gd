@@ -13,6 +13,7 @@ const IMPACT_SOUND_SURFACE_OFFSET := 0.045
 const IMPACT_PRESSURE_STRENGTH := 0.0
 const PHYSICAL_SURFACE := preload("res://scripts/audio/physical_surface.gd")
 const IMPACT_RESPONSE := preload("res://scripts/audio/physical_impact_response.gd")
+const DAMAGE_EVENT_SCRIPT := preload("res://scripts/destruction/damage_event.gd")
 
 #######################################################
 # Advances an authoritative projectile, performs swept collision, and applies damage and
@@ -160,7 +161,7 @@ func _first_current_physics_hit(start: Vector3, finish: Vector3) -> Dictionary:
 	return {}
 
 
-func _create_damage_event(hit_position: Vector3, hit_normal: Vector3) -> DamageEvent:
+func _create_damage_event(hit_position: Vector3, hit_normal: Vector3) -> RefCounted:
 	var speed_ratio := clampf(
 		velocity.length() / maxf(
 			float(profile.get("muzzle_velocity", BallisticProjectileDefinition.MIN_MUZZLE_VELOCITY)),
@@ -171,7 +172,7 @@ func _create_damage_event(hit_position: Vector3, hit_normal: Vector3) -> DamageE
 	)
 	var volume_id := &"world"
 	var direction := motion_direction(Vector3.ZERO, velocity)
-	return DamageEvent.from_dict({
+	return DAMAGE_EVENT_SCRIPT.from_dict({
 		"event_id": projectile_id,
 		"sequence": projectile_id,
 		"source_kind": source_kind,
@@ -179,7 +180,7 @@ func _create_damage_event(hit_position: Vector3, hit_normal: Vector3) -> DamageE
 		"world_position": hit_position,
 		"normal": hit_normal,
 		"direction": direction,
-		"brush_kind": DamageEvent.BRUSH_CAPSULE,
+		"brush_kind": DAMAGE_EVENT_SCRIPT.BRUSH_CAPSULE,
 		"radius": float(profile.get(
 			"destruction_radius",
 			BallisticProjectileDefinition.DEFAULT_DESTRUCTION_RADIUS
@@ -201,7 +202,7 @@ func _create_damage_event(hit_position: Vector3, hit_normal: Vector3) -> DamageE
 			"damage_tags",
 			PackedStringArray(["ballistic"])
 		),
-		"seed": DamageEvent.deterministic_seed(
+		"seed": DAMAGE_EVENT_SCRIPT.deterministic_seed(
 			volume_id,
 			projectile_id,
 			source_id,

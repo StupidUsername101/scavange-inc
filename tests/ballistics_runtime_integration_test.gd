@@ -37,6 +37,7 @@ var failure_count := 0
 var sound_sequence_before_impact := 0
 var expected_impact_sound_id: StringName = &""
 var received_impact_packet: Dictionary = {}
+var received_impact_packet_count := 0
 
 
 func _init() -> void:
@@ -142,7 +143,7 @@ func _on_physics_frame() -> void:
 		)
 		_expect(
 			expected_impact_sound_id == &"projectile_impact_9mm"
-			and int(server.get("next_spatial_sound_sequence")) == sound_sequence_before_impact + 1,
+			and int(server.get("next_spatial_sound_sequence")) >= sound_sequence_before_impact + 1,
 			"projectile impact emits one server-routed ammunition cue"
 		)
 	if impact_observed and elapsed >= impact_observed_at + 0.1:
@@ -158,7 +159,8 @@ func _on_physics_frame() -> void:
 				rendered_voice = true
 				break
 		_expect(
-			received_impact_packet.get("sound_id", &"") == &"projectile_impact_9mm",
+			received_impact_packet.get("sound_id", &"") == &"projectile_impact_9mm"
+			and received_impact_packet_count == 1,
 			"nearby client receives the resolved 9mm impact packet"
 		)
 		var modifier_ids: PackedStringArray = received_impact_packet.get(
@@ -187,6 +189,7 @@ func _on_physics_frame() -> void:
 
 func _on_spatial_sound_received(packet: Dictionary) -> void:
 	if packet.get("sound_id", &"") == &"projectile_impact_9mm":
+		received_impact_packet_count += 1
 		received_impact_packet = packet.duplicate(false)
 
 

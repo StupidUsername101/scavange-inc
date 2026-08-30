@@ -114,6 +114,21 @@ func _test_volume_replay_and_collision_swap() -> void:
 		server_volume.field.sample_distance(Vector3.ZERO) > 0.0,
 		"the high-energy impact leaves an actual air channel through the wall"
 	)
+	var intact_shell_query := PhysicsRayQueryParameters3D.create(
+		server_volume.to_global(Vector3(0.52, 0.0, 1.0)),
+		server_volume.to_global(Vector3(0.52, 0.0, -1.0))
+	)
+	intact_shell_query.collide_with_areas = false
+	var intact_shell_hit := server_volume.get_world_3d().direct_space_state.intersect_ray(
+		intact_shell_query
+	)
+	var intact_shell_collider := intact_shell_hit.get("collider") as Node
+	_expect(
+		not intact_shell_hit.is_empty()
+		and intact_shell_collider != null
+		and intact_shell_collider.has_method("apply_damage_event"),
+		"generated clockwise shell faces remain solid away from the bullet channel"
+	)
 
 	var replay_result := client_volume.apply_replicated_damage_event(committed_event, 0)
 	client_volume.flush_pending_rebuilds()

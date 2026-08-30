@@ -9,6 +9,9 @@ const LOCAL_AUDIO_PREDICTION_RUNTIME := preload(
 const RADIO_STATE_SNAPSHOT_CODEC := preload(
 	"res://scripts/audio/radio_state_snapshot_codec.gd"
 )
+const DAMAGE_EVENT_SCRIPT := preload(
+	"res://scripts/destruction/damage_event.gd"
+)
 
 const HOST_RPC_ID = 1
 const PLAYER_PROXY_SCENE := preload("res://scenes/proxy/player_proxy.tscn")
@@ -57,7 +60,10 @@ var projectile_proxies_by_id: Dictionary[int, ProjectileProxy] = {}
 var drone_part_proxies_by_id: Dictionary[int, Node3D] = {}
 var rope_proxies_by_rope_id: Dictionary[int, RopeProxy] = {}
 var enemy_proxies_by_enemy_id: Dictionary[int, EnemyProxy] = {}
-var destructible_volumes_by_id: Dictionary[StringName, DestructibleVolume3D] = {}
+# Client is an autoload and may parse before a fresh clone has rebuilt global script-class caches.
+# The runtime contract is deliberately structural at this boundary; the scene script still owns the
+# strongly typed SDF internals.
+var destructible_volumes_by_id: Dictionary = {}
 var pending_destruction_events: Array[Dictionary] = []
 var pending_destruction_checkpoints: Dictionary[StringName, Dictionary] = {}
 var fieldlink_device_beacons: Array[Node3D] = []
@@ -421,12 +427,18 @@ func _index_client_destructible_volumes() -> void:
 	var candidates: Array[Node] = [client_world]
 	candidates.append_array(client_world.find_children("*", "", true, false))
 	for candidate: Node in candidates:
-		var volume := candidate as DestructibleVolume3D
-		if volume == null:
+		if (
+			not candidate.has_method("initialize_volume")
+			or not candidate.has_method("bake_hash")
+			or not candidate.has_method("apply_replicated_damage_event")
+			or not candidate.has_method("apply_checkpoint")
+		):
 			continue
-		volume.initialize_volume()
-		if not volume.volume_id.is_empty():
-			destructible_volumes_by_id[volume.volume_id] = volume
+		var volume := candidate
+		volume.call("initialize_volume")
+		var volume_id := StringName(str(volume.get("volume_id")))
+		if not volume_id.is_empty():
+			destructible_volumes_by_id[volume_id] = volume
 
 
 func _apply_pending_destruction_state() -> void:
@@ -919,38 +931,44 @@ func on_destruction_checkpoint_received(checkpoint_value: Dictionary) -> void:
 
 func _apply_destruction_event_packet(packet: Dictionary) -> void:
 	var volume_id := StringName(str(packet.get("volume_id", &"")))
-	var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+	var volume := destructible_volumes_by_id.get(volume_id) as Node
 	if volume == null:
 		_request_destruction_checkpoint(volume_id)
 		return
-	if int(packet.get("bake_hash", -1)) != volume.bake_hash():
+	if int(packet.get("bake_hash", -1)) != int(volume.call("bake_hash")):
 		_request_destruction_checkpoint(volume_id)
 		return
 	var event_value: Variant = packet.get("event", {})
 	if not event_value is Dictionary:
 		_request_destruction_checkpoint(volume_id)
 		return
-	var result := volume.apply_replicated_damage_event(
-		DamageEvent.from_dict(event_value),
+	var result: Dictionary = volume.call(
+		"apply_replicated_damage_event",
+		DAMAGE_EVENT_SCRIPT.from_dict(event_value),
 		int(packet.get("from_revision", -1))
 	)
+	var field: Variant = volume.get("field")
 	if (
 		not bool(result.get("changed", false))
-		or volume.field.revision != int(packet.get("to_revision", -1))
-		or volume.field.checksum() != int(packet.get("checksum", -1))
+		or field == null
+		or int(field.get("revision")) != int(packet.get("to_revision", -1))
+		or int(field.call("checksum")) != int(packet.get("checksum", -1))
 	):
 		_request_destruction_checkpoint(volume_id)
 
 
 func _apply_destruction_checkpoint(checkpoint: Dictionary) -> void:
 	var volume_id := StringName(str(checkpoint.get("volume_id", &"")))
-	var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+	var volume := destructible_volumes_by_id.get(volume_id) as Node
 	if volume == null:
 		pending_destruction_checkpoints[volume_id] = checkpoint.duplicate(true)
 		return
+	var applied := bool(volume.call("apply_checkpoint", checkpoint))
+	var field: Variant = volume.get("field")
 	if (
-		not volume.apply_checkpoint(checkpoint)
-		or volume.field.checksum() != int(checkpoint.get("checksum", -1))
+		not applied
+		or field == null
+		or int(field.call("checksum")) != int(checkpoint.get("checksum", -1))
 	):
 		_request_destruction_checkpoint(volume_id)
 

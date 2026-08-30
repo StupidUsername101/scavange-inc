@@ -10,17 +10,17 @@ const MAX_PAYLOAD_BYTES := 256 * 1024 * 1024
 
 
 static func snapshot_for_volumes(
-	volumes: Array[DestructibleVolume3D],
+	volumes: Array,
 	world_id: StringName = &"game"
 ) -> Dictionary:
 	var ordered := volumes.duplicate()
-	ordered.sort_custom(func(left: DestructibleVolume3D, right: DestructibleVolume3D) -> bool:
-		return str(left.volume_id) < str(right.volume_id)
+	ordered.sort_custom(func(left: Variant, right: Variant) -> bool:
+		return str(left.get("volume_id")) < str(right.get("volume_id"))
 	)
 	var checkpoints: Array[Dictionary] = []
-	for volume: DestructibleVolume3D in ordered:
-		if volume != null:
-			checkpoints.append(volume.checkpoint())
+	for volume: Variant in ordered:
+		if volume is Node and volume.has_method("checkpoint"):
+			checkpoints.append(volume.call("checkpoint"))
 	return {
 		"schema": SCHEMA_VERSION,
 		"world_id": world_id,
@@ -30,7 +30,7 @@ static func snapshot_for_volumes(
 
 static func apply_snapshot(
 	snapshot: Dictionary,
-	volumes_by_id: Dictionary[StringName, DestructibleVolume3D]
+	volumes_by_id: Dictionary
 ) -> Dictionary:
 	if int(snapshot.get("schema", -1)) != SCHEMA_VERSION:
 		return {"ok": false, "reason": &"schema_mismatch", "applied": 0, "rejected": 0}
@@ -45,11 +45,11 @@ static func apply_snapshot(
 			rejected += 1
 			continue
 		var volume_id := StringName(str(raw_checkpoint.get("volume_id", &"")))
-		var volume := volumes_by_id.get(volume_id) as DestructibleVolume3D
-		if volume == null:
+		var volume := volumes_by_id.get(volume_id) as Node
+		if volume == null or not volume.has_method("apply_checkpoint"):
 			missing += 1
 			continue
-		if volume.apply_checkpoint(raw_checkpoint):
+		if bool(volume.call("apply_checkpoint", raw_checkpoint)):
 			applied += 1
 		else:
 			rejected += 1

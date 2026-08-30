@@ -171,18 +171,71 @@ func _test_dual_contouring_output() -> void:
 	var triangle_count := 0
 	var finite_vertices := true
 	var valid_topology := true
+	var generated_bounds := AABB()
+	var has_generated_bounds := false
+	var front_shell_vertices := 0
+	var back_shell_vertices := 0
+	var expected_shell_depth := volume.half_extents.z - volume.voxel_size * 1.5
+	var aligned_triangle_normals := 0
+	var opposed_triangle_normals := 0
+	var empty_render_chunks := 0
 	for coordinate: Vector3i in render_chunks:
 		var mesh_result := SdfDualContouringMesher.build_chunk(volume, coordinate)
 		var vertices: PackedVector3Array = mesh_result.get("vertices", PackedVector3Array())
 		var indices: PackedInt32Array = mesh_result.get("indices", PackedInt32Array())
+		var normals: PackedVector3Array = mesh_result.get("normals", PackedVector3Array())
+		if bool(mesh_result.get("empty", true)):
+			empty_render_chunks += 1
 		triangle_count += int(mesh_result.get("triangle_count", 0))
 		valid_topology = valid_topology and indices.size() % 3 == 0
+		for triangle_offset: int in range(0, indices.size(), 3):
+			var first_index := indices[triangle_offset]
+			var second_index := indices[triangle_offset + 1]
+			var third_index := indices[triangle_offset + 2]
+			var face_normal := (
+				(vertices[second_index] - vertices[first_index]).cross(
+					vertices[third_index] - vertices[first_index]
+				)
+			)
+			var authored_normal := (
+				normals[first_index] + normals[second_index] + normals[third_index]
+			)
+			if face_normal.dot(authored_normal) >= 0.0:
+				aligned_triangle_normals += 1
+			else:
+				opposed_triangle_normals += 1
 		for vertex: Vector3 in vertices:
 			finite_vertices = finite_vertices and vertex.is_finite()
+			if not has_generated_bounds:
+				generated_bounds = AABB(vertex, Vector3.ZERO)
+				has_generated_bounds = true
+			else:
+				generated_bounds = generated_bounds.expand(vertex)
+			if vertex.z >= expected_shell_depth:
+				front_shell_vertices += 1
+			if vertex.z <= -expected_shell_depth:
+				back_shell_vertices += 1
 	var state := volume.debug_state()
 	_expect(
 		triangle_count > 0 and valid_topology and finite_vertices,
 		"dual contouring emits finite triangle topology for all affected chunks"
+	)
+	_expect(
+		has_generated_bounds
+		and generated_bounds.size.x >= volume.brick_extent * 2.5
+		and generated_bounds.size.y >= volume.brick_extent * 2.5
+		and generated_bounds.size.z >= volume.size.z * 0.75
+		and front_shell_vertices > 8
+		and back_shell_vertices > 8,
+		"remeshing a bullet impact retains the surrounding wall shell on both exterior faces"
+	)
+	_expect(
+		opposed_triangle_normals > aligned_triangle_normals * 8,
+		"generated triangle winding is clockwise relative to the SDF exterior normals"
+	)
+	_expect(
+		empty_render_chunks == 0,
+		"every hidden base chunk has replacement shell topology"
 	)
 	_expect(
 		int(state.get("brick_count", 0)) < (

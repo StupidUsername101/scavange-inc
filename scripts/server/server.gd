@@ -67,6 +67,9 @@ const SERVER_DRONE_PART_SCENE := preload(
 const FULL_BODY_LOADOUT := preload(
 	"res://resources/character_loadouts/full_body.tres"
 )
+const DESTRUCTION_CHECKPOINT_STORE_SCRIPT := preload(
+	"res://scripts/destruction/destruction_checkpoint_store.gd"
+)
 
 #######################################################
 # Coordinates authoritative multiplayer state, world entities, interactions, Steam lobby flow,
@@ -93,7 +96,10 @@ var server_drones_by_drone_id: Dictionary[int, ServerDrone] = {}
 var server_projectiles_by_id: Dictionary[int, ServerProjectile] = {}
 var server_drone_parts_by_id: Dictionary[int, RigidBody3D] = {}
 var server_enemies_by_enemy_id: Dictionary[int, ServerEnemy] = {}
-var destructible_volumes_by_id: Dictionary[StringName, DestructibleVolume3D] = {}
+# Autoloads are parsed before a newly cloned project has necessarily rebuilt Godot's global class
+# cache. Keep this scene-facing registry structural so adding the destruction plugin cannot make the
+# entire game fail at server.gd parse time on first launch.
+var destructible_volumes_by_id: Dictionary = {}
 var inspection_stations_by_id: Dictionary[int, Node3D] = {}
 var body_part_shop_terminals_by_id: Dictionary[int, Node3D] = {}
 var weapon_crafting_stations_by_id: Dictionary[int, Node3D] = {}
@@ -857,11 +863,16 @@ func rebuild_server_acoustics() -> void:
 
 
 func on_destructible_volume_changed(
-	volume: DestructibleVolume3D,
-	event: DamageEvent,
+	volume: Node,
+	event: RefCounted,
 	result: Dictionary
 ) -> void:
-	if not multiplayer.is_server() or volume == null or event == null:
+	if (
+		not multiplayer.is_server()
+		or volume == null
+		or event == null
+		or not event.has_method("to_dict")
+	):
 		return
 	var changed_bounds: AABB = result.get("world_changed_bounds", AABB())
 	if (
@@ -870,13 +881,17 @@ func on_destructible_volume_changed(
 		and changed_bounds.size.length_squared() > 0.0
 	):
 		acoustic_service.invalidate_aabb(changed_bounds, false)
+	var field: Variant = volume.get("field")
+	if field == null:
+		return
+	var revision := int(field.get("revision"))
 	Client.rpc("on_destruction_event_received", {
-		"volume_id": volume.volume_id,
-		"bake_hash": volume.bake_hash(),
-		"from_revision": int(result.get("from_revision", volume.field.revision - 1)),
-		"to_revision": volume.field.revision,
-		"checksum": volume.field.checksum(),
-		"event": event.to_dict(true),
+		"volume_id": StringName(str(volume.get("volume_id"))),
+		"bake_hash": int(volume.call("bake_hash")),
+		"from_revision": int(result.get("from_revision", revision - 1)),
+		"to_revision": revision,
+		"checksum": int(field.call("checksum")),
+		"event": event.call("to_dict", true),
 	})
 
 
@@ -884,37 +899,43 @@ func publish_destruction_checkpoints_to_peer(peer_id: int) -> void:
 	if not _is_rpc_peer_reachable(peer_id):
 		return
 	for volume_id: StringName in destructible_volumes_by_id.keys():
-		var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+		var volume := destructible_volumes_by_id.get(volume_id) as Node
 		if volume != null:
 			Client.rpc_id(
 				peer_id,
 				"on_destruction_checkpoint_received",
-				volume.checkpoint()
+				volume.call("checkpoint")
 			)
 
 
 func create_destruction_snapshot(world_id: StringName = &"game") -> Dictionary:
-	var volumes: Array[DestructibleVolume3D] = []
+	var volumes: Array = []
 	for volume_id: StringName in destructible_volumes_by_id.keys():
-		var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+		var volume := destructible_volumes_by_id.get(volume_id) as Node
 		if volume != null:
 			volumes.append(volume)
-	return DestructionCheckpointStore.snapshot_for_volumes(volumes, world_id)
+	return DESTRUCTION_CHECKPOINT_STORE_SCRIPT.snapshot_for_volumes(volumes, world_id)
 
 
 func save_destruction_snapshot(path: String, world_id: StringName = &"game") -> Error:
 	if not multiplayer.is_server():
 		return ERR_UNAUTHORIZED
-	return DestructionCheckpointStore.save_snapshot(path, create_destruction_snapshot(world_id))
+	return DESTRUCTION_CHECKPOINT_STORE_SCRIPT.save_snapshot(
+		path,
+		create_destruction_snapshot(world_id)
+	)
 
 
 func load_destruction_snapshot(path: String) -> Dictionary:
 	if not multiplayer.is_server():
 		return {"ok": false, "reason": &"not_authority"}
-	var snapshot := DestructionCheckpointStore.load_snapshot(path)
+	var snapshot: Dictionary = DESTRUCTION_CHECKPOINT_STORE_SCRIPT.load_snapshot(path)
 	if snapshot.is_empty():
 		return {"ok": false, "reason": &"invalid_or_missing_file"}
-	var result := DestructionCheckpointStore.apply_snapshot(snapshot, destructible_volumes_by_id)
+	var result: Dictionary = DESTRUCTION_CHECKPOINT_STORE_SCRIPT.apply_snapshot(
+		snapshot,
+		destructible_volumes_by_id
+	)
 	if bool(result.get("ok", false)):
 		for peer_id: int in multiplayer.get_peers():
 			publish_destruction_checkpoints_to_peer(peer_id)
@@ -929,12 +950,12 @@ func request_destruction_checkpoint(volume_value: StringName) -> void:
 	if not _is_rpc_peer_reachable(peer_id):
 		return
 	var volume_id := StringName(str(volume_value))
-	var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+	var volume := destructible_volumes_by_id.get(volume_id) as Node
 	if volume != null:
 		Client.rpc_id(
 			peer_id,
 			"on_destruction_checkpoint_received",
-			volume.checkpoint()
+			volume.call("checkpoint")
 		)
 
 
@@ -945,28 +966,35 @@ func _register_server_destructible_volumes() -> void:
 	var candidates: Array[Node] = [server_world]
 	candidates.append_array(server_world.find_children("*", "", true, false))
 	for candidate: Node in candidates:
-		var volume := candidate as DestructibleVolume3D
-		if volume == null:
+		if (
+			not candidate.has_method("initialize_volume")
+			or not candidate.has_method("bake_hash")
+			or not candidate.has_method("world_bounds")
+			or not candidate.has_method("checkpoint")
+		):
 			continue
-		volume.initialize_volume()
-		if volume.volume_id.is_empty() or destructible_volumes_by_id.has(volume.volume_id):
-			push_error("Duplicate or empty destructible volume id: %s" % volume.volume_id)
+		var volume := candidate
+		volume.call("initialize_volume")
+		var volume_id := StringName(str(volume.get("volume_id")))
+		if volume_id.is_empty() or destructible_volumes_by_id.has(volume_id):
+			push_error("Duplicate or empty destructible volume id: %s" % volume_id)
 			continue
-		destructible_volumes_by_id[volume.volume_id] = volume
-		var spatial_key := StringName("destructible:%s" % volume.volume_id)
+		destructible_volumes_by_id[volume_id] = volume
+		var spatial_key := StringName("destructible:%s" % volume_id)
 		spatial_hash.register_bounds(
 			spatial_key,
 			volume,
 			&"destructible",
-			hash(str(volume.volume_id)),
-			volume.world_bounds(),
+			hash(str(volume_id)),
+			volume.call("world_bounds"),
 			{
-				"volume_id": volume.volume_id,
-				"bake_hash": volume.bake_hash(),
+				"volume_id": volume_id,
+				"bake_hash": int(volume.call("bake_hash")),
 			}
 		)
-		volume.acoustic_aperture_changed.connect(
-			_on_destructible_acoustic_aperture_changed.bind(volume.volume_id)
+		volume.connect(
+			&"acoustic_aperture_changed",
+			_on_destructible_acoustic_aperture_changed.bind(volume_id)
 		)
 
 
