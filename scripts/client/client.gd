@@ -57,6 +57,9 @@ var projectile_proxies_by_id: Dictionary[int, ProjectileProxy] = {}
 var drone_part_proxies_by_id: Dictionary[int, Node3D] = {}
 var rope_proxies_by_rope_id: Dictionary[int, RopeProxy] = {}
 var enemy_proxies_by_enemy_id: Dictionary[int, EnemyProxy] = {}
+var destructible_volumes_by_id: Dictionary[StringName, DestructibleVolume3D] = {}
+var pending_destruction_events: Array[Dictionary] = []
+var pending_destruction_checkpoints: Dictionary[StringName, Dictionary] = {}
 var fieldlink_device_beacons: Array[Node3D] = []
 
 var client_world: Node3D
@@ -93,6 +96,9 @@ func reset_session() -> void:
 	drone_part_proxies_by_id.clear()
 	rope_proxies_by_rope_id.clear()
 	enemy_proxies_by_enemy_id.clear()
+	destructible_volumes_by_id.clear()
+	pending_destruction_events.clear()
+	pending_destruction_checkpoints.clear()
 	fieldlink_device_beacons.clear()
 	local_player_id = -1
 	grab_rotation_mode_sent = false
@@ -404,6 +410,33 @@ func spawn_client_world() -> void:
 
 	client_world = CLIENT_WORLD_SCENE.instantiate()
 	get_tree().current_scene.add_child(client_world)
+	_index_client_destructible_volumes()
+	_apply_pending_destruction_state()
+
+
+func _index_client_destructible_volumes() -> void:
+	destructible_volumes_by_id.clear()
+	if client_world == null:
+		return
+	var candidates: Array[Node] = [client_world]
+	candidates.append_array(client_world.find_children("*", "", true, false))
+	for candidate: Node in candidates:
+		var volume := candidate as DestructibleVolume3D
+		if volume == null:
+			continue
+		volume.initialize_volume()
+		if not volume.volume_id.is_empty():
+			destructible_volumes_by_id[volume.volume_id] = volume
+
+
+func _apply_pending_destruction_state() -> void:
+	for volume_id: StringName in pending_destruction_checkpoints.keys():
+		_apply_destruction_checkpoint(pending_destruction_checkpoints[volume_id])
+	pending_destruction_checkpoints.clear()
+	var queued_events := pending_destruction_events.duplicate(false)
+	pending_destruction_events.clear()
+	for packet: Dictionary in queued_events:
+		_apply_destruction_event_packet(packet)
 
 #####################################################
 ### PROCESSING
@@ -862,6 +895,70 @@ func on_spatial_sound_received(packet: Dictionary) -> void:
 	spatial_sound_received.emit(sanitized)
 	_ensure_spatial_audio_renderer()
 	spatial_audio_renderer.submit(sanitized)
+
+
+@rpc("authority", "call_local", "reliable", 3)
+func on_destruction_event_received(packet_value: Dictionary) -> void:
+	var packet := packet_value.duplicate(false)
+	if client_world == null:
+		pending_destruction_events.append(packet)
+		return
+	_apply_destruction_event_packet(packet)
+
+
+@rpc("authority", "call_local", "reliable", 3)
+func on_destruction_checkpoint_received(checkpoint_value: Dictionary) -> void:
+	var volume_id := StringName(str(checkpoint_value.get("volume_id", &"")))
+	if volume_id.is_empty():
+		return
+	if client_world == null:
+		pending_destruction_checkpoints[volume_id] = checkpoint_value.duplicate(true)
+		return
+	_apply_destruction_checkpoint(checkpoint_value)
+
+
+func _apply_destruction_event_packet(packet: Dictionary) -> void:
+	var volume_id := StringName(str(packet.get("volume_id", &"")))
+	var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+	if volume == null:
+		_request_destruction_checkpoint(volume_id)
+		return
+	if int(packet.get("bake_hash", -1)) != volume.bake_hash():
+		_request_destruction_checkpoint(volume_id)
+		return
+	var event_value: Variant = packet.get("event", {})
+	if not event_value is Dictionary:
+		_request_destruction_checkpoint(volume_id)
+		return
+	var result := volume.apply_replicated_damage_event(
+		DamageEvent.from_dict(event_value),
+		int(packet.get("from_revision", -1))
+	)
+	if (
+		not bool(result.get("changed", false))
+		or volume.field.revision != int(packet.get("to_revision", -1))
+		or volume.field.checksum() != int(packet.get("checksum", -1))
+	):
+		_request_destruction_checkpoint(volume_id)
+
+
+func _apply_destruction_checkpoint(checkpoint: Dictionary) -> void:
+	var volume_id := StringName(str(checkpoint.get("volume_id", &"")))
+	var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+	if volume == null:
+		pending_destruction_checkpoints[volume_id] = checkpoint.duplicate(true)
+		return
+	if (
+		not volume.apply_checkpoint(checkpoint)
+		or volume.field.checksum() != int(checkpoint.get("checksum", -1))
+	):
+		_request_destruction_checkpoint(volume_id)
+
+
+func _request_destruction_checkpoint(volume_id: StringName) -> void:
+	if volume_id.is_empty() or not _has_connected_multiplayer_peer():
+		return
+	Server.rpc_id(HOST_RPC_ID, "request_destruction_checkpoint", volume_id)
 
 
 @rpc("authority", "unreliable_ordered", "call_local", 7)

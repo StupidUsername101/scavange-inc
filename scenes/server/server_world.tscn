@@ -14,6 +14,7 @@
 [ext_resource type="PackedScene" path="res://scenes/server/weapon_crafting_station.tscn" id="12_weapon_station"]
 [ext_resource type="PackedScene" path="res://scenes/server/speaker_cluster_demo.tscn" id="13_speaker_cluster"]
 [ext_resource type="PackedScene" path="res://scenes/server/acoustic_maze.tscn" id="14_acoustic_maze"]
+[ext_resource type="PackedScene" path="res://scenes/server/destruction_field_test.tscn" id="17_destruction_test"]
 
 [sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_ground"]
 
@@ -69,3 +70,6 @@ position = Vector3(6, 0, -48)
 
 [node name="AcousticMaze" parent="." instance=ExtResource("14_acoustic_maze")]
 position = Vector3(150, 0.02, -10)
+
+[node name="DestructionFieldTest" parent="." instance=ExtResource("17_destruction_test")]
+position = Vector3(-22, 0, -12)

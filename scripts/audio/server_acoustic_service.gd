@@ -150,6 +150,9 @@ var _bake_cache_rejection_count := 0
 var _cumulative_transmission_query_count := 0
 var _cumulative_transmission_crossing_count := 0
 var _early_reflection_solve_count := 0
+var _local_geometry_invalidation_count := 0
+var _local_geometry_invalidated_path_count := 0
+var _local_geometry_invalidated_attachment_count := 0
 
 
 func bind_world(world: Node3D) -> void:
@@ -177,6 +180,57 @@ func request_rebuild() -> void:
 		return
 	_rebuild_pending = true
 	call_deferred("_rebuild_from_world")
+
+
+func invalidate_aabb(world_bounds: AABB, topology_changed := false) -> void:
+	# Destruction usually changes a tiny portion of the map. Throw away only cached paths whose
+	# source-listener segment can cross that region, plus endpoint attachments sitting in it. Probe
+	# topology remains baked until an authored aperture threshold is crossed.
+	if (
+		not world_bounds.position.is_finite()
+		or not world_bounds.size.is_finite()
+		or world_bounds.size.x < 0.0
+		or world_bounds.size.y < 0.0
+		or world_bounds.size.z < 0.0
+	):
+		return
+	_local_geometry_invalidation_count += 1
+	var invalidated_state_keys: Dictionary[Vector2i, bool] = {}
+	for path_key: Vector2i in _direct_paths_by_source.keys():
+		var cached: Dictionary = _direct_paths_by_source.get(path_key, {})
+		var listener_position: Vector3 = cached.get(
+			"listener_position",
+			Vector3(INF, INF, INF)
+		)
+		var source_position: Vector3 = cached.get(
+			"source_position",
+			Vector3(INF, INF, INF)
+		)
+		if (
+			listener_position.is_finite()
+			and source_position.is_finite()
+			and _segment_bounds(listener_position, source_position).intersects(world_bounds)
+		):
+			_direct_paths_by_source.erase(path_key)
+			invalidated_state_keys[path_key] = true
+			_local_geometry_invalidated_path_count += 1
+	for source_id: int in _source_attachments_by_id.keys():
+		var attachment := _source_attachments_by_id.get(source_id) as AcousticSourceAttachment
+		if attachment != null and world_bounds.grow(SOURCE_ATTACHMENT_REFRESH_DISTANCE).has_point(
+			attachment.source_position
+		):
+			_source_attachments_by_id.erase(source_id)
+			_local_geometry_invalidated_attachment_count += 1
+			for state_key: Vector2i in _continuous_result_states.keys():
+				if state_key.y == source_id:
+					invalidated_state_keys[state_key] = true
+	for state_key: Vector2i in invalidated_state_keys.keys():
+		_continuous_result_states.erase(state_key)
+		_early_reflection_states.erase(state_key)
+	# A newly useful opening changes probe connectivity, which the current acoustic graph bakes as a
+	# whole. Keep this one explicit fallback until graph-edge ownership is partitioned spatially.
+	if topology_changed:
+		request_rebuild()
 
 
 func calculate_listener_result(
@@ -1645,6 +1699,11 @@ func get_debug_state() -> Dictionary:
 		"cached_early_reflection_states": _early_reflection_states.size(),
 		"hybrid_early_reflections_enabled": enable_hybrid_early_reflections,
 		"early_reflection_solve_count": _early_reflection_solve_count,
+		"local_geometry_invalidation_count": _local_geometry_invalidation_count,
+		"local_geometry_invalidated_path_count": _local_geometry_invalidated_path_count,
+		"local_geometry_invalidated_attachment_count": (
+			_local_geometry_invalidated_attachment_count
+		),
 		"early_reflection_refresh_distance": EARLY_REFLECTION_REFRESH_DISTANCE,
 		"visibility_ray_count": _visibility_ray_count,
 		"environment_ray_count": _environment_ray_count,
@@ -1686,6 +1745,20 @@ func get_debug_state() -> Dictionary:
 	}
 	result.merge(static_boundary_bake.debug_state(), true)
 	return result
+
+
+static func _segment_bounds(start: Vector3, end: Vector3) -> AABB:
+	var minimum := Vector3(
+		minf(start.x, end.x),
+		minf(start.y, end.y),
+		minf(start.z, end.z)
+	)
+	var maximum := Vector3(
+		maxf(start.x, end.x),
+		maxf(start.y, end.y),
+		maxf(start.z, end.z)
+	)
+	return AABB(minimum, maximum - minimum).grow(0.02)
 
 
 func _rebuild_from_world() -> void:

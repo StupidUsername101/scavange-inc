@@ -7,6 +7,8 @@ const DEFAULT_MUZZLE_VELOCITY := 60.0
 const DEFAULT_MAXIMUM_RANGE := 40.0
 const DEFAULT_GRAVITY_SCALE := 1.0
 const DEFAULT_IMPACT_IMPULSE := 0.8
+const DEFAULT_DESTRUCTION_RADIUS := 0.045
+const DEFAULT_PENETRATION_DEPTH := 0.8
 const DEFAULT_IMPACT_SOUND_ID := &"projectile_impact_generic"
 const DEFAULT_IMPACT_SOUND_MAX_DISTANCE := 68.0
 const DEFAULT_IMPACT_SOUND_VOLUME_DB := 4.0
@@ -39,6 +41,17 @@ const MIN_TRACER_RADIUS := 0.002
 @export_range(0.0, 1000.0, 0.01, "or_greater") var impact_impulse := (
 	DEFAULT_IMPACT_IMPULSE
 )
+
+@export_group("Material Damage")
+## Negative derives the material energy from damage, preserving every existing ammunition resource.
+@export_range(-1.0, 1000000.0, 0.1, "or_greater") var destruction_energy := -1.0
+@export_range(0.005, 2.0, 0.005, "or_greater") var destruction_radius := (
+	DEFAULT_DESTRUCTION_RADIUS
+)
+@export_range(0.0, 32.0, 0.01, "or_greater") var penetration_depth := (
+	DEFAULT_PENETRATION_DEPTH
+)
+@export var damage_tags := PackedStringArray(["ballistic"])
 
 @export_group("Impact Audio")
 @export var impact_sound_id := DEFAULT_IMPACT_SOUND_ID
@@ -74,6 +87,14 @@ func to_ballistic_profile() -> Dictionary:
 		"maximum_range": maxf(maximum_range, MIN_MAXIMUM_RANGE),
 		"gravity_scale": maxf(gravity_scale, 0.0),
 		"impact_impulse": maxf(impact_impulse, 0.0),
+		"destruction_energy": (
+			maxf(destruction_energy, 0.0)
+			if destruction_energy >= 0.0
+			else maxf(damage, 0.0)
+		),
+		"destruction_radius": maxf(destruction_radius, 0.005),
+		"penetration_depth": maxf(penetration_depth, 0.0),
+		"damage_tags": _normalized_damage_tags(damage_tags),
 		"impact_sound_id": (
 			impact_sound_id
 			if not impact_sound_id.is_empty()
@@ -121,6 +142,21 @@ static func normalize_profile(value: Dictionary) -> Dictionary:
 	result["impact_impulse"] = maxf(
 		float(result.get("impact_impulse", 0.0)),
 		0.0
+	)
+	result["destruction_energy"] = maxf(
+		float(result.get("destruction_energy", result.get("damage", 0.0))),
+		0.0
+	)
+	result["destruction_radius"] = maxf(
+		float(result.get("destruction_radius", DEFAULT_DESTRUCTION_RADIUS)),
+		0.005
+	)
+	result["penetration_depth"] = maxf(
+		float(result.get("penetration_depth", DEFAULT_PENETRATION_DEPTH)),
+		0.0
+	)
+	result["damage_tags"] = _normalized_damage_tags(
+		result.get("damage_tags", PackedStringArray(["ballistic"]))
 	)
 	var impact_id := StringName(str(result.get(
 		"impact_sound_id",
@@ -172,4 +208,20 @@ static func normalize_profile(value: Dictionary) -> Dictionary:
 		float(result.get("tracer_radius", DEFAULT_TRACER_RADIUS)),
 		MIN_TRACER_RADIUS
 	)
+	return result
+
+
+static func _normalized_damage_tags(value: Variant) -> PackedStringArray:
+	var unique: Dictionary[StringName, bool] = {}
+	if value is PackedStringArray or value is Array:
+		for raw_tag: Variant in value:
+			var tag := StringName(str(raw_tag).to_lower())
+			if not tag.is_empty():
+				unique[tag] = true
+	if unique.is_empty():
+		unique[DamageEvent.TAG_BALLISTIC] = true
+	var result := PackedStringArray()
+	for tag: StringName in unique.keys():
+		result.append(str(tag))
+	result.sort()
 	return result

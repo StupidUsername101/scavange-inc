@@ -3,6 +3,7 @@ extends Node3D
 
 const WORLD_GRAVITY := 9.8
 const MINIMUM_MOTION_LENGTH_SQUARED := 0.000001
+const MAX_STALE_DESTRUCTIBLE_HITS_PER_TICK := 8
 # Keep the acoustic ray origin outside the collider it just struck. Starting exactly on the
 # contact plane makes the propagation ray immediately re-hit that surface and falsely treats an
 # exposed impact as sound transmitted through a wall.
@@ -90,10 +91,7 @@ func server_physics_tick(delta: float) -> void:
 		motion = motion.normalized() * remaining_range
 	var finish := start + motion
 	var step_distance := start.distance_to(finish)
-	var query := PhysicsRayQueryParameters3D.create(start, finish)
-	query.exclude = excluded_rids
-	query.collide_with_areas = false
-	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var hit := _first_current_physics_hit(start, finish)
 	if not hit.is_empty():
 		global_position = hit.get("position", finish)
 		_resolve_impact(hit)
@@ -112,7 +110,9 @@ func _resolve_impact(hit: Dictionary) -> void:
 	var collider := hit.get("collider") as Node
 	var hit_position: Vector3 = hit.get("position", global_position)
 	var hit_normal: Vector3 = hit.get("normal", Vector3.ZERO)
-	if collider != null and collider.has_method("apply_damage"):
+	if collider != null and collider.has_method("apply_damage_event"):
+		collider.call("apply_damage_event", _create_damage_event(hit_position, hit_normal))
+	elif collider != null and collider.has_method("apply_damage"):
 		collider.call("apply_damage", float(profile.get("damage", 0.0)))
 
 	var rigid_body := collider as RigidBody3D
@@ -131,6 +131,93 @@ func _resolve_impact(hit: Dictionary) -> void:
 		)
 	_emit_impact_sound(collider, hit_position, hit_normal)
 	_resolve()
+
+
+func _first_current_physics_hit(start: Vector3, finish: Vector3) -> Dictionary:
+	var tick_exclusions := excluded_rids.duplicate()
+	for _attempt: int in range(MAX_STALE_DESTRUCTIBLE_HITS_PER_TICK):
+		var query := PhysicsRayQueryParameters3D.create(start, finish)
+		query.exclude = tick_exclusions
+		query.collide_with_areas = false
+		var hit := get_world_3d().direct_space_state.intersect_ray(query)
+		if hit.is_empty():
+			return {}
+		var collider := hit.get("collider") as Node
+		if (
+			collider == null
+			or not collider.has_method("accepts_current_sdf_hit")
+			or bool(collider.call(
+				"accepts_current_sdf_hit",
+				hit.get("position", finish),
+				motion_direction(start, finish)
+			))
+		):
+			return hit
+		var rid: RID = hit.get("rid", RID())
+		if not rid.is_valid():
+			return hit
+		tick_exclusions.append(rid)
+	return {}
+
+
+func _create_damage_event(hit_position: Vector3, hit_normal: Vector3) -> DamageEvent:
+	var speed_ratio := clampf(
+		velocity.length() / maxf(
+			float(profile.get("muzzle_velocity", BallisticProjectileDefinition.MIN_MUZZLE_VELOCITY)),
+			BallisticProjectileDefinition.MIN_MUZZLE_VELOCITY
+		),
+		0.0,
+		2.0
+	)
+	var volume_id := &"world"
+	var direction := motion_direction(Vector3.ZERO, velocity)
+	return DamageEvent.from_dict({
+		"event_id": projectile_id,
+		"sequence": projectile_id,
+		"source_kind": source_kind,
+		"source_id": source_id,
+		"world_position": hit_position,
+		"normal": hit_normal,
+		"direction": direction,
+		"brush_kind": DamageEvent.BRUSH_CAPSULE,
+		"radius": float(profile.get(
+			"destruction_radius",
+			BallisticProjectileDefinition.DEFAULT_DESTRUCTION_RADIUS
+		)),
+		"length": float(profile.get(
+			"penetration_depth",
+			BallisticProjectileDefinition.DEFAULT_PENETRATION_DEPTH
+		)),
+		"energy": float(profile.get(
+			"destruction_energy",
+			profile.get("damage", 0.0)
+		)) * speed_ratio * speed_ratio,
+		"impulse": float(profile.get("impact_impulse", 0.0)),
+		"penetration": float(profile.get(
+			"penetration_depth",
+			BallisticProjectileDefinition.DEFAULT_PENETRATION_DEPTH
+		)),
+		"damage_tags": profile.get(
+			"damage_tags",
+			PackedStringArray(["ballistic"])
+		),
+		"seed": DamageEvent.deterministic_seed(
+			volume_id,
+			projectile_id,
+			source_id,
+			source_slot
+		),
+		"timestamp_tick": Engine.get_physics_frames(),
+	})
+
+
+static func motion_direction(start: Vector3, finish: Vector3) -> Vector3:
+	var motion := finish - start
+	return (
+		motion.normalized()
+		if motion.length_squared() > MINIMUM_MOTION_LENGTH_SQUARED
+		else Vector3.FORWARD
+	)
 
 
 static func impact_sound_id_for_profile(value: Dictionary) -> StringName:

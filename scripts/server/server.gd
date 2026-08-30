@@ -93,6 +93,7 @@ var server_drones_by_drone_id: Dictionary[int, ServerDrone] = {}
 var server_projectiles_by_id: Dictionary[int, ServerProjectile] = {}
 var server_drone_parts_by_id: Dictionary[int, RigidBody3D] = {}
 var server_enemies_by_enemy_id: Dictionary[int, ServerEnemy] = {}
+var destructible_volumes_by_id: Dictionary[StringName, DestructibleVolume3D] = {}
 var inspection_stations_by_id: Dictionary[int, Node3D] = {}
 var body_part_shop_terminals_by_id: Dictionary[int, Node3D] = {}
 var weapon_crafting_stations_by_id: Dictionary[int, Node3D] = {}
@@ -295,6 +296,7 @@ func spawn_server_world() -> void:
 
 	server_world = SERVER_WORLD_SCENE.instantiate()
 	add_child(server_world)
+	_register_server_destructible_volumes()
 	acoustic_service.bind_world(server_world)
 
 	print("spawned server world: ", server_world.get_path())
@@ -341,6 +343,7 @@ func register_peer(peer_id: int) -> bool:
 		peer_id,
 		"spawn_client_world"
 	)
+	publish_destruction_checkpoints_to_peer(peer_id)
 	replication_service.publish_all_player_inventories_to_peer(peer_id)
 	replication_service.force_optional_snapshot_refresh()
 
@@ -851,6 +854,129 @@ static func resolve_spatial_pressure_strength(
 func rebuild_server_acoustics() -> void:
 	if acoustic_service != null:
 		acoustic_service.request_rebuild()
+
+
+func on_destructible_volume_changed(
+	volume: DestructibleVolume3D,
+	event: DamageEvent,
+	result: Dictionary
+) -> void:
+	if not multiplayer.is_server() or volume == null or event == null:
+		return
+	var changed_bounds: AABB = result.get("world_changed_bounds", AABB())
+	if (
+		acoustic_service != null
+		and bool(result.get("geometry_changed", true))
+		and changed_bounds.size.length_squared() > 0.0
+	):
+		acoustic_service.invalidate_aabb(changed_bounds, false)
+	Client.rpc("on_destruction_event_received", {
+		"volume_id": volume.volume_id,
+		"bake_hash": volume.bake_hash(),
+		"from_revision": int(result.get("from_revision", volume.field.revision - 1)),
+		"to_revision": volume.field.revision,
+		"checksum": volume.field.checksum(),
+		"event": event.to_dict(true),
+	})
+
+
+func publish_destruction_checkpoints_to_peer(peer_id: int) -> void:
+	if not _is_rpc_peer_reachable(peer_id):
+		return
+	for volume_id: StringName in destructible_volumes_by_id.keys():
+		var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+		if volume != null:
+			Client.rpc_id(
+				peer_id,
+				"on_destruction_checkpoint_received",
+				volume.checkpoint()
+			)
+
+
+func create_destruction_snapshot(world_id: StringName = &"game") -> Dictionary:
+	var volumes: Array[DestructibleVolume3D] = []
+	for volume_id: StringName in destructible_volumes_by_id.keys():
+		var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+		if volume != null:
+			volumes.append(volume)
+	return DestructionCheckpointStore.snapshot_for_volumes(volumes, world_id)
+
+
+func save_destruction_snapshot(path: String, world_id: StringName = &"game") -> Error:
+	if not multiplayer.is_server():
+		return ERR_UNAUTHORIZED
+	return DestructionCheckpointStore.save_snapshot(path, create_destruction_snapshot(world_id))
+
+
+func load_destruction_snapshot(path: String) -> Dictionary:
+	if not multiplayer.is_server():
+		return {"ok": false, "reason": &"not_authority"}
+	var snapshot := DestructionCheckpointStore.load_snapshot(path)
+	if snapshot.is_empty():
+		return {"ok": false, "reason": &"invalid_or_missing_file"}
+	var result := DestructionCheckpointStore.apply_snapshot(snapshot, destructible_volumes_by_id)
+	if bool(result.get("ok", false)):
+		for peer_id: int in multiplayer.get_peers():
+			publish_destruction_checkpoints_to_peer(peer_id)
+	return result
+
+
+@rpc("any_peer", "call_remote", "reliable", 3)
+func request_destruction_checkpoint(volume_value: StringName) -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	if not _is_rpc_peer_reachable(peer_id):
+		return
+	var volume_id := StringName(str(volume_value))
+	var volume := destructible_volumes_by_id.get(volume_id) as DestructibleVolume3D
+	if volume != null:
+		Client.rpc_id(
+			peer_id,
+			"on_destruction_checkpoint_received",
+			volume.checkpoint()
+		)
+
+
+func _register_server_destructible_volumes() -> void:
+	destructible_volumes_by_id.clear()
+	if server_world == null:
+		return
+	var candidates: Array[Node] = [server_world]
+	candidates.append_array(server_world.find_children("*", "", true, false))
+	for candidate: Node in candidates:
+		var volume := candidate as DestructibleVolume3D
+		if volume == null:
+			continue
+		volume.initialize_volume()
+		if volume.volume_id.is_empty() or destructible_volumes_by_id.has(volume.volume_id):
+			push_error("Duplicate or empty destructible volume id: %s" % volume.volume_id)
+			continue
+		destructible_volumes_by_id[volume.volume_id] = volume
+		var spatial_key := StringName("destructible:%s" % volume.volume_id)
+		spatial_hash.register_bounds(
+			spatial_key,
+			volume,
+			&"destructible",
+			hash(str(volume.volume_id)),
+			volume.world_bounds(),
+			{
+				"volume_id": volume.volume_id,
+				"bake_hash": volume.bake_hash(),
+			}
+		)
+		volume.acoustic_aperture_changed.connect(
+			_on_destructible_acoustic_aperture_changed.bind(volume.volume_id)
+		)
+
+
+func _on_destructible_acoustic_aperture_changed(
+	world_bounds: AABB,
+	_revision: int,
+	_volume_id: StringName
+) -> void:
+	if acoustic_service != null:
+		acoustic_service.invalidate_aabb(world_bounds, true)
 
 
 func get_acoustic_debug_state() -> Dictionary:
@@ -3489,6 +3615,7 @@ func _clear_runtime_session() -> void:
 	server_projectiles_by_id.clear()
 	server_drone_parts_by_id.clear()
 	server_enemies_by_enemy_id.clear()
+	destructible_volumes_by_id.clear()
 	inspection_stations_by_id.clear()
 	body_part_shop_terminals_by_id.clear()
 	weapon_crafting_stations_by_id.clear()

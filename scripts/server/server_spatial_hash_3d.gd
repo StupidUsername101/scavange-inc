@@ -52,26 +52,55 @@ func register_entity(
 		"entity_id": entity_id,
 		"metadata": metadata.duplicate(),
 		"cell": cell,
+		"cells": [cell],
+		"bounded": false,
 	}
-	_kind_counts[kind] = int(_kind_counts.get(kind, 0)) + 1
-	var kind_keys: Dictionary = _keys_by_kind.get(kind, {})
-	kind_keys[entity_key] = true
-	_keys_by_kind[kind] = kind_keys
-	var sorted_kind_keys: Array = _sorted_keys_by_kind.get(kind, [])
-	if not sorted_kind_keys.has(entity_key):
-		sorted_kind_keys.append(entity_key)
-		sorted_kind_keys.sort()
-	_sorted_keys_by_kind[kind] = sorted_kind_keys
+	_register_kind_key(entity_key, kind)
 	_insert_into_cell(entity_key, cell)
+
+
+func register_bounds(
+	entity_key: StringName,
+	body: Node3D,
+	kind: StringName,
+	entity_id: int,
+	world_bounds: AABB,
+	metadata: Dictionary = {}
+) -> void:
+	# Large static volumes occupy every broad-phase bucket their bounds touch. The record still
+	# exists once in the kind index, and queries deduplicate it, so callers never register voxels or
+	# create one fake entity per spatial cell.
+	if entity_key.is_empty() or body == null or not _bounds_are_valid(world_bounds):
+		return
+	if _records.has(entity_key):
+		unregister_entity(entity_key)
+	var covered_cells := _cells_for_bounds(world_bounds)
+	_records[entity_key] = {
+		"body": body,
+		"kind": kind,
+		"entity_id": entity_id,
+		"metadata": metadata.duplicate(),
+		"cell": covered_cells[0],
+		"cells": covered_cells,
+		"bounded": true,
+		"bounds": world_bounds,
+	}
+	_register_kind_key(entity_key, kind)
+	for cell: Vector3i in covered_cells:
+		_insert_into_cell(entity_key, cell)
 
 
 func unregister_entity(entity_key: StringName) -> void:
 	var record: Dictionary = _records.get(entity_key, {})
 	if record.is_empty():
 		return
-	var cell: Vector3i = record.get("cell", Vector3i.ZERO)
 	var kind: StringName = record.get("kind", &"")
-	_remove_from_cell(entity_key, cell)
+	var covered_cells: Array = record.get(
+		"cells",
+		[record.get("cell", Vector3i.ZERO)]
+	)
+	for raw_cell: Variant in covered_cells:
+		_remove_from_cell(entity_key, raw_cell as Vector3i)
 	_records.erase(entity_key)
 	var remaining = maxi(int(_kind_counts.get(kind, 0)) - 1, 0)
 	var kind_keys: Dictionary = _keys_by_kind.get(kind, {})
@@ -96,6 +125,8 @@ func update_entity(entity_key: StringName) -> bool:
 	if not is_instance_valid(body):
 		unregister_entity(entity_key)
 		return false
+	if bool(record.get("bounded", false)):
+		return false
 
 	var previous_cell: Vector3i = record.get("cell", Vector3i.ZERO)
 	var next_cell = _cell_for_position(body.global_position)
@@ -104,7 +135,30 @@ func update_entity(entity_key: StringName) -> bool:
 
 	_remove_from_cell(entity_key, previous_cell)
 	record["cell"] = next_cell
+	record["cells"] = [next_cell]
 	_insert_into_cell(entity_key, next_cell)
+	cell_transition_count += 1
+	return true
+
+
+func update_bounds(entity_key: StringName, world_bounds: AABB) -> bool:
+	var record: Dictionary = _records.get(entity_key, {})
+	if record.is_empty() or not bool(record.get("bounded", false)):
+		return false
+	if not _bounds_are_valid(world_bounds):
+		return false
+	var previous_cells: Array = record.get("cells", [])
+	var next_cells := _cells_for_bounds(world_bounds)
+	if previous_cells == next_cells:
+		record["bounds"] = world_bounds
+		return false
+	for raw_cell: Variant in previous_cells:
+		_remove_from_cell(entity_key, raw_cell as Vector3i)
+	for cell: Vector3i in next_cells:
+		_insert_into_cell(entity_key, cell)
+	record["cell"] = next_cells[0]
+	record["cells"] = next_cells
+	record["bounds"] = world_bounds
 	cell_transition_count += 1
 	return true
 
@@ -268,6 +322,12 @@ func clear_query_cache(cache_id: StringName) -> void:
 
 
 func get_debug_state() -> Dictionary:
+	var bounded_record_count := 0
+	var bounded_cell_memberships := 0
+	for record: Dictionary in _records.values():
+		if bool(record.get("bounded", false)):
+			bounded_record_count += 1
+			bounded_cell_memberships += (record.get("cells", []) as Array).size()
 	return {
 		"entity_count": _records.size(),
 		"occupied_cell_count": _cells.size(),
@@ -278,6 +338,8 @@ func get_debug_state() -> Dictionary:
 		"kind_counts": _kind_counts.duplicate(),
 		"indexed_kind_count": _keys_by_kind.size(),
 		"sorted_kind_index_count": _sorted_keys_by_kind.size(),
+		"bounded_record_count": bounded_record_count,
+		"bounded_cell_memberships": bounded_cell_memberships,
 	}
 
 
@@ -286,6 +348,44 @@ func _cell_for_position(position: Vector3) -> Vector3i:
 		floori(position.x / cell_size),
 		floori(position.y / cell_size),
 		floori(position.z / cell_size)
+	)
+
+
+func _cells_for_bounds(world_bounds: AABB) -> Array[Vector3i]:
+	var minimum_cell := _cell_for_position(world_bounds.position)
+	# AABB.end on an exact cell boundary belongs to the next cell geometrically only as a
+	# zero-thickness plane. Pull it inward by a tiny scale-relative epsilon to avoid unnecessary
+	# memberships while retaining every positive-volume intersection.
+	var epsilon := minf(cell_size * 0.00001, 0.0001)
+	var maximum_position := world_bounds.end - Vector3.ONE * epsilon
+	var maximum_cell := _cell_for_position(maximum_position)
+	var result: Array[Vector3i] = []
+	for z: int in range(minimum_cell.z, maximum_cell.z + 1):
+		for y: int in range(minimum_cell.y, maximum_cell.y + 1):
+			for x: int in range(minimum_cell.x, maximum_cell.x + 1):
+				result.append(Vector3i(x, y, z))
+	return result
+
+
+func _register_kind_key(entity_key: StringName, kind: StringName) -> void:
+	_kind_counts[kind] = int(_kind_counts.get(kind, 0)) + 1
+	var kind_keys: Dictionary = _keys_by_kind.get(kind, {})
+	kind_keys[entity_key] = true
+	_keys_by_kind[kind] = kind_keys
+	var sorted_kind_keys: Array = _sorted_keys_by_kind.get(kind, [])
+	if not sorted_kind_keys.has(entity_key):
+		sorted_kind_keys.append(entity_key)
+		sorted_kind_keys.sort()
+	_sorted_keys_by_kind[kind] = sorted_kind_keys
+
+
+static func _bounds_are_valid(value: AABB) -> bool:
+	return (
+		value.position.is_finite()
+		and value.size.is_finite()
+		and value.size.x > 0.0
+		and value.size.y > 0.0
+		and value.size.z > 0.0
 	)
 
 
