@@ -1293,6 +1293,9 @@ func _test_client_voice_renderer() -> void:
 		"a finished dry stream cannot overwrite its still-decaying reverb bus"
 	)
 	var tail_rack := renderer._effect_racks[0]
+	# The same rack primitive now also presents listener-relative shared-room gain after its DSP.
+	# Tail retirement must compose with that gain instead of overwriting it on the AudioServer bus.
+	tail_rack.set_presentation_gain_db(-7.0)
 	tail_rack._tail_floor_tapering = true
 	tail_rack._tail_floor_gain_db = 0.0
 	renderer._process(0.25)
@@ -1300,10 +1303,21 @@ func _test_client_voice_renderer() -> void:
 		tail_rack._tail_floor_gain_db,
 		-SpatialAudioEffectRack.TAIL_FLOOR_TAPER_DB_PER_SECOND * 0.25
 	)
+	var presentation_and_tail_compose := is_equal_approx(
+		AudioServer.get_bus_volume_db(tail_rack.bus_index),
+		-7.0 + tail_rack._tail_floor_gain_db
+	)
 	tail_rack.prepare_for_input()
+	var presentation_survives_tail_reset := is_equal_approx(
+		AudioServer.get_bus_volume_db(tail_rack.bus_index),
+		-7.0
+	)
+	tail_rack.set_presentation_gain_db(0.0)
 	_expect_rule(
 		&"A30",
 		taper_advanced
+		and presentation_and_tail_compose
+		and presentation_survives_tail_reset
 		and is_zero_approx(tail_rack._tail_floor_gain_db)
 		and is_zero_approx(AudioServer.get_bus_volume_db(tail_rack.bus_index)),
 		"an undriven one-shot exponentially retires its artifact floor and a new input starts at unity"

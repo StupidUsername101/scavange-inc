@@ -44,12 +44,16 @@ extends Resource
 @export_group("Fragments and Integration")
 @export_range(0, 64, 1) var maximum_physical_fragments := 6
 @export_range(0.0, 10.0, 0.01, "or_greater") var minimum_fragment_volume := 0.03
+@export_range(1.0, 10000.0, 1.0, "or_greater") var fragment_density_kg_m3 := 2200.0
+@export_range(1.0, 600.0, 1.0, "or_greater") var fragment_lifetime_seconds := 180.0
 @export_range(0.0, 4.0, 0.01, "or_greater") var acoustic_aperture_area := 0.08
 @export_range(0.0, 1.0, 0.01) var support_strength := 0.65
 
 @export_group("Presentation")
 @export var exterior_color := Color(0.34, 0.36, 0.34, 1.0)
 @export var interior_color := Color(0.22, 0.20, 0.18, 1.0)
+@export var deep_interior_color := Color(0.22, 0.20, 0.18, 1.0)
+@export_range(0.0, 4.0, 0.01, "or_greater") var interior_color_depth := 0.0
 @export_range(0.0, 1.0, 0.01) var roughness := 0.9
 @export_range(0.0, 1.0, 0.01) var metallic := 0.0
 
@@ -87,8 +91,11 @@ func sanitize() -> DestructionTextureDefinition:
 	grain_axis = grain_axis.normalized() if grain_axis.length_squared() > 0.000001 else Vector3.UP
 	maximum_physical_fragments = clampi(maximum_physical_fragments, 0, 64)
 	minimum_fragment_volume = maxf(minimum_fragment_volume, 0.0)
+	fragment_density_kg_m3 = clampf(fragment_density_kg_m3, 1.0, 10000.0)
+	fragment_lifetime_seconds = clampf(fragment_lifetime_seconds, 1.0, 600.0)
 	acoustic_aperture_area = maxf(acoustic_aperture_area, 0.0)
 	support_strength = clampf(support_strength, 0.0, 1.0)
+	interior_color_depth = maxf(interior_color_depth, 0.0)
 	roughness = clampf(roughness, 0.0, 1.0)
 	metallic = clampf(metallic, 0.0, 1.0)
 	return self
@@ -148,6 +155,7 @@ func content_signature() -> int:
 		_q(grain_axis.x),
 		_q(grain_axis.y),
 		_q(grain_axis.z),
+		_q(support_strength),
 	]) & 0x7fffffff
 
 

@@ -1,0 +1,39 @@
+[gd_resource type="Resource" script_class="DestructionTextureDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/destruction/destruction_texture_definition.gd" id="1_texture"]
+
+[resource]
+script = ExtResource("1_texture")
+texture_id = &"flesh"
+physical_surface = &"flesh"
+material_index = 6
+energy_resistance = 7.5
+geometry_threshold = 0.18
+perforation_threshold = 0.72
+hardness = 0.12
+fracture_toughness = 0.34
+ductility = 0.78
+damage_accumulation = 0.9
+entry_radius_scale = 1.0
+entry_depth_scale = 0.9
+channel_radius_scale = 0.68
+penetration_depth_scale = 1.0
+exit_spall_radius_scale = 0.42
+exit_spall_depth_scale = 0.35
+dent_depth_scale = 0.68
+radius_energy_exponent = 0.18
+spatial_warp = 0.075
+spatial_warp_frequency = 11.0
+minimum_geometric_feature_voxels = 0.55
+crack_count = 0
+maximum_physical_fragments = 0
+minimum_fragment_volume = 0.002
+fragment_density_kg_m3 = 1040.0
+acoustic_aperture_area = 0.0
+support_strength = 0.2
+exterior_color = Color(0.34, 0.12, 0.095, 1)
+interior_color = Color(0.92, 0.045, 0.025, 1)
+deep_interior_color = Color(0.16, 0.002, 0.004, 1)
+interior_color_depth = 0.22
+roughness = 0.88
+metallic = 0.0

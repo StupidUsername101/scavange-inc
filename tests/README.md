@@ -1,5 +1,26 @@
 # System tests
 
+`sdf_native_backend_test.gd` is the native/fallback parity gate for packed sparse-brick mutation,
+dirty bounds, exact contour topology, feature-point output, and the production worker-job route.
+Build the native extension before running it. The fragmentation suite also requires the native
+binary so it can compare that mapper against the portable GDScript fallback; the shipped game itself
+continues through the fallback when no matching platform binary exists.
+
+`destruction_fragmentation_test.gd` cuts a deterministic unsupported island out of a thin wall. It
+also verifies that a large slab on a hidden one-voxel ligament detaches, a broad bridge stays
+supported, material strength can preserve the same narrow connection, and native/portable
+load-bearing graphs agree. It checks native/fallback structural parity, bounded shared-face mapping,
+authoritative SDF erasure, indexed fragment extraction, convex Jolt motion, recursively cut
+fragment-local SDFs, reliable replacement/removal RPCs, current-transform late-join manifests,
+client mesh reconstruction, and explicit reliable/unreliable replication paths.
+It also severs a deliberately larger upper slab from a smaller negative-Y-grounded base and requires
+both the portable and C++ solvers to detach the upper slab, guarding against size-based floating
+sections and drift in their shared min-X,min-Y,min-Z,max-X,max-Y,max-Z anchor packet.
+`plasma_cutter_performance_benchmark.gd` drives the shipped cutter through a complete 52-pulse wall
+stroke. It prints early/late mutation cost, full structural-scan frequency, the separation-pulse
+mapping/grouping/mesh/erasure split, and visual-versus-Jolt runtime rebuild cost. This catches
+continuous-tool regressions hidden by isolated bullet-hole microbenchmarks.
+
 Run the deterministic regression suites with Godot 4.7.2:
 
 ```sh
@@ -10,14 +31,24 @@ godot --headless --path . --script res://tests/lobby_system_test.gd
 godot --headless --path . --script res://tests/player_equipment_system_test.gd
 godot --headless --path . --script res://tests/eyeless_acoustic_perception_test.gd
 godot --headless --path . --script res://tests/wrist_terminal_system_test.gd
+godot --headless --path . --script res://tests/plasma_cutter_runtime_test.gd
 godot --headless --path . --script res://tests/player_movement_test.gd
+godot --headless --path . --script res://tests/player_death_respawn_test.gd
 godot --headless --path . --script res://tests/player_procedural_leg_rig_test.gd
 godot --headless --path . --script res://tests/player_character_pose_system_test.gd
+godot --headless --path . --script res://tests/player_character_skin_test.gd
 godot --headless --path . --script res://tests/movement_parkour_area_test.gd
 godot --headless --path . --script res://tests/grab_rotation_test.gd
 godot --headless --path . --script res://tests/body_part_shop_system_test.gd
 godot --headless --path . --script res://tests/ballistics_system_test.gd
 godot --headless --path . --script res://tests/ballistics_runtime_integration_test.gd
+godot --headless --path . --script res://tests/universal_destruction_system_test.gd
+godot --headless --path . --script res://tests/destruction_runtime_integration_test.gd
+godot --headless --path . --script res://tests/destruction_mesh_deformation_test.gd
+godot --headless --path . --script res://tests/destruction_fragmentation_test.gd
+godot --headless --path . --script res://tests/sdf_native_backend_test.gd
+godot --headless --path . --script res://tests/sdf_performance_benchmark.gd
+godot --headless --path . --script res://tests/plasma_cutter_performance_benchmark.gd
 godot --headless --path . --script res://tests/weapon_crafting_station_test.gd
 godot --headless --path . --script res://tests/acoustic_propagation_test.gd
 godot --headless --path . --script res://tests/acoustic_bake_system_test.gd
@@ -29,6 +60,8 @@ godot --headless --path . --script res://tests/radio_system_test.gd
 godot --headless --path . --script res://tests/speaker_cluster_system_test.gd
 godot --headless --path . --script res://tests/bunker_exterior_speaker_probe.gd
 godot --headless --path . --script res://tests/bunker_quarter_meter_mix_probe.gd
+godot --headless --path . --script res://tests/bunker_entrance_reverb_motion_probe.gd
+godot --headless --path . --script res://tests/valve_bunker_exit_render_probe.gd
 godot --headless --path . --script res://tests/industrial_environment_test.gd
 godot --headless --path . --script res://tests/structure_collision_pipeline_test.gd
 godot --headless --path . --script res://tests/level_editor_stage_one_test.gd
@@ -88,6 +121,12 @@ functional card creation/removal/join IDs, member-versus-room callback isolation
 partial-search timeout preservation, Steam Join Game/rich presence, the invite overlay,
 complete leave-session teardown, and sufficient SteamNetworkingSockets lanes for every
 declared RPC channel so remote audio cannot silently collapse onto the world-state lane.
+Transient transport loss is covered by a 20-second Steam-identity lease: the host invalidates the
+dead RPC route and freezes stale input while preserving the body, inventory, money, player slot,
+and acoustic listener history. The client keeps its live presentation and retries for 15 seconds
+with bounded backoff, leaving handshake margin before lease expiry; it rebinds even if Steam assigns
+a different peer ID. Expiry alone performs ordinary
+spill/despawn cleanup; generation-tagged admission timers cannot reject a newer connection.
 It also locks the latency contract: replaceable player/world snapshots must use loss-tolerant
 transport, player poses and interactive items own independent lanes, late packets cannot rewind
 newer state, actively grabbed items receive lightweight physics-rate deltas, and the 20 Hz full
@@ -106,6 +145,9 @@ ordinary physical/equipped item paths, compact hover-hinted UI, lazily allocated
 screen, scanner-family CRT treatment, Tab access, public technical-interface opening,
 local/remote arm-pose isolation, camera presentation, shared-gait bob inheritance,
 critically damped heavy-arm hold sway, moving-screen pointer alignment, and gameplay input lockout.
+The same reusable arm spring consumes player-local lateral speed and acceleration: steady strafing
+adds a bounded directional tilt, acceleration briefly lets the heavy device lag, and the screen/input
+surface remain one transform throughout the response.
 
 The eyeless acoustic-perception suite checks the Q input fallback, sight-independent authoritative click,
 musical-cadence token-bucket allowance and abusive-repeat rejection,
@@ -114,23 +156,46 @@ impressions, continuous-source refresh, first-hit-only near-field contours, and 
 eyes are equipped again.
 
 The player-movement suite checks accelerated ground movement and braking,
+an allocation-free 1.5-second eased sprint-speed ramp shared by authority and local gait prediction,
+an identity-varied full-sprint release that sheds momentum through a few springy contacts even after
+horizontal motion stops,
 momentum-preserving takeoff and airborne coasting, speed-neutral air steering,
-stable ballistic gravity, wall sliding that removes only blocked velocity, and a
-single distance-driven gait phase shared by footstep audio and camera motion. Hard landings also
+stable ballistic gravity, wall sliding that removes only blocked velocity, and a deterministic
+range-driven gait phase shared by foot placement, contact audio, and camera motion. Stride, swing,
+stance, lead, lift, and impact level vary per player/step inside bounded authored ranges, then blend
+continuously with actual movement speed: walking stays medium and restrained while sprinting becomes
+faster, longer, wider, higher, and slightly heavier. The visible
+foot begins before the shared impact boundary and its sampled planted contact—not a body timer—asks
+authority to emit from the floor position. Landing impact is derived from authoritative vertical
+speed, replicated as a normalized load for continuous knee/hip compression, and crosses one explicit
+hard-fall ragdoll threshold. Landings also
 probe both real biped supports on the authority, as do completed gait footfalls: a missing second
 foothold must replicate one trip/ragdoll transition, while one-legged loadouts never fail a check
 for a phantom foot. A compact server-owned torso carries the authoritative player through the fall,
-recovers beside its final position, and waits when nearby geometry cannot fit the standing capsule.
-These probes are event-driven rather than paid on every physics frame.
+uses rounded low-friction continuous contact rather than snag-prone box corners, and recovers through
+a wall-aware radial standing-volume search around its final position. Narrow stair risers and modular
+seams are exercised directly; unresolved local penetration receives a delayed, distance-bounded
+fallback to the last valid stance. Blocked searches run at 10 Hz, and ordinary support probes remain
+event-driven rather than being paid on every physics frame.
+
+E is covered as one ranked context action rather than several competing key handlers: direct
+grabbable targets win, direct non-grabbable use targets follow, bounded line-of-sight grab assist is
+next, and kick is the empty-context fallback. Kick authority validates the installed live foot,
+enforces a 0.75-second cooldown, remains valid through a flip, resolves one wall-aware physical
+contact, and replicates its committed direction and normalized phase to every presentation.
 
 The procedural player-leg suite checks reusable allocation-free two-bone presentation,
 planted-foot query reuse, ordinary and detail-only ground roles, smooth movement guides with
-discrete stair contacts, turn-safe foot ordering, forward walking knee drive, pose-preserving
+discrete stair contacts, an identity-varied balance envelope that converts brief direction reversals
+into torso counter-lean without unnecessary replants, turn-safe foot ordering, directional upper-body
+lean, forward walking knee drive, a multi-step flat-ground
+course that records cadence/spacing/stance/continuity, contact-driven footfalls, pose-preserving
 takeoff, continuous asymmetric airborne correction, ground-relative landing preparation, and every
 zero/one/two-leg availability combination. Touchdown contacts resolve independently, may arrive at
 different times and heights, and drive a saturating whole-body yield instead of forcing both feet onto
 one plane. The replicated trip presenter must construct physics only for installed limbs, keep its
-torso converged on the server reference, move the local camera/listener with its physical head, and
+torso and feet on rounded continuous low-friction contact, converge on the server reference, move the
+local camera/listener with its physical head, and
 restore the procedural body after recovery. A long high jump must remain tucked until its real ground
 clearance closes without freezing into a mirrored pose. Nonlinear per-jump pose variation is keyed by
 the server-owned jump sequence so every observer sees the same expressive choice, and a critically
@@ -279,6 +344,19 @@ rejects same-regime level steps, farther-away hotspots, and discontinuities at p
 changes. Set `SCAVANGE_TUNNEL_AUDIT_MODE=cross` for the focused cross-tunnel sweep or `setup` for a
 fast parse/world-bake check.
 
+The flute-runner vertical slice keeps the first expressive humanoid enemy off the retired zoo
+controller. It checks sight/hearing/search transitions, contact-speed and facing-gated tackles,
+bounded player-originated acoustic memory with the same loudness-scaled reach as player playback,
+compact no-bone replication, the restricted continuous-audio boundary, the removable shared-world
+spawn, a real authority chase/tackle fixture, and reuse of the player-quality
+skin/foot/ocular/authored-ragdoll presentation stack. A wall-occlusion fixture additionally proves
+that proximity alone cannot reveal a hidden player: only a real player-originated cue admitted by
+the shared acoustic solve may switch the enemy to audible pursuit. Run it with:
+
+```sh
+godot --headless --path . --script res://tests/flute_runner_system_test.gd
+```
+
 The radio suite checks music-folder discovery, specialized item spawning, authoritative
 power/track/timeline state, restricted client resource loading, per-listener acoustic snapshots,
 persistent distortion voice pooling, clear direct-path filtering, smooth DSP transitions, speaker
@@ -311,6 +389,15 @@ The large-bunker lifecycle guard additionally instantiates the real client rende
 localized direct cabinet paths plus one live full-band shared Hall return. It crosses both a single
 missing unreliable snapshot and a pause held through complete silence, then requires resume to clear
 every tail filter/gain state without revealing a retired return.
+The stateful bunker-entrance motion probe drives one persistent listener through both large bunker
+doorways at 2.4, 5.2, 8.5, and 14 m/s, along straight and mirrored diagonal paths. It records every
+20 Hz authoritative packet plus the shared wet target and exact client level followers. The guard
+requires all four cabinets to remain present, forbids either absolute Hall growth or a transient
+wet/dry-ratio swell during the first three exterior metres, and bounds wet/direct tracking error
+across the complete ten-metre exterior trace. The rendered Valve counterpart fills the production
+eight-second reverb, exits diagonally at 14 m/s, captures the post-DSP late return separately, and
+requires it to lose the indoor field without a waveform discontinuity. Room-colour coefficients
+retain their slower morph; only direct and indirect movement gain share the fast spatial envelope.
 The Valve-bunker pause-tail guard renders the real four-cabinet shared late field, verifies that a
 clean PA never starts any receiver-static voice, pauses by removing the authoritative snapshot, and
 requires every program decoder to stop while the populated room return decays monotonically to the
@@ -328,6 +415,8 @@ The music-content tail probe repeats that transition through the real four-speak
 with `Es geht alles vorüber es geht alles vorbei.mp3`. It keeps the recognizable first echo, then
 requires the dry-to-diffuse handoff to continue falling instead of exposing a decorrelated Freeverb
 plateau. This catches lossy, dense program residue that the clean three-tone source cannot excite.
+Set `SCAVANGE_AUDIO_REGRESSION_TRACK` to any imported music resource path to run the identical
+production decoder, room, and tail assertions against a track that exposes a content-specific edge.
 The audio-prediction suite then guards the multiplayer presentation split: owner cues start with a
 free-field fallback even before the first server-issued listener context, prediction keys are
 disjoint for UI/gait/automatic shots, normalized pressure follows the cached room response,

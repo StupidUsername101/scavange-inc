@@ -10,11 +10,42 @@ const HEADBOB_PHASE_SYNC_SPEED := 10.0
 const HEADBOB_PHASE_SNAP_CYCLES := 0.75
 const EDIT_AIM_MARKER_COLOR := Color(0.16, 0.86, 0.7, 0.2)
 const MAX_LOOK_PITCH_DEGREES := 85.0
+# The authored head camera sits inside the one-body character mesh. A full downward hemisphere would
+# expose the open underside of that mesh, so ordinary first-person look stops before the neck enters
+# frame. Fieldlink has a separate lower bound aligned with the physical arm solver, so its RMB clutch
+# cannot fold the real forearm and terminal underneath the camera.
+const MIN_WORLD_LOOK_PITCH := deg_to_rad(-58.0)
+const MAX_LOOK_PITCH := deg_to_rad(MAX_LOOK_PITCH_DEGREES)
 const HELD_ITEM_SIDE_OFFSET := 0.43
 const HELD_ITEM_ROLL := 0.08
 const FIRST_PERSON_ITEM_SIDE_OFFSET := 0.22
+const EQUIPPED_WRIST_DEVICE_SCALE := 0.45
 const WRIST_LOOK_PITCH := deg_to_rad(-24.0)
+const FIELDLINK_POSE_MIN_PITCH := deg_to_rad(-52.0)
+const FIELDLINK_POSE_MAX_PITCH := deg_to_rad(-12.0)
+# Raising the player's head must not make the arms chase the camera all the way upward. The device
+# stays biased toward its useful downward operating pose; upward head motion contributes only this
+# small comfort arc before the player simply looks away from the screen.
+const FIELDLINK_UPWARD_FOCUS_PITCH := deg_to_rad(-20.0)
+const MIN_WRIST_LOOK_PITCH := FIELDLINK_POSE_MIN_PITCH
+const FIELDLINK_POSE_PITCH_RESPONSE_HZ := 7.5
+const BODY_IMPACT_REPLAY_WINDOW_SECONDS := 0.75
+const FLIP_FLICK_JUMP_GRACE_TICKS := 2
+const FLIP_FLICK_SAMPLE_WINDOW_SECONDS := 0.10
+const FLIP_FLICK_MIN_PITCH_DELTA := deg_to_rad(8.0)
+const FLIP_FLICK_MIN_ANGULAR_SPEED := deg_to_rad(420.0)
+# Dropkicks are already explicit actions, so their steering gesture can be slower and broader than
+# the anti-accidental flip flick. A short yaw history chooses the body's roll hemisphere at commit;
+# it never keeps dragging the pose after the player has kicked.
+const DROP_KICK_TILT_SAMPLE_WINDOW_SECONDS := 0.16
+const DROP_KICK_TILT_MIN_YAW_DELTA := deg_to_rad(2.5)
+const DROP_KICK_TILT_FULL_YAW_DELTA := deg_to_rad(16.0)
+const FLIP_VISUAL_RESPONSE_HZ := 16.0
+const FLIP_REQUEST_TIMEOUT_SECONDS := 0.75
+const FIELDLINK_HOLD_POSITION_SCALE := 1.25
+const FIELDLINK_HOLD_ROTATION_SCALE := 1.35
 const WRIST_POSE_BLEND_SPEED := 7.5
+const WRIST_LOOK_RECENTER_SPEED := 8.0
 const WRIST_REQUEST_GRACE_SECONDS := 0.5
 const WRIST_SCANNER_RANGE_METERS := 36.0
 const WRIST_SCANNER_REFRESH_SECONDS := 0.2
@@ -46,6 +77,12 @@ const FIELDLINK_DISPLAY_STATE := preload(
 const LOCAL_AUDIO_PREDICTION := preload(
 	"res://scripts/audio/local_audio_prediction.gd"
 )
+const HELD_DEVICE_MOTION := preload(
+	"res://scripts/characters/first_person_held_device_motion.gd"
+)
+const PLASMA_CUTTER_BEAM_SCRIPT := preload(
+	"res://scripts/client/plasma_cutter_beam_3d.gd"
+)
 
 #######################################################
 # Presents replicated player movement, body parts, equipment, held items, HUD, camera motion,
@@ -56,6 +93,7 @@ const LOCAL_AUDIO_PREDICTION := preload(
 @onready var camera: Camera3D = $HeadPivot/Camera3D
 @onready var audio_listener: AudioListener3D = $AudioListener3D
 @onready var body_visual: Node3D = $BodyVisual
+@onready var character_skin: PlayerCharacterSkin = $BodyVisual/CharacterSkin
 @onready var upper_body_pose: Node3D = $BodyVisual/UpperBodyPose
 @onready var torso_visual: MeshInstance3D = $BodyVisual/UpperBodyPose/Torso
 @onready var head_visual: MeshInstance3D = $BodyVisual/UpperBodyPose/Head
@@ -100,13 +138,20 @@ var target_gait_cycle := 0.5
 var visual_gait_cycle := 0.5
 var target_gait_stride_distance := PlayerGait.WALK_STEP_DISTANCE
 var target_gait_active := false
+var target_gait_momentum_recovery := 0.0
+var resolved_gait_momentum_recovery := 0.0
 var gait_initialized := false
 var last_predicted_gait_step_sequence := -1
 var target_footstep_surface: StringName = PhysicalSurface.CONCRETE
 var local_move_input := Vector2.ZERO
 var local_run_input := false
 var local_predicted_horizontal_speed := 0.0
+var local_predicted_horizontal_velocity := Vector2.ZERO
+var local_locomotion_prediction_initialized := false
+var local_sprint_speed_ramp_elapsed := 0.0
+var local_recovery_gait := PlayerGait.new()
 var target_stamina_ratio := 1.0
+var target_sprint_exhausted := false
 var target_expression_clock := 0.0
 var resolved_pose_gait_cycle := 0.5
 var character_pose := PlayerCharacterPoseController.new()
@@ -118,6 +163,52 @@ var target_faction_id := 0
 
 var target_on_floor := false
 var target_jump_sequence := 0
+var target_flip_sequence := 0
+var target_flip_direction := 0
+var target_flip_active := false
+var target_flip_phase := 0.0
+var target_kick_sequence := 0
+var target_kick_side := -1
+var target_kick_style := ServerPlayer.KickStyle.SINGLE
+var target_kick_active := false
+var target_kick_phase := 1.0
+var target_kick_clock := -1.0
+var target_kick_direction := Vector3.FORWARD
+var target_kick_view_yaw := 0.0
+var target_kick_view_pitch := 0.0
+var target_kick_flip_direction := 0
+var target_dropkick_tilt_input := 0.0
+var target_kick_guidance_direction := Vector3.FORWARD
+var target_kick_guidance_weight := 0.0
+var target_kick_intensity := 1.0
+var presented_flip_sequence := -1
+var visual_flip_direction := 0
+var visual_flip_phase := 0.0
+var visual_flip_angle := 0.0
+var buffered_flip_intent := 0
+var local_flip_input_tick := 0
+var buffered_flip_expiry_tick := -1
+var flip_flick_accumulated_pitch := 0.0
+var flip_flick_accumulated_elapsed := 0.0
+var flip_flick_sample_remaining := 0.0
+var dropkick_tilt_accumulated_yaw := 0.0
+var dropkick_tilt_accumulated_elapsed := 0.0
+var dropkick_tilt_sample_remaining := 0.0
+var local_flip_prediction_active := false
+var local_flip_prediction_elapsed := 0.0
+var local_flip_prediction_base_sequence := 0
+var local_flip_prediction_base_jump_sequence := 0
+var local_flip_prediction_request_id := 0
+var local_flip_request_elapsed := 0.0
+var completed_visual_flip_sequence := -1
+var target_landing_sequence := 0
+var target_landing_impact_strength := 0.0
+var target_body_impact_sequence := 0
+var target_body_impact_strength := 0.0
+var target_body_impact_direction := Vector3.ZERO
+var target_body_impact_contact_side := 0.0
+var target_body_impact_clock := -1.0
+var presented_body_impact_sequence := -1
 var target_ragdoll_active := false
 var target_trip_sequence := 0
 var target_trip_direction := Vector3.FORWARD
@@ -137,6 +228,7 @@ var is_local_player := false
 
 var target_position: Vector3
 var target_rotation: Vector3
+var target_look_pitch := 0.0
 var target_velocity: Vector3
 var time_since_last_state := 0.0
 var target_edit_aim_active := false
@@ -165,6 +257,9 @@ var target_wrist_interface_open := false
 var target_wrist_display_page: StringName = FIELDLINK_DISPLAY_STATE.PAGE_HOME
 var local_wrist_interface_open := false
 var wrist_pose_weight := 0.0
+var fieldlink_pose_pitch := WRIST_LOOK_PITCH
+var fieldlink_hold_motion := HELD_DEVICE_MOTION.new()
+var fieldlink_hold_motion_active := false
 var wrist_presentation: WristTerminalPresentation
 var remote_wrist_display: Node
 var wrist_session_refresh_remaining := 0.0
@@ -173,7 +268,22 @@ var wrist_control_refresh_remaining := 0.0
 var wrist_request_grace_remaining := 0.0
 var wrist_mouse_look_active := false
 var wrist_mouse_look_owns_pitch := false
+var wrist_mouse_look_blend := 0.0
 var captured_mouse_motion_discard_remaining := 0
+var target_plasma_cutter_available := false
+var target_plasma_cutter_heat_ratio := 0.0
+var target_plasma_cutter_overheated := false
+var target_plasma_cutter_active := false
+var target_plasma_cutter_has_hit := false
+var target_plasma_cutter_hit_position := Vector3.ZERO
+var target_plasma_cutter_range_meters := 0.0
+var target_plasma_cutter_kerf_millimeters := 0.0
+var target_plasma_cutter_cut_depth_millimeters := 0.0
+var target_plasma_cutter_continuous_duty_seconds := 0.0
+var target_plasma_cutter_full_cool_seconds := 0.0
+var local_plasma_cutter_trigger_held := false
+var plasma_cutter_beam: Node3D
+var plasma_cutter_emitter: Node3D
 var local_has_equipped_eyes := true
 
 func _ready() -> void:
@@ -183,8 +293,10 @@ func _ready() -> void:
 	camera_pivot_rest_position = camera_pivot.position
 	audio_listener_rest_position = audio_listener.position
 	_apply_expression_identity(player_id, true)
+	_sync_character_appearance()
 	edit_aim_hit.material_override = _create_edit_aim_material()
 	edit_aim_hit.visible = false
+	_ensure_plasma_cutter_beam()
 	acoustic_perception.bind_camera(camera)
 	var client := get_node_or_null("/root/Client")
 	if client != null:
@@ -206,6 +318,10 @@ func _apply_expression_identity(next_player_id: int, force := false) -> void:
 		procedural_leg_rig.set_expression_identity(next_player_id)
 	character_pose.set_expression_identity(next_player_id)
 	ocular_expression.set_expression_identity(next_player_id)
+	local_recovery_gait.set_expression_identity(next_player_id)
+	if character_skin != null:
+		character_skin.set_player_identity(next_player_id)
+		_sync_character_appearance()
 
 
 func _input(event: InputEvent) -> void:
@@ -237,7 +353,10 @@ func _input(event: InputEvent) -> void:
 		if wrist_mouse_look_active:
 			if event is InputEventMouseMotion:
 				if not _consume_capture_transition_motion():
-					_apply_mouse_look(event.relative)
+					_apply_mouse_look(
+						event.relative,
+						event.screen_relative
+					)
 			get_viewport().set_input_as_handled()
 			return
 		if wrist_presentation != null:
@@ -266,17 +385,291 @@ func _input(event: InputEvent) -> void:
 			grab_rotation_input += event.relative
 			return
 
-		_apply_mouse_look(event.relative)
+		_apply_mouse_look(event.relative, event.screen_relative)
 
 
-func _apply_mouse_look(relative_motion: Vector2) -> void:
+func _apply_mouse_look(
+	relative_motion: Vector2,
+	_screen_relative_motion := Vector2.ZERO,
+	sample_delta := -1.0
+) -> void:
+	var previous_yaw := look_yaw
+	var previous_pitch := look_pitch
 	look_yaw -= relative_motion.x * mouse_sensitivity
-	look_pitch -= relative_motion.y * mouse_sensitivity
 	look_pitch = clampf(
-		look_pitch,
-		deg_to_rad(-MAX_LOOK_PITCH_DEGREES),
-		deg_to_rad(MAX_LOOK_PITCH_DEGREES)
+		look_pitch - relative_motion.y * mouse_sensitivity,
+		MIN_WRIST_LOOK_PITCH if local_wrist_interface_open else MIN_WORLD_LOOK_PITCH,
+		MAX_LOOK_PITCH
 	)
+	var resolved_sample_delta := sample_delta
+	if resolved_sample_delta <= 0.0:
+		resolved_sample_delta = get_process_delta_time()
+	# Gesture recognition consumes the exact post-clamp angle that presentation received. Raw mouse
+	# pixels can differ across content scale and still move while pitch is clamped; neither is a real
+	# camera flick and therefore neither may arm a flip.
+	_record_flip_pitch_motion(
+		look_pitch - previous_pitch,
+		resolved_sample_delta
+	)
+	_record_dropkick_tilt_motion(
+		angle_difference(previous_yaw, look_yaw),
+		resolved_sample_delta
+	)
+
+
+static func dropkick_tilt_input_from_yaw_motion(yaw_delta: float) -> float:
+	if not is_finite(yaw_delta):
+		return 0.0
+	# Camera yaw decreases for a rightward mouse sweep. Presentation uses positive input for that
+	# familiar right-curve / clockwise body roll, so invert the signed camera delta here once.
+	var screen_lateral_motion := -yaw_delta
+	var magnitude := absf(screen_lateral_motion)
+	if magnitude < DROP_KICK_TILT_MIN_YAW_DELTA:
+		return 0.0
+	var weight := smoothstep(
+		0.0,
+		1.0,
+		clampf(
+			inverse_lerp(
+				DROP_KICK_TILT_MIN_YAW_DELTA,
+				DROP_KICK_TILT_FULL_YAW_DELTA,
+				magnitude
+			),
+			0.0,
+			1.0
+		)
+	)
+	return signf(screen_lateral_motion) * weight
+
+
+func _record_dropkick_tilt_motion(
+	yaw_delta: float,
+	sample_delta: float
+) -> void:
+	if local_wrist_interface_open or not is_finite(yaw_delta):
+		_clear_dropkick_tilt_gesture()
+		return
+	if absf(yaw_delta) <= 0.000001:
+		return
+	var safe_delta := clampf(sample_delta, 1.0 / 240.0, 0.05)
+	var changed_direction := (
+		dropkick_tilt_accumulated_yaw * yaw_delta < 0.0
+	)
+	var sample_window_exhausted := (
+		dropkick_tilt_accumulated_elapsed + safe_delta
+		> DROP_KICK_TILT_SAMPLE_WINDOW_SECONDS
+	)
+	if (
+		dropkick_tilt_sample_remaining <= 0.0
+		or changed_direction
+		or sample_window_exhausted
+	):
+		dropkick_tilt_accumulated_yaw = yaw_delta
+		dropkick_tilt_accumulated_elapsed = safe_delta
+	else:
+		dropkick_tilt_accumulated_yaw += yaw_delta
+		dropkick_tilt_accumulated_elapsed += safe_delta
+	dropkick_tilt_sample_remaining = DROP_KICK_TILT_SAMPLE_WINDOW_SECONDS
+
+
+func consume_dropkick_tilt_input() -> float:
+	var result := dropkick_tilt_input_from_yaw_motion(
+		dropkick_tilt_accumulated_yaw
+	)
+	_clear_dropkick_tilt_gesture()
+	return result
+
+
+func _clear_dropkick_tilt_gesture() -> void:
+	dropkick_tilt_accumulated_yaw = 0.0
+	dropkick_tilt_accumulated_elapsed = 0.0
+	dropkick_tilt_sample_remaining = 0.0
+
+
+static func flip_intent_from_pitch_motion(
+	pitch_delta: float,
+	sample_delta: float
+) -> int:
+	var safe_delta := clampf(sample_delta, 1.0 / 240.0, 0.05)
+	if (
+		not is_finite(pitch_delta)
+		or absf(pitch_delta) < FLIP_FLICK_MIN_PITCH_DELTA
+		or absf(pitch_delta) / safe_delta < FLIP_FLICK_MIN_ANGULAR_SPEED
+	):
+		return 0
+	return 1 if pitch_delta > 0.0 else -1
+
+
+func _record_flip_pitch_motion(
+	pitch_delta: float,
+	sample_delta: float
+) -> void:
+	if local_wrist_interface_open:
+		_clear_flip_gesture()
+		return
+	var safe_delta := clampf(sample_delta, 1.0 / 240.0, 0.05)
+	if buffered_flip_intent != 0:
+		var instantaneous_direction := 0
+		if pitch_delta > 0.0:
+			instantaneous_direction = 1
+		elif pitch_delta < 0.0:
+			instantaneous_direction = -1
+		var continues_flick := (
+			instantaneous_direction == buffered_flip_intent
+			and absf(pitch_delta) / safe_delta
+			>= FLIP_FLICK_MIN_ANGULAR_SPEED
+		)
+		if continues_flick:
+			buffered_flip_expiry_tick = (
+				local_flip_input_tick + FLIP_FLICK_JUMP_GRACE_TICKS
+			)
+		elif instantaneous_direction == -buffered_flip_intent:
+			buffered_flip_intent = 0
+			buffered_flip_expiry_tick = -1
+	var changed_direction := (
+		flip_flick_accumulated_pitch * pitch_delta < 0.0
+	)
+	var sample_window_exhausted := (
+		flip_flick_accumulated_elapsed + safe_delta
+		> FLIP_FLICK_SAMPLE_WINDOW_SECONDS
+	)
+	if (
+		flip_flick_sample_remaining <= 0.0
+		or changed_direction
+		or sample_window_exhausted
+	):
+		flip_flick_accumulated_pitch = pitch_delta
+		flip_flick_accumulated_elapsed = safe_delta
+	else:
+		flip_flick_accumulated_pitch += pitch_delta
+		flip_flick_accumulated_elapsed += safe_delta
+	flip_flick_sample_remaining = FLIP_FLICK_SAMPLE_WINDOW_SECONDS
+	var intent := flip_intent_from_pitch_motion(
+		flip_flick_accumulated_pitch,
+		flip_flick_accumulated_elapsed
+	)
+	if intent == 0:
+		return
+	buffered_flip_intent = intent
+	# Mouse events and jump actions meet on the fixed input tick. The gesture remains valid for the
+	# next two such ticks regardless of render rate; a 30 Hz and 240 Hz client therefore get the same
+	# maneuver window.
+	buffered_flip_expiry_tick = (
+		local_flip_input_tick + FLIP_FLICK_JUMP_GRACE_TICKS
+	)
+	flip_flick_accumulated_pitch = 0.0
+	flip_flick_accumulated_elapsed = 0.0
+	flip_flick_sample_remaining = 0.0
+
+
+func consume_buffered_flip_intent() -> int:
+	if (
+		local_wrist_interface_open
+		or buffered_flip_intent == 0
+		or local_flip_input_tick > buffered_flip_expiry_tick
+		or not has_local_flip_run_commitment()
+	):
+		_clear_flip_gesture()
+		return 0
+	var result := buffered_flip_intent
+	buffered_flip_intent = 0
+	buffered_flip_expiry_tick = -1
+	return result
+
+
+func _clear_flip_gesture() -> void:
+	buffered_flip_intent = 0
+	buffered_flip_expiry_tick = -1
+	flip_flick_accumulated_pitch = 0.0
+	flip_flick_accumulated_elapsed = 0.0
+	flip_flick_sample_remaining = 0.0
+
+
+func advance_local_input_tick() -> void:
+	local_flip_input_tick += 1
+	if (
+		buffered_flip_intent != 0
+		and local_flip_input_tick > buffered_flip_expiry_tick
+	):
+		_clear_flip_gesture()
+
+
+func has_local_flip_run_commitment() -> bool:
+	return (
+		is_local_player
+		and local_run_input
+		and local_move_input.length_squared()
+		> ServerPlayer.MOVEMENT_INPUT_THRESHOLD_SQUARED
+		and target_on_floor
+		and not target_ragdoll_active
+		and not local_wrist_interface_open
+		and not target_wrist_interface_open
+		and target_stamina_ratio
+		> ServerPlayer.STAMINA_EMPTY_THRESHOLD / ServerPlayer.MAX_STAMINA
+		and not target_sprint_exhausted
+	)
+
+
+func predict_local_flip_takeoff(intent: int, request_id := 0) -> bool:
+	var direction := clampi(intent, -1, 1)
+	var predicted_velocity := (
+		local_predicted_horizontal_velocity
+		if local_locomotion_prediction_initialized
+		else Vector2(target_velocity.x, target_velocity.z)
+	)
+	if (
+		direction == 0
+		or not has_local_flip_run_commitment()
+		or predicted_velocity.length() < ServerPlayer.FLIP_MIN_HORIZONTAL_SPEED
+	):
+		return false
+	local_flip_prediction_active = true
+	local_flip_prediction_elapsed = 0.0
+	local_flip_prediction_base_sequence = target_flip_sequence
+	local_flip_prediction_base_jump_sequence = target_jump_sequence
+	local_flip_prediction_request_id = maxi(request_id, 0)
+	local_flip_request_elapsed = 0.0
+	visual_flip_direction = direction
+	visual_flip_phase = 0.0
+	visual_flip_angle = 0.0
+	return true
+
+
+func resolve_local_jump_request(
+	request_id: int,
+	jump_accepted: bool,
+	accepted_flip_direction: int
+) -> void:
+	if (
+		request_id <= 0
+		or request_id != local_flip_prediction_request_id
+	):
+		return
+	var direction := clampi(accepted_flip_direction, -1, 1)
+	var authority_already_presented := (
+		target_flip_sequence > local_flip_prediction_base_sequence
+	)
+	local_flip_prediction_request_id = 0
+	local_flip_request_elapsed = 0.0
+	if not jump_accepted or direction == 0:
+		local_flip_prediction_active = false
+		# Rejection is not a new animation. Reset the provisional sub-frame pose instead of easing it
+		# into a visible counter-rotation.
+		if not authority_already_presented:
+			visual_flip_direction = 0
+			visual_flip_phase = 0.0
+			visual_flip_angle = 0.0
+			_apply_body_visual_rotation()
+		return
+	if authority_already_presented:
+		local_flip_prediction_active = false
+		return
+	if not local_flip_prediction_active:
+		local_flip_prediction_active = true
+		local_flip_prediction_elapsed = 0.0
+		visual_flip_phase = 0.0
+		visual_flip_angle = 0.0
+	visual_flip_direction = direction
 
 
 func _consume_capture_transition_motion() -> bool:
@@ -287,6 +680,7 @@ func _consume_capture_transition_motion() -> bool:
 
 
 func _arm_capture_transition_guard() -> void:
+	_clear_flip_gesture()
 	captured_mouse_motion_discard_remaining = (
 		MOUSE_CAPTURE_TRANSITION_DISCARD_EVENTS
 	)
@@ -298,12 +692,17 @@ func _set_wrist_mouse_look_active(value: bool) -> void:
 		return
 	wrist_mouse_look_active = next_value
 	if wrist_mouse_look_active:
-		# Until RMB is held, the presentation pose aims the camera down at the
-		# device. Hand control to ordinary mouse look from the pitch currently
-		# on screen so vertical input is visible immediately instead of being
-		# hidden by the pose and appearing as a jump when the device closes.
-		look_pitch = camera_pivot.rotation.x
+		# Do not seed free-look from CameraPivot.rotation: that transform also contains head motion,
+		# impacts, and other presentation offsets. Inheriting it made RMB convert a visual offset into
+		# persistent upward camera pitch. Enter from the safe operating view, while preserving a view
+		# that the player had deliberately moved farther downward.
+		look_pitch = clampf(
+			minf(_resolved_camera_pitch(), WRIST_LOOK_PITCH),
+			MIN_WRIST_LOOK_PITCH,
+			WRIST_LOOK_PITCH
+		)
 		wrist_mouse_look_owns_pitch = true
+		wrist_mouse_look_blend = 1.0
 		return
 
 
@@ -328,6 +727,14 @@ func apply_server_state(state: Dictionary) -> void:
 	target_rotation = SafeVariant.vector3_strict_or(
 		state.get("rot", current_rotation), current_rotation
 	)
+	target_look_pitch = clampf(
+		SafeVariant.finite_float_or(
+			state.get("look_pitch"),
+			target_look_pitch
+		),
+		deg_to_rad(-MAX_LOOK_PITCH_DEGREES),
+		deg_to_rad(MAX_LOOK_PITCH_DEGREES)
+	)
 	target_velocity = SafeVariant.vector3_strict_or(
 		state.get("vel", Vector3.ZERO), Vector3.ZERO
 	)
@@ -340,6 +747,123 @@ func apply_server_state(state: Dictionary) -> void:
 			target_jump_sequence
 		),
 		0
+	)
+	target_flip_sequence = maxi(
+		SafeVariant.integral_int_or(
+			state.get("flip_sequence", target_flip_sequence),
+			target_flip_sequence
+		),
+		0
+	)
+	target_flip_direction = clampi(
+		SafeVariant.integral_int_or(
+			state.get("flip_direction", target_flip_direction),
+			target_flip_direction
+		),
+		-1,
+		1
+	)
+	target_flip_active = SafeVariant.strict_bool_or(
+		state.get("flip_active", target_flip_active),
+		target_flip_active
+	)
+	target_flip_phase = clampf(
+		SafeVariant.finite_float_or(
+			state.get("flip_phase"),
+			target_flip_phase
+		),
+		0.0,
+		1.0
+	)
+	target_kick_sequence = maxi(
+		SafeVariant.integral_int_or(
+			state.get("kick_sequence", target_kick_sequence),
+			target_kick_sequence
+		),
+		0
+	)
+	target_kick_side = clampi(
+		SafeVariant.integral_int_or(
+			state.get("kick_side", target_kick_side),
+			target_kick_side
+		),
+		-1,
+		1
+	)
+	target_kick_style = clampi(
+		SafeVariant.integral_int_or(
+			state.get("kick_style", target_kick_style),
+			target_kick_style
+		),
+		ServerPlayer.KickStyle.SINGLE,
+		ServerPlayer.KickStyle.DROP
+	)
+	target_kick_active = SafeVariant.strict_bool_or(
+		state.get("kick_active", target_kick_active),
+		target_kick_active
+	)
+	target_kick_phase = clampf(
+		SafeVariant.finite_float_or(
+			state.get("kick_phase"),
+			target_kick_phase
+		),
+		0.0,
+		1.0
+	)
+	target_kick_clock = SafeVariant.finite_float_or(
+		state.get("kick_clock"),
+		target_kick_clock
+	)
+	target_kick_direction = SafeVariant.vector3_strict_or(
+		state.get("kick_direction", target_kick_direction),
+		target_kick_direction
+	)
+	target_kick_view_yaw = SafeVariant.finite_float_or(
+		state.get("kick_view_yaw"),
+		target_kick_view_yaw
+	)
+	target_kick_view_pitch = SafeVariant.finite_float_or(
+		state.get("kick_view_pitch"),
+		target_kick_view_pitch
+	)
+	target_kick_flip_direction = clampi(
+		SafeVariant.integral_int_or(
+			state.get("kick_flip_direction", target_kick_flip_direction),
+			target_kick_flip_direction
+		),
+		-1,
+		1
+	)
+	target_dropkick_tilt_input = clampf(
+		SafeVariant.finite_float_or(
+			state.get("dropkick_tilt_input"),
+			target_dropkick_tilt_input
+		),
+		-1.0,
+		1.0
+	)
+	target_kick_guidance_direction = SafeVariant.vector3_strict_or(
+		state.get(
+			"kick_guidance_direction",
+			target_kick_guidance_direction
+		),
+		target_kick_guidance_direction
+	)
+	target_kick_guidance_weight = clampf(
+		SafeVariant.finite_float_or(
+			state.get("kick_guidance_weight"),
+			target_kick_guidance_weight
+		),
+		0.0,
+		ServerPlayer.KICK_GUIDANCE_MAX_WEIGHT
+	)
+	target_kick_intensity = clampf(
+		SafeVariant.finite_float_or(
+			state.get("kick_intensity"),
+			target_kick_intensity
+		),
+		1.0,
+		1.72
 	)
 	target_ragdoll_active = SafeVariant.strict_bool_or(
 		state.get("ragdoll_active", false),
@@ -363,6 +887,55 @@ func apply_server_state(state: Dictionary) -> void:
 		state.get("trip_direction", target_trip_direction),
 		target_trip_direction
 	)
+	target_landing_sequence = maxi(
+		SafeVariant.integral_int_or(
+			state.get("landing_sequence", target_landing_sequence),
+			target_landing_sequence
+		),
+		0
+	)
+	target_landing_impact_strength = clampf(
+		SafeVariant.finite_float_or(
+			state.get(
+				"landing_impact_strength",
+				target_landing_impact_strength
+			),
+			target_landing_impact_strength
+		),
+		0.0,
+		1.0
+	)
+	target_body_impact_sequence = maxi(
+		SafeVariant.integral_int_or(
+			state.get("body_impact_sequence", target_body_impact_sequence),
+			target_body_impact_sequence
+		),
+		0
+	)
+	target_body_impact_strength = clampf(
+		SafeVariant.finite_float_or(
+			state.get("body_impact_strength"),
+			target_body_impact_strength
+		),
+		0.0,
+		1.0
+	)
+	target_body_impact_direction = SafeVariant.vector3_strict_or(
+		state.get("body_impact_direction", target_body_impact_direction),
+		target_body_impact_direction
+	)
+	target_body_impact_contact_side = clampf(
+		SafeVariant.finite_float_or(
+			state.get("body_impact_contact_side"),
+			target_body_impact_contact_side
+		),
+		-1.0,
+		1.0
+	)
+	target_body_impact_clock = SafeVariant.finite_float_or(
+		state.get("body_impact_clock"),
+		target_body_impact_clock
+	)
 	var next_gait_cycle := maxf(
 		SafeVariant.finite_float_or(
 			state.get("gait_cycle"),
@@ -380,6 +953,14 @@ func apply_server_state(state: Dictionary) -> void:
 	target_gait_active = SafeVariant.strict_bool_or(
 		state.get("gait_active", false),
 		false
+	)
+	target_gait_momentum_recovery = clampf(
+		SafeVariant.finite_float_or(
+			state.get("gait_momentum_recovery"),
+			target_gait_momentum_recovery
+		),
+		0.0,
+		1.0
 	)
 	target_footstep_surface = PhysicalSurface.normalize(
 		state.get("footstep_surface", target_footstep_surface)
@@ -444,6 +1025,10 @@ func _apply_player_system_state(state: Dictionary) -> void:
 		0.0,
 		1.0
 	)
+	target_sprint_exhausted = SafeVariant.strict_bool_or(
+		state.get("sprint_exhausted", target_sprint_exhausted),
+		target_sprint_exhausted
+	)
 	var next_inventory_revision := SafeVariant.integral_int_or(
 		state.get("inventory_revision"),
 		-1
@@ -474,6 +1059,7 @@ func _apply_player_system_state(state: Dictionary) -> void:
 	var server_wrist_page := FIELDLINK_DISPLAY_STATE.sanitize_page(
 		state.get("wrist_display_page", FIELDLINK_DISPLAY_STATE.PAGE_HOME)
 	)
+	_apply_plasma_cutter_snapshot(state)
 	target_wrist_interface_open = server_wrist_open
 	target_wrist_display_page = server_wrist_page
 	if is_local_player:
@@ -487,7 +1073,6 @@ func _apply_player_system_state(state: Dictionary) -> void:
 			wrist_presentation.apply_replicated_page(server_wrist_page)
 	else:
 		_sync_remote_wrist_display()
-
 	if inventory_hud != null:
 		inventory_hud.apply_player_state(target_player_state, inventory_changed)
 	if vision_effect != null:
@@ -548,15 +1133,40 @@ func _apply_equipment_state(equipment: Dictionary) -> void:
 			continue
 		var visual := definition.instantiate_equipped_visual()
 		visual.name = ("%sVisual" % slot).to_pascal_case()
+		if slot == PlayerInventoryRules.WRIST_DEVICE_SLOT:
+			visual.scale *= EQUIPPED_WRIST_DEVICE_SCALE
 		mount.add_child(visual)
 		equipment_visuals[slot] = visual
 		equipment_definition_paths[slot] = definition_path
 
 	_update_local_equipment_visibility()
 	_sync_remote_wrist_display()
+	_sync_local_wrist_presentation_mount()
+	if target_ragdoll_active:
+		_sync_backpack_ragdoll_mount(true)
+
+
+func has_equipped_backpack() -> bool:
+	var equipment: Dictionary = _cached_public_inventory.get("equipment", {})
+	var entry: Dictionary = SafeVariant.dictionary_copy(
+		equipment.get(PlayerInventoryRules.BACKPACK_SLOT, {}),
+		false
+	)
+	return not entry.is_empty()
 
 
 func _get_equipment_mount(slot: String) -> Node3D:
+	if character_skin != null and character_skin.is_usable():
+		match slot:
+			PlayerInventoryRules.BACKPACK_SLOT:
+				return character_skin.get_backpack_mount()
+			PlayerInventoryRules.EYES_SLOT:
+				return character_skin.get_eyes_mount()
+			PlayerInventoryRules.WRIST_DEVICE_SLOT:
+				if has_left_arm:
+					return character_skin.get_wrist_mount(true)
+				if has_right_arm:
+					return character_skin.get_wrist_mount(false)
 	match slot:
 		PlayerInventoryRules.BACKPACK_SLOT:
 			return backpack_mount
@@ -580,7 +1190,9 @@ func _update_local_equipment_visibility() -> void:
 		PlayerInventoryRules.WRIST_DEVICE_SLOT
 	) as Node3D
 	if is_instance_valid(wrist_visual):
-		wrist_visual.visible = not is_local_player
+		# There is no camera-only Fieldlink copy. Owners and observers render this same equipped
+		# visual, mounted to the same authored wrist pose.
+		wrist_visual.visible = true
 
 
 func _ensure_remote_wrist_display() -> Node:
@@ -657,23 +1269,37 @@ func _rebuild_held_item_visual() -> void:
 	held_item_visual = null
 	if held_item_definition_path.is_empty():
 		return
-	var definition := load(
-		held_item_definition_path
-	) as GunItemDefinition
-	if definition == null:
+	var definition := load(held_item_definition_path) as ItemDefinition
+	if (
+		definition == null
+		or not (
+			definition is GunItemDefinition
+			or definition is PlasmaCutterDefinition
+		)
+		or not definition.has_method("instantiate_held_visual")
+	):
 		return
-	var mount := (
-		first_person_item_mount
-		if is_local_player
-		else held_item_mount
-	)
-	held_item_visual = definition.instantiate_held_visual(
+	var mount := _get_held_item_visual_mount()
+	held_item_visual = definition.call(
+		"instantiate_held_visual",
 		held_item_state,
 		is_local_player
-	)
-	held_item_visual.name = "HeldGunVisual"
+	) as Node3D
+	if held_item_visual == null:
+		return
+	held_item_visual.name = "HeldItemVisual"
 	mount.add_child(held_item_visual)
 	_update_held_item_mount()
+	_sync_plasma_cutter_emitter()
+
+
+func _get_held_item_visual_mount() -> Node3D:
+	if is_local_player:
+		return first_person_item_mount
+	if character_skin != null and character_skin.is_usable():
+		var uses_left := not has_right_arm and has_left_arm
+		return character_skin.get_hand_item_mount(uses_left)
+	return held_item_mount
 
 
 func _apply_limb_state(limbs: Dictionary) -> void:
@@ -684,9 +1310,15 @@ func _apply_limb_state(limbs: Dictionary) -> void:
 	has_right_arm = bool(limbs.get("right_arm", true))
 	has_left_leg = bool(limbs.get("left_leg", true))
 	has_right_leg = bool(limbs.get("right_leg", true))
-	left_arm_visual.visible = has_left_arm
-	right_arm_visual.visible = has_right_arm
 	procedural_leg_rig.set_limb_presence(has_left_leg, has_right_leg)
+	if character_skin != null:
+		character_skin.set_limb_presence(
+			has_left_arm,
+			has_right_arm,
+			has_left_leg,
+			has_right_leg
+		)
+	_sync_character_appearance()
 	player_ragdoll.set_limb_presence(
 		has_left_arm,
 		has_right_arm,
@@ -696,7 +1328,7 @@ func _apply_limb_state(limbs: Dictionary) -> void:
 	_update_held_item_mount()
 	_reparent_wrist_visual()
 	if wrist_presentation != null:
-		wrist_presentation.set_wrist_side(has_left_arm)
+		_sync_local_wrist_presentation_mount()
 
 
 func _update_held_item_mount() -> void:
@@ -739,6 +1371,27 @@ func _reparent_wrist_visual() -> void:
 	if next_mount == null or wrist_visual.get_parent() == next_mount:
 		return
 	wrist_visual.reparent(next_mount, false)
+
+
+func _reparent_equipment_visuals() -> void:
+	for slot_value: Variant in equipment_visuals.keys():
+		var slot := str(slot_value)
+		var visual := equipment_visuals.get(slot) as Node3D
+		if not is_instance_valid(visual):
+			continue
+		var next_mount := _get_equipment_mount(slot)
+		if next_mount == null or visual.get_parent() == next_mount:
+			continue
+		visual.reparent(next_mount, false)
+
+
+func _reparent_held_item_visual() -> void:
+	if not is_instance_valid(held_item_visual):
+		return
+	var next_mount := _get_held_item_visual_mount()
+	if next_mount == null or held_item_visual.get_parent() == next_mount:
+		return
+	held_item_visual.reparent(next_mount, false)
 
 
 func has_equipped_wrist_device() -> bool:
@@ -853,6 +1506,12 @@ func set_local_locomotion_input(move_input: Vector2, wants_run: bool) -> void:
 		return
 	local_move_input = move_input.limit_length(1.0)
 	local_run_input = wants_run
+	if (
+		not local_run_input
+		or local_move_input.length_squared()
+		<= ServerPlayer.MOVEMENT_INPUT_THRESHOLD_SQUARED
+	):
+		_clear_flip_gesture()
 
 
 # Shared entry point for the keyboard and technical-object interfaces. Server-
@@ -880,6 +1539,8 @@ func _can_use_wrist_device() -> bool:
 		has_equipped_wrist_device()
 		and (has_left_arm or has_right_arm)
 		and not target_ragdoll_active
+		and not target_flip_active
+		and not local_flip_prediction_active
 	)
 
 
@@ -890,8 +1551,20 @@ func _set_wrist_interface_open(
 	var next_value := value and _can_use_wrist_device()
 	if next_value == local_wrist_interface_open:
 		return
+	if not next_value:
+		local_plasma_cutter_trigger_held = false
 	if next_value:
+		_clear_flip_gesture()
 		wrist_mouse_look_owns_pitch = false
+		wrist_mouse_look_blend = 0.0
+		fieldlink_pose_pitch = WRIST_LOOK_PITCH
+		fieldlink_hold_motion_active = false
+		if character_skin != null:
+			character_skin.reset_fieldlink_arm_pose_history()
+	else:
+		# RMB may legitimately have used Fieldlink's wider pitch range. Do not leak that device-only
+		# angle back into ordinary view when the terminal closes.
+		look_pitch = maxf(look_pitch, MIN_WORLD_LOOK_PITCH)
 	wrist_mouse_look_active = false
 	local_wrist_interface_open = next_value
 	target_wrist_interface_open = next_value
@@ -899,7 +1572,6 @@ func _set_wrist_interface_open(
 		wrist_request_grace_remaining = WRIST_REQUEST_GRACE_SECONDS
 	_ensure_wrist_presentation()
 	if wrist_presentation != null:
-		wrist_presentation.set_wrist_side(has_left_arm)
 		wrist_presentation.set_scanner_heading(look_yaw)
 		_refresh_wrist_session_info()
 		wrist_presentation.set_open(local_wrist_interface_open)
@@ -929,13 +1601,14 @@ func _ensure_wrist_presentation() -> void:
 	)
 	if wrist_presentation == null:
 		return
-	camera.add_child(wrist_presentation)
+	add_child(wrist_presentation)
+	wrist_presentation.bind_camera(camera)
 	var client := get_node_or_null("/root/Client")
 	if client != null and client.has_method("get_listener_acoustic_intensity"):
 		wrist_presentation.set_acoustic_intensity_provider(
 			Callable(client, "get_listener_acoustic_intensity")
 		)
-	wrist_presentation.set_wrist_side(has_left_arm)
+	_sync_local_wrist_presentation_mount()
 	wrist_presentation.set_scanner_heading(look_yaw)
 	wrist_presentation.invite_friend_requested.connect(
 		_on_invite_friend_requested
@@ -1079,6 +1752,8 @@ func apply_replicated_wrist_state(
 	open_value: bool,
 	page_value: Variant
 ) -> void:
+	if open_value and not target_wrist_interface_open:
+		fieldlink_pose_pitch = WRIST_LOOK_PITCH
 	target_wrist_interface_open = open_value
 	target_wrist_display_page = FIELDLINK_DISPLAY_STATE.sanitize_page(page_value)
 	if is_local_player:
@@ -1090,6 +1765,161 @@ func apply_replicated_wrist_state(
 				)
 		return
 	_sync_remote_wrist_display()
+
+
+func _apply_plasma_cutter_snapshot(state: Dictionary) -> void:
+	target_plasma_cutter_available = SafeVariant.strict_bool_or(
+		state.get("plasma_cutter_available", false),
+		false
+	)
+	target_plasma_cutter_heat_ratio = clampf(
+		SafeVariant.finite_float_or(
+			state.get("plasma_cutter_heat_ratio"),
+			target_plasma_cutter_heat_ratio
+		),
+		0.0,
+		1.0
+	)
+	target_plasma_cutter_overheated = SafeVariant.strict_bool_or(
+		state.get("plasma_cutter_overheated", false),
+		false
+	)
+	target_plasma_cutter_active = SafeVariant.strict_bool_or(
+		state.get("plasma_cutter_active", false),
+		false
+	)
+	target_plasma_cutter_has_hit = SafeVariant.strict_bool_or(
+		state.get("plasma_cutter_has_hit", false),
+		false
+	)
+	target_plasma_cutter_hit_position = SafeVariant.vector3_strict_or(
+		state.get("plasma_cutter_hit_position", target_plasma_cutter_hit_position),
+		target_plasma_cutter_hit_position
+	)
+	target_plasma_cutter_range_meters = maxf(
+		SafeVariant.finite_float_or(
+			state.get("plasma_cutter_range_meters"),
+			target_plasma_cutter_range_meters
+		),
+		0.0
+	)
+	target_plasma_cutter_kerf_millimeters = maxf(
+		SafeVariant.finite_float_or(
+			state.get("plasma_cutter_kerf_millimeters"),
+			target_plasma_cutter_kerf_millimeters
+		),
+		0.0
+	)
+	target_plasma_cutter_cut_depth_millimeters = maxf(
+		SafeVariant.finite_float_or(
+			state.get("plasma_cutter_cut_depth_millimeters"),
+			target_plasma_cutter_cut_depth_millimeters
+		),
+		0.0
+	)
+	target_plasma_cutter_continuous_duty_seconds = maxf(
+		SafeVariant.finite_float_or(
+			state.get("plasma_cutter_continuous_duty_seconds"),
+			target_plasma_cutter_continuous_duty_seconds
+		),
+		0.0
+	)
+	target_plasma_cutter_full_cool_seconds = maxf(
+		SafeVariant.finite_float_or(
+			state.get("plasma_cutter_full_cool_seconds"),
+			target_plasma_cutter_full_cool_seconds
+		),
+		0.0
+	)
+	if target_plasma_cutter_overheated and local_plasma_cutter_trigger_held:
+		local_plasma_cutter_trigger_held = false
+
+
+func _ensure_plasma_cutter_beam() -> void:
+	if plasma_cutter_beam != null:
+		return
+	plasma_cutter_beam = PLASMA_CUTTER_BEAM_SCRIPT.new() as Node3D
+	if plasma_cutter_beam == null:
+		return
+	plasma_cutter_beam.name = "PlasmaCutterBeam"
+	add_child(plasma_cutter_beam)
+	_sync_plasma_cutter_emitter()
+
+
+func _sync_plasma_cutter_emitter() -> void:
+	plasma_cutter_emitter = null
+	if is_instance_valid(held_item_visual):
+		plasma_cutter_emitter = held_item_visual.find_child(
+			"PlasmaEmitter",
+			true,
+			false
+		) as Node3D
+	if plasma_cutter_beam != null:
+		plasma_cutter_beam.call("bind_emitter", plasma_cutter_emitter)
+
+
+func _predicted_plasma_cutter_hit() -> Dictionary:
+	if (
+		camera == null
+		or target_plasma_cutter_range_meters <= 0.0
+	):
+		return {}
+	# Authority casts from ServerPlayer/Grabber, whose authored transform matches this camera. The
+	# visible beam begins at the handheld emitter and converges on this shared aim ray so its
+	# endpoint and the resulting destruction can never be parallel-but-offset.
+	var origin := camera.global_position
+	var direction := -camera.global_basis.z.normalized()
+	var finish := origin + direction * target_plasma_cutter_range_meters
+	var query := PhysicsRayQueryParameters3D.create(origin, finish)
+	query.collide_with_areas = false
+	var server := get_node_or_null("/root/Server")
+	if server != null and server.has_method("get_server_player"):
+		var server_player := server.call("get_server_player", player_id) as PhysicsBody3D
+		if server_player != null:
+			query.exclude = [server_player.get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return {"position": finish, "has_hit": false}
+	return {
+		"position": hit.get("position", finish),
+		"has_hit": true,
+	}
+
+
+func _update_plasma_cutter_presentation(delta: float) -> void:
+	_ensure_plasma_cutter_beam()
+	if plasma_cutter_beam == null:
+		return
+	var active := target_plasma_cutter_active
+	var endpoint := target_plasma_cutter_hit_position
+	var has_hit := target_plasma_cutter_has_hit
+	if is_local_player:
+		active = (
+			local_plasma_cutter_trigger_held
+			and not local_wrist_interface_open
+			and not target_plasma_cutter_overheated
+		)
+		if active:
+			var prediction := _predicted_plasma_cutter_hit()
+			endpoint = prediction.get("position", endpoint)
+			has_hit = bool(prediction.get("has_hit", has_hit))
+			# Prediction makes the first press visible immediately. As soon as authority has evaluated
+			# that same held press, its endpoint wins: this is the exact world point receiving cuts.
+			if (
+				target_plasma_cutter_active
+				and target_plasma_cutter_hit_position.is_finite()
+			):
+				endpoint = target_plasma_cutter_hit_position
+				has_hit = target_plasma_cutter_has_hit
+	plasma_cutter_beam.call(
+		"update_beam",
+		endpoint,
+		active,
+		has_hit,
+		target_plasma_cutter_heat_ratio,
+		delta,
+		is_local_player
+	)
 
 
 func apply_fieldlink_device_control_snapshot(snapshot: Dictionary) -> void:
@@ -1116,8 +1946,19 @@ func _update_wrist_pose(delta: float) -> void:
 		1.0 if pose_active else 0.0,
 		WRIST_POSE_BLEND_SPEED * maxf(delta, 0.0)
 	)
+	wrist_mouse_look_blend = move_toward(
+		wrist_mouse_look_blend,
+		1.0 if wrist_mouse_look_active else 0.0,
+		WRIST_LOOK_RECENTER_SPEED * maxf(delta, 0.0)
+	)
+	if (
+		not wrist_mouse_look_active
+		and is_zero_approx(wrist_mouse_look_blend)
+	):
+		wrist_mouse_look_owns_pitch = false
 	if not pose_active and is_zero_approx(wrist_pose_weight):
 		wrist_mouse_look_owns_pitch = false
+		wrist_mouse_look_blend = 0.0
 	_update_held_item_mount()
 
 
@@ -1148,6 +1989,7 @@ func update_headbob(delta: float) -> void:
 		target_gait_stride_distance,
 		PlayerGait.MINIMUM_STRIDE_DISTANCE
 	)
+	resolved_gait_momentum_recovery = target_gait_momentum_recovery
 	var is_moving := (
 		target_gait_active
 		and target_on_floor
@@ -1162,24 +2004,82 @@ func update_headbob(delta: float) -> void:
 		var input_strength := clampf(local_move_input.length(), 0.0, 1.0)
 		if target_ragdoll_active:
 			input_strength = 0.0
-		var wish_speed := (
-			ServerPlayer.RUN_SPEED if local_run_input else ServerPlayer.WALK_SPEED
-		) * input_strength
-		var predicted_velocity := ServerPlayer.calculate_horizontal_velocity(
-			Vector3(local_predicted_horizontal_speed, 0.0, 0.0),
-			Vector3.RIGHT if input_strength > 0.001 else Vector3.ZERO,
-			wish_speed,
-			true,
+		if not local_locomotion_prediction_initialized:
+			var initial_local_velocity := global_basis.inverse() * target_velocity
+			local_predicted_horizontal_velocity = Vector2(
+				initial_local_velocity.x,
+				initial_local_velocity.z
+			)
+			local_locomotion_prediction_initialized = true
+		var local_sprint_requested := (
+			local_run_input
+			and input_strength > 0.001
+			and not target_sprint_exhausted
+			and target_stamina_ratio
+			> ServerPlayer.STAMINA_EMPTY_THRESHOLD / ServerPlayer.MAX_STAMINA
+		)
+		local_recovery_gait.update_momentum_recovery(
+			local_predicted_horizontal_speed,
+			target_on_floor,
+			local_sprint_requested,
 			delta
+		)
+		resolved_gait_momentum_recovery = (
+			local_recovery_gait.get_momentum_recovery_weight()
+		)
+		local_sprint_speed_ramp_elapsed = (
+			ServerPlayer.advance_sprint_speed_ramp(
+				local_sprint_speed_ramp_elapsed,
+				local_sprint_requested,
+				target_on_floor,
+				delta
+			)
+		)
+		var wish_speed_limit := ServerPlayer.WALK_SPEED
+		if local_sprint_requested:
+			wish_speed_limit = ServerPlayer.sprint_speed_at_elapsed(
+				local_sprint_speed_ramp_elapsed
+			)
+		var wish_speed := wish_speed_limit * input_strength
+		var predicted_velocity := Vector3.ZERO
+		if not target_ragdoll_active:
+			predicted_velocity = ServerPlayer.calculate_horizontal_velocity(
+				Vector3(
+					local_predicted_horizontal_velocity.x,
+					0.0,
+					local_predicted_horizontal_velocity.y
+				),
+				Vector3(
+					local_move_input.x / input_strength,
+					0.0,
+					local_move_input.y / input_strength
+				) if input_strength > 0.001 else Vector3.ZERO,
+				wish_speed,
+				target_on_floor,
+				delta,
+				resolved_gait_momentum_recovery
+			)
+		local_predicted_horizontal_velocity = Vector2(
+			predicted_velocity.x,
+			predicted_velocity.z
 		)
 		local_predicted_horizontal_speed = predicted_velocity.length()
 		horizontal_speed = local_predicted_horizontal_speed
-		stride_distance = PlayerGait.get_stride_distance(local_run_input)
+		stride_distance = PlayerGait.get_stride_distance_for_motion_and_recovery(
+			horizontal_speed,
+			local_run_input,
+			player_id,
+			floori(visual_gait_cycle),
+			resolved_gait_momentum_recovery
+		)
 		is_moving = (
 			target_on_floor
 			and not target_ragdoll_active
-			and horizontal_speed * horizontal_speed
-			>= PlayerGait.MINIMUM_SPEED_SQUARED
+			and (
+				horizontal_speed * horizontal_speed
+				>= PlayerGait.MINIMUM_SPEED_SQUARED
+				or resolved_gait_momentum_recovery > 0.001
+			)
 		)
 	else:
 		local_predicted_horizontal_speed = replicated_horizontal_speed
@@ -1190,12 +2090,16 @@ func update_headbob(delta: float) -> void:
 	)
 	var run_target := clampf(
 		inverse_lerp(
-			PlayerGait.WALK_STEP_DISTANCE,
-			PlayerGait.RUN_STEP_DISTANCE,
+			PlayerGait.WALK_STEP_DISTANCE_RANGE.y,
+			PlayerGait.RUN_STEP_DISTANCE_RANGE.x,
 			stride_distance
 		),
 		0.0,
 		1.0
+	)
+	run_target = maxf(
+		run_target,
+		resolved_gait_momentum_recovery * 0.78
 	)
 	headbob_run_weight = move_toward(
 		headbob_run_weight,
@@ -1207,7 +2111,10 @@ func update_headbob(delta: float) -> void:
 		return
 	stride_distance = maxf(stride_distance, PlayerGait.MINIMUM_STRIDE_DISTANCE)
 	var cycles_per_second := (
-		horizontal_speed / stride_distance
+		PlayerGait.get_effective_gait_speed(
+			horizontal_speed,
+			resolved_gait_momentum_recovery
+		) / stride_distance
 		if is_moving
 		else 0.0
 	)
@@ -1230,31 +2137,47 @@ func update_headbob(delta: float) -> void:
 			0.0,
 			1.0
 		)
-	_predict_local_footstep(is_moving)
 
 
-func _predict_local_footstep(is_moving: bool) -> void:
-	if not is_local_player or not gait_initialized:
+func _predict_local_footstep() -> void:
+	if (
+		not is_local_player
+		or not gait_initialized
+		or procedural_leg_rig == null
+		or not procedural_leg_rig.has_foot_contact_event()
+	):
 		return
-	var current_step_sequence := floori(visual_gait_cycle)
-	if current_step_sequence < last_predicted_gait_step_sequence:
-		last_predicted_gait_step_sequence = current_step_sequence
+	var contact_sequence := procedural_leg_rig.get_foot_contact_event_sequence()
+	if contact_sequence <= last_predicted_gait_step_sequence:
 		return
-	if not is_moving or current_step_sequence <= last_predicted_gait_step_sequence:
-		return
-	# A multi-step correction means a snapshot discontinuity, not several physical impacts. Catch
-	# up silently; ordinary one-step crossings are the exact phase shared with the camera bob.
-	if current_step_sequence - last_predicted_gait_step_sequence == 1:
-		var client := get_node_or_null("/root/Client")
-		if client != null and client.has_method("predict_local_player_sound"):
-			client.call(
-				"predict_local_player_sound",
-				PhysicalSurface.footstep_sound_id(target_footstep_surface),
-				global_position + Vector3.UP * 0.35,
-				{},
-				LOCAL_AUDIO_PREDICTION.gait_step_key(current_step_sequence)
-			)
-	last_predicted_gait_step_sequence = current_step_sequence
+	var sound_id := PhysicalSurface.footstep_sound_id(
+		procedural_leg_rig.get_foot_contact_event_surface()
+	)
+	var profile := LOCAL_AUDIO_PREDICTION.player_cue_profile(sound_id)
+	profile["volume_db"] = PlayerGait.get_footstep_volume_db_for_motion(
+		Vector2(target_velocity.x, target_velocity.z).length(),
+		player_id,
+		contact_sequence
+	)
+	var prediction_key := LOCAL_AUDIO_PREDICTION.gait_step_key(
+		contact_sequence
+	)
+	var client := get_node_or_null("/root/Client")
+	if client != null:
+		client.call(
+			"predict_local_player_sound",
+			sound_id,
+			procedural_leg_rig.get_foot_contact_event_position(),
+			profile,
+			prediction_key
+		)
+		client.call(
+			"request_foot_contact",
+			contact_sequence,
+			procedural_leg_rig.get_foot_contact_event_side(),
+			prediction_key
+		)
+	last_predicted_gait_step_sequence = contact_sequence
 	
 func set_local_player(value: bool) -> void:
 	is_local_player = value
@@ -1273,6 +2196,11 @@ func set_local_player(value: bool) -> void:
 		acoustic_perception.set_perception_active(
 			is_local_player and not local_has_equipped_eyes
 		)
+	if character_skin != null:
+		character_skin.set_local_view(is_local_player)
+	if player_ragdoll != null:
+		player_ragdoll.set_local_view(is_local_player)
+	_sync_character_appearance()
 
 	if is_local_player:
 		_arm_capture_transition_guard()
@@ -1280,9 +2208,11 @@ func set_local_player(value: bool) -> void:
 		if not target_player_state.is_empty():
 			_apply_player_system_state(target_player_state)
 	else:
+		local_plasma_cutter_trigger_held = false
 		local_wrist_interface_open = false
 		wrist_mouse_look_active = false
 		wrist_mouse_look_owns_pitch = false
+		wrist_mouse_look_blend = 0.0
 		wrist_request_grace_remaining = 0.0
 		if wrist_presentation != null:
 			wrist_presentation.set_open(false)
@@ -1292,16 +2222,78 @@ func set_local_player(value: bool) -> void:
 
 
 func _resolved_camera_pitch() -> float:
-	if wrist_mouse_look_owns_pitch:
-		return look_pitch
-	return lerp_angle(
+	var operating_pitch := lerp_angle(
 		look_pitch,
 		WRIST_LOOK_PITCH,
 		wrist_pose_weight
 	)
+	if not wrist_mouse_look_owns_pitch:
+		return operating_pitch
+	return lerp_angle(
+		operating_pitch,
+		look_pitch,
+		clampf(wrist_mouse_look_blend, 0.0, 1.0)
+	)
+
+
+static func _safe_fieldlink_pose_pitch(value: float) -> float:
+	return clampf(
+		value if is_finite(value) else WRIST_LOOK_PITCH,
+		FIELDLINK_POSE_MIN_PITCH,
+		FIELDLINK_POSE_MAX_PITCH
+	)
+
+
+static func _focused_fieldlink_pose_pitch(camera_pitch: float) -> float:
+	var resolved_pitch := camera_pitch if is_finite(camera_pitch) else WRIST_LOOK_PITCH
+	if resolved_pitch <= WRIST_LOOK_PITCH:
+		# Looking farther down remains a useful request: follow it across the physical arm's readable arc.
+		return _safe_fieldlink_pose_pitch(resolved_pitch)
+	var upward_head_ratio := clampf(
+		inverse_lerp(WRIST_LOOK_PITCH, MAX_LOOK_PITCH, resolved_pitch),
+		0.0,
+		1.0
+	)
+	return lerpf(
+		WRIST_LOOK_PITCH,
+		FIELDLINK_UPWARD_FOCUS_PITCH,
+		smoothstep(0.0, 1.0, upward_head_ratio)
+	)
 
 
 func _process(delta: float) -> void:
+	# LMB is already streamed through the ordinary primary-action route. Mirror it locally only for
+	# zero-latency beam presentation; authority still decides every destructive contact.
+	if is_local_player:
+		local_plasma_cutter_trigger_held = (
+			target_plasma_cutter_available
+			and not target_plasma_cutter_overheated
+			and not local_wrist_interface_open
+			and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+			and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+		)
+	flip_flick_sample_remaining = maxf(
+		flip_flick_sample_remaining - maxf(delta, 0.0),
+		0.0
+	)
+	if flip_flick_sample_remaining <= 0.0:
+		flip_flick_accumulated_pitch = 0.0
+		flip_flick_accumulated_elapsed = 0.0
+	dropkick_tilt_sample_remaining = maxf(
+		dropkick_tilt_sample_remaining - maxf(delta, 0.0),
+		0.0
+	)
+	if dropkick_tilt_sample_remaining <= 0.0:
+		dropkick_tilt_accumulated_yaw = 0.0
+		dropkick_tilt_accumulated_elapsed = 0.0
+	if local_flip_prediction_request_id > 0:
+		local_flip_request_elapsed += maxf(delta, 0.0)
+		if local_flip_request_elapsed >= FLIP_REQUEST_TIMEOUT_SECONDS:
+			resolve_local_jump_request(
+				local_flip_prediction_request_id,
+				false,
+				0
+			)
 	_update_wrist_pose(delta)
 	if (
 		is_local_player
@@ -1387,8 +2379,42 @@ func _process(delta: float) -> void:
 			target_gait_cycle = server_player.gait.get_cycle()
 			target_gait_stride_distance = server_player.gait.stride_distance
 			target_gait_active = server_player.gait.active
+			target_gait_momentum_recovery = (
+				server_player.gait.get_momentum_recovery_weight()
+			)
 			target_expression_clock = server_player.expression_clock
 			target_jump_sequence = server_player.jump_sequence
+			target_flip_sequence = server_player.flip_sequence
+			target_flip_direction = server_player.flip_direction
+			target_flip_active = server_player.flip_active
+			target_flip_phase = server_player.flip_phase
+			target_kick_sequence = server_player.kick_sequence
+			target_kick_side = server_player.kick_side
+			target_kick_style = server_player.kick_style
+			target_kick_active = server_player.kick_active
+			target_kick_phase = server_player.kick_phase
+			target_kick_clock = server_player.kick_clock
+			target_kick_direction = server_player.kick_direction
+			target_kick_view_yaw = server_player.kick_view_yaw
+			target_kick_view_pitch = server_player.kick_view_pitch
+			target_kick_flip_direction = server_player.kick_flip_direction
+			target_dropkick_tilt_input = server_player.dropkick_tilt_input
+			target_kick_guidance_direction = (
+				server_player.kick_guidance_direction
+			)
+			target_kick_guidance_weight = server_player.kick_guidance_weight
+			target_kick_intensity = server_player.kick_intensity
+			target_landing_sequence = server_player.landing_sequence
+			target_landing_impact_strength = (
+				server_player.landing_impact_strength
+			)
+			target_body_impact_sequence = server_player.body_impact_sequence
+			target_body_impact_strength = server_player.body_impact_strength
+			target_body_impact_direction = server_player.body_impact_direction
+			target_body_impact_contact_side = (
+				server_player.body_impact_contact_side
+			)
+			target_body_impact_clock = server_player.body_impact_clock
 			target_ragdoll_active = server_player.ragdoll_active
 			target_trip_sequence = server_player.trip_sequence
 			target_trip_direction = server_player.trip_direction
@@ -1397,6 +2423,22 @@ func _process(delta: float) -> void:
 				0.0,
 				1.0
 			)
+			target_sprint_exhausted = server_player.sprint_exhausted
+			target_plasma_cutter_available = (
+				server_player.get_plasma_cutter_definition() != null
+			)
+			target_plasma_cutter_heat_ratio = server_player.plasma_cutter_heat_ratio
+			target_plasma_cutter_overheated = server_player.plasma_cutter_overheated
+			target_plasma_cutter_active = server_player.plasma_cutter_active
+			target_plasma_cutter_has_hit = server_player.plasma_cutter_has_hit
+			target_plasma_cutter_hit_position = server_player.plasma_cutter_hit_position
+			var cutter := server_player.get_plasma_cutter_definition()
+			if cutter != null:
+				target_plasma_cutter_range_meters = float(cutter.get("range_meters"))
+				target_plasma_cutter_kerf_millimeters = float(cutter.get("cut_radius")) * 2000.0
+				target_plasma_cutter_cut_depth_millimeters = float(cutter.get("cut_depth")) * 1000.0
+				target_plasma_cutter_continuous_duty_seconds = 1.0 / maxf(float(cutter.get("heat_per_second")), 0.01)
+				target_plasma_cutter_full_cool_seconds = 1.0 / maxf(float(cutter.get("cooling_per_second")), 0.01)
 			gait_initialized = true
 			_update_edit_aim_visual()
 
@@ -1406,10 +2448,13 @@ func _process(delta: float) -> void:
 				update_headbob(delta)
 			else:
 				rotation.y = server_player.rotation.y
+			_update_flip_presentation(delta)
 			_update_procedural_legs(delta, server_player)
+			_predict_local_footstep()
 			_update_character_pose(delta)
 			_sync_trip_presentation(delta)
 			_update_trip_camera(delta)
+			_update_plasma_cutter_presentation(delta)
 
 			return
 
@@ -1440,10 +2485,123 @@ func _process(delta: float) -> void:
 			target_rotation.y,
 			weight
 		)
+	_update_flip_presentation(delta)
 	_update_procedural_legs(delta)
+	_predict_local_footstep()
 	_update_character_pose(delta)
 	_sync_trip_presentation(delta)
 	_update_trip_camera(delta)
+	_update_plasma_cutter_presentation(delta)
+
+
+func _update_flip_presentation(delta: float) -> void:
+	var safe_delta := maxf(delta, 0.0)
+	var sequence_changed := presented_flip_sequence != target_flip_sequence
+	if (
+		sequence_changed
+		and not local_flip_prediction_active
+		and not target_flip_active
+		and target_flip_phase >= 0.999
+	):
+		# A late observer may first learn about a flip after it has completed. TAU is the identity pose;
+		# replaying that historical cycle is both misleading and the source of the old reverse flip.
+		presented_flip_sequence = target_flip_sequence
+		completed_visual_flip_sequence = target_flip_sequence
+		visual_flip_direction = 0
+		visual_flip_phase = 0.0
+		visual_flip_angle = 0.0
+		_apply_body_visual_rotation()
+		return
+	var authoritative_arrived := (
+		target_flip_sequence > local_flip_prediction_base_sequence
+	)
+	if local_flip_prediction_active and authoritative_arrived:
+		local_flip_prediction_active = false
+	elif (
+		local_flip_prediction_active
+		and target_jump_sequence > local_flip_prediction_base_jump_sequence
+		and target_flip_sequence == local_flip_prediction_base_sequence
+	):
+		# The jump was accepted but authority rejected the flip gate. Return the provisional pose instead
+		# of letting an untrusted client flick become a cosmetic flip on that client alone.
+		local_flip_prediction_active = false
+		visual_flip_direction = 0
+		visual_flip_phase = 0.0
+		visual_flip_angle = 0.0
+
+	var desired_direction := 0
+	var desired_phase := 0.0
+	if local_flip_prediction_active:
+		local_flip_prediction_elapsed = minf(
+			local_flip_prediction_elapsed + safe_delta,
+			ServerPlayer.FLIP_DURATION_SECONDS
+		)
+		desired_direction = visual_flip_direction
+		desired_phase = clampf(
+			local_flip_prediction_elapsed
+			/ maxf(ServerPlayer.FLIP_DURATION_SECONDS, 0.001),
+			0.0,
+			1.0
+		)
+	elif target_flip_active:
+		desired_direction = target_flip_direction
+		desired_phase = target_flip_phase
+		if not multiplayer.is_server():
+			desired_phase = clampf(
+				target_flip_phase
+				+ minf(time_since_last_state, MAX_EXTRAPOLATION_TIME)
+				/ maxf(ServerPlayer.FLIP_DURATION_SECONDS, 0.001),
+				0.0,
+				1.0
+			)
+	elif (
+		target_flip_direction != 0
+		and target_flip_phase >= 0.999
+		and completed_visual_flip_sequence != target_flip_sequence
+	):
+		# Finish the currently observed cycle in its original direction. Never interpolate a normalized
+		# phase from one back to zero: that is a complete reverse rotation, not a reset.
+		desired_direction = target_flip_direction
+		desired_phase = 1.0
+
+	if sequence_changed:
+		presented_flip_sequence = target_flip_sequence
+		if desired_direction != 0:
+			visual_flip_direction = desired_direction
+		if not local_flip_prediction_active:
+			visual_flip_phase = maxf(visual_flip_phase, desired_phase)
+	if desired_direction != 0:
+		visual_flip_direction = desired_direction
+	var response := 1.0 - exp(-FLIP_VISUAL_RESPONSE_HZ * safe_delta)
+	visual_flip_phase = lerpf(visual_flip_phase, desired_phase, response)
+	if (
+		not local_flip_prediction_active
+		and not target_flip_active
+		and desired_direction != 0
+		and desired_phase >= 0.999
+		and visual_flip_phase >= 0.995
+	):
+		completed_visual_flip_sequence = target_flip_sequence
+		visual_flip_direction = 0
+		visual_flip_phase = 0.0
+	if desired_direction == 0 and visual_flip_phase <= 0.001:
+		visual_flip_direction = 0
+		visual_flip_phase = 0.0
+	visual_flip_angle = (
+		float(visual_flip_direction) * visual_flip_phase * TAU
+	)
+	_apply_body_visual_rotation()
+
+
+func _apply_body_visual_rotation() -> void:
+	if body_visual == null:
+		return
+	var procedural_root := character_pose.body_rotation
+	body_visual.rotation = Vector3(
+		visual_flip_angle + procedural_root.x,
+		procedural_root.y,
+		procedural_root.z
+	)
 
 
 func _sync_trip_presentation(delta := 0.0) -> void:
@@ -1457,11 +2615,15 @@ func _sync_trip_presentation(delta := 0.0) -> void:
 			or presented_trip_sequence != target_trip_sequence
 		):
 			presented_trip_sequence = target_trip_sequence
+			_rearm_gait_after_full_body_interruption()
 			player_ragdoll.start_ragdoll(
 				_ragdoll_source_visuals(),
 				target_velocity,
-				target_trip_direction
+				target_trip_direction,
+				character_skin,
+				is_local_player
 			)
+			_sync_backpack_ragdoll_mount(true)
 			_update_held_item_mount()
 		player_ragdoll.synchronize_authoritative_torso(
 			global_position + PlayerRagdoll3D.TORSO_OFFSET_FROM_PLAYER,
@@ -1471,9 +2633,49 @@ func _sync_trip_presentation(delta := 0.0) -> void:
 		body_visual.visible = false
 		return
 	if player_ragdoll.is_active():
+		_rearm_gait_after_full_body_interruption()
+		_sync_backpack_ragdoll_mount(false)
 		player_ragdoll.stop_ragdoll()
 		_update_held_item_mount()
 	body_visual.visible = true
+
+
+func _rearm_gait_after_full_body_interruption() -> void:
+	var authoritative_cycle := maxf(target_gait_cycle, 0.0)
+	visual_gait_cycle = authoritative_cycle
+	last_predicted_gait_step_sequence = floori(authoritative_cycle)
+	gait_initialized = true
+	local_locomotion_prediction_initialized = false
+	local_predicted_horizontal_velocity = Vector2.ZERO
+	local_predicted_horizontal_speed = 0.0
+	local_sprint_speed_ramp_elapsed = 0.0
+	local_recovery_gait = PlayerGait.new()
+	local_recovery_gait.set_expression_identity(player_id)
+	if procedural_leg_rig != null:
+		procedural_leg_rig.reset_contacts()
+
+
+func _sync_backpack_ragdoll_mount(use_ragdoll_skin: bool) -> void:
+	var visual := equipment_visuals.get(
+		PlayerInventoryRules.BACKPACK_SLOT
+	) as Node3D
+	if not is_instance_valid(visual):
+		return
+	var target_mount: Node3D
+	if use_ragdoll_skin and player_ragdoll != null:
+		var ragdoll_skin: PlayerCharacterSkin = (
+			player_ragdoll.get_authored_skin()
+		)
+		if ragdoll_skin != null and ragdoll_skin.is_usable():
+			target_mount = ragdoll_skin.get_backpack_mount()
+	elif character_skin != null and character_skin.is_usable():
+		target_mount = character_skin.get_backpack_mount()
+	else:
+		target_mount = backpack_mount
+	if target_mount != null and visual.get_parent() != target_mount:
+		# Both skins expose the same upper-spine mount contract. Keeping the local authored equipment
+		# transform makes the actual pack follow the physical torso without making a camera-only copy.
+		visual.reparent(target_mount, false)
 
 
 func _ragdoll_source_visuals() -> Dictionary:
@@ -1491,9 +2693,45 @@ func _ragdoll_source_visuals() -> Dictionary:
 	}
 
 
+func configure_corpse_ragdoll(
+	corpse_ragdoll: PlayerRagdoll3D,
+	base_velocity: Vector3,
+	death_direction: Vector3
+) -> bool:
+	if corpse_ragdoll == null or body_visual == null:
+		return false
+	var source_visuals := _ragdoll_source_visuals()
+	var source_skin := character_skin
+	if player_ragdoll != null and player_ragdoll.is_active():
+		# Death now has a short replicated hold. Snapshot the settled physical pose at handoff instead of
+		# rebuilding the corpse from the hidden upright procedural body beneath it.
+		source_visuals = player_ragdoll.get_body_source_visuals()
+		var active_ragdoll_skin: PlayerCharacterSkin = (
+			player_ragdoll.get_authored_skin()
+		)
+		if active_ragdoll_skin != null and active_ragdoll_skin.is_usable():
+			source_skin = active_ragdoll_skin
+	corpse_ragdoll.set_limb_presence(
+		has_left_arm,
+		has_right_arm,
+		has_left_leg,
+		has_right_leg
+	)
+	corpse_ragdoll.start_ragdoll(
+		source_visuals,
+		base_velocity,
+		death_direction,
+		source_skin,
+		false
+	)
+	return true
+
+
 func _update_trip_camera(delta: float) -> void:
 	if not is_local_player:
 		return
+	if player_ragdoll != null:
+		player_ragdoll.set_local_view(true)
 	audio_listener.position = audio_listener_rest_position
 	var target_weight := 1.0 if target_ragdoll_active else 0.0
 	var blend := 1.0 - exp(
@@ -1540,6 +2778,7 @@ func _update_trip_camera(delta: float) -> void:
 	camera_pivot.rotation.x = (
 		_resolved_camera_pitch()
 		+ character_pose.camera_rotation.x * (1.0 - trip_camera_weight)
+		+ visual_flip_angle * (1.0 - trip_camera_weight)
 		+ ragdoll_camera_pitch * trip_camera_weight
 	)
 	camera_pivot.rotation.y = (
@@ -1559,35 +2798,126 @@ func _update_procedural_legs(
 		return
 	if is_instance_valid(server_player):
 		procedural_leg_rig.set_query_exclusion_rid(server_player.get_rid())
+	var recovery_weight := (
+		resolved_gait_momentum_recovery
+		if is_local_player
+		else target_gait_momentum_recovery
+	)
 	var gait_cycle := target_gait_cycle
 	if is_local_player and gait_initialized:
 		gait_cycle = visual_gait_cycle
 	elif target_gait_active:
 		gait_cycle += (
-			Vector2(target_velocity.x, target_velocity.z).length()
+			PlayerGait.get_effective_gait_speed(
+				Vector2(target_velocity.x, target_velocity.z).length(),
+				target_gait_momentum_recovery
+			)
 			/ maxf(
 				target_gait_stride_distance,
 				PlayerGait.MINIMUM_STRIDE_DISTANCE
 			)
 			* time_since_last_state
 		)
+	var presentation_velocity := target_velocity
+	if is_local_player and local_locomotion_prediction_initialized:
+		presentation_velocity = global_basis * Vector3(
+			local_predicted_horizontal_velocity.x,
+			0.0,
+			local_predicted_horizontal_velocity.y
+		)
 	procedural_leg_rig.update_pose(
 		delta,
-		target_velocity,
+		presentation_velocity,
 		target_on_floor,
 		gait_cycle,
 		target_gait_active,
-		target_jump_sequence
+		target_jump_sequence,
+		target_landing_sequence,
+		target_landing_impact_strength,
+		recovery_weight,
+		target_kick_sequence,
+		target_kick_side,
+		_resolved_kick_phase(),
+		_resolved_kick_direction(),
+		target_kick_intensity,
+		target_kick_active,
+		target_kick_style
 	)
 	resolved_pose_gait_cycle = gait_cycle
 
 
-func _update_character_pose(delta: float) -> void:
-	var action_weight := (
-		0.0
-		if is_local_player
-		else smoothstep(0.0, 1.0, wrist_pose_weight)
+func get_suggested_kick_side() -> int:
+	if procedural_leg_rig == null:
+		return -1
+	return procedural_leg_rig.suggest_kick_side(
+		-global_basis.z,
+		resolved_pose_gait_cycle
 	)
+
+
+func _resolved_kick_phase() -> float:
+	if target_kick_sequence <= 0:
+		return 1.0
+	var presentation_clock := target_expression_clock
+	if not multiplayer.is_server():
+		presentation_clock += time_since_last_state
+	if target_kick_clock >= 0.0 and is_finite(target_kick_clock):
+		var pose_duration := (
+			ServerPlayer.DROP_KICK_POSE_BUILD_SECONDS
+			if target_kick_style == ServerPlayer.KickStyle.DROP
+			else ServerPlayer.KICK_DURATION_SECONDS
+		)
+		return clampf(
+			(presentation_clock - target_kick_clock)
+			/ maxf(pose_duration, 0.001),
+			0.0,
+			1.0
+		)
+	return target_kick_phase
+
+
+func _resolved_kick_direction() -> Vector3:
+	if target_kick_sequence <= 0:
+		return target_kick_direction
+	return ServerPlayer.apply_kick_guidance(
+		ServerPlayer.kick_direction_from_view(
+			target_kick_view_yaw,
+			target_kick_view_pitch,
+			target_kick_flip_direction,
+			visual_flip_phase if target_kick_flip_direction != 0 else 0.0
+		),
+		target_kick_guidance_direction,
+		target_kick_guidance_weight
+	)
+
+
+func _sync_body_impact_presentation() -> void:
+	if presented_body_impact_sequence == target_body_impact_sequence:
+		return
+	presented_body_impact_sequence = target_body_impact_sequence
+	if target_body_impact_sequence <= 0 or target_body_impact_strength <= 0.0:
+		return
+	if (
+		not is_finite(target_body_impact_clock)
+		or target_body_impact_clock < 0.0
+		or target_expression_clock - target_body_impact_clock
+		> BODY_IMPACT_REPLAY_WINDOW_SECONDS
+	):
+		return
+	var local_reaction := (
+		global_basis.inverse() * target_body_impact_direction
+	)
+	character_pose.apply_body_impact(
+		local_reaction,
+		target_body_impact_strength,
+		target_body_impact_contact_side
+	)
+
+
+func _update_character_pose(delta: float) -> void:
+	# The authored local body is visible in first person, so it must raise its real arm just like a
+	# remote body. WristTerminalPresentation follows that wrist and supplies only the live device UI.
+	var action_weight := smoothstep(0.0, 1.0, wrist_pose_weight)
 	var fieldlink_on_left := has_left_arm
 	character_pose.set_action_pose(
 		FIELDLINK_POSE,
@@ -1595,12 +2925,27 @@ func _update_character_pose(delta: float) -> void:
 		fieldlink_on_left,
 		not fieldlink_on_left and has_right_arm
 	)
+	character_pose.set_low_priority_kick_pose(
+		target_kick_side,
+		_resolved_kick_phase(),
+		target_kick_intensity,
+		target_kick_style,
+		target_kick_sequence,
+		target_kick_active,
+		target_dropkick_tilt_input
+	)
+	_sync_body_impact_presentation()
 	var expression_clock := target_expression_clock
 	if not multiplayer.is_server():
 		expression_clock += time_since_last_state
 	_update_ocular_expression(delta, expression_clock)
 	var pose_movement_weight := headbob_weight
 	var pose_run_weight := headbob_run_weight
+	var recovery_weight := (
+		resolved_gait_momentum_recovery
+		if is_local_player
+		else target_gait_momentum_recovery
+	)
 	if not is_local_player:
 		pose_movement_weight = (
 			1.0
@@ -1609,14 +2954,24 @@ func _update_character_pose(delta: float) -> void:
 		)
 		pose_run_weight = clampf(
 			inverse_lerp(
-				PlayerGait.WALK_STEP_DISTANCE,
-				PlayerGait.RUN_STEP_DISTANCE,
+				PlayerGait.WALK_STEP_DISTANCE_RANGE.y,
+				PlayerGait.RUN_STEP_DISTANCE_RANGE.x,
 				target_gait_stride_distance
 			),
 			0.0,
 			1.0
 		)
+		pose_run_weight = maxf(
+			pose_run_weight,
+			recovery_weight * 0.78
+		)
 	var local_velocity := global_basis.inverse() * target_velocity
+	if is_local_player and local_locomotion_prediction_initialized:
+		local_velocity = Vector3(
+			local_predicted_horizontal_velocity.x,
+			0.0,
+			local_predicted_horizontal_velocity.y
+		)
 	character_pose.update(
 		delta,
 		expression_clock,
@@ -1631,8 +2986,38 @@ func _update_character_pose(delta: float) -> void:
 		has_left_arm,
 		has_right_arm,
 		has_left_leg,
-		has_right_leg
+		has_right_leg,
+		recovery_weight
 	)
+	# BodyVisual owns the complete authored character, including the procedural legs. Applying the
+	# dropkick root pose here makes the pelvis and legs recline with the torso while preserving the
+	# separately controlled first-person camera and the full-cycle flip rotation.
+	_apply_body_visual_rotation()
+	# The old camera-only PBD rig used this heavy-arm spring directly. Feed the same motion into the
+	# authored skeleton now: the real shoulder, forearm, equipped mesh, display, and hit surface all
+	# inherit one physical response instead of leaving the PSX arm unnaturally pinned in place.
+	var hold_motion_active := wrist_pose_weight > 0.0001
+	if hold_motion_active:
+		fieldlink_hold_motion.set_gait_input(
+			character_pose.camera_position,
+			pose_movement_weight,
+			resolved_pose_gait_cycle,
+			pose_run_weight
+		)
+		fieldlink_hold_motion.set_endurance_spent_ratio(
+			1.0 - target_stamina_ratio
+		)
+		fieldlink_hold_motion.set_lateral_motion_ratio(
+			clampf(
+				local_velocity.x / maxf(ServerPlayer.RUN_SPEED, 0.001),
+				-1.0,
+				1.0
+			)
+		)
+		if not fieldlink_hold_motion_active:
+			fieldlink_hold_motion.synchronize_lateral_motion()
+		fieldlink_hold_motion.advance(delta)
+	fieldlink_hold_motion_active = hold_motion_active
 	upper_body_pose.position = character_pose.upper_body_position
 	upper_body_pose.rotation = character_pose.upper_body_rotation
 	head_visual.position = Vector3(0.0, 0.78, 0.0) + character_pose.head_position
@@ -1651,16 +3036,99 @@ func _update_character_pose(delta: float) -> void:
 		character_pose.right_arm_rotation,
 		1.0 if has_right_arm else 0.0
 	)
-	if is_local_player:
-		camera_pivot.position = camera_pivot_rest_position + character_pose.camera_position
-		if wrist_presentation != null:
-			wrist_presentation.set_motion_input(
-				character_pose.camera_position,
-				headbob_weight,
-				1.0 - target_stamina_ratio,
-				resolved_pose_gait_cycle,
-				headbob_run_weight
+	if character_skin != null and character_skin.is_usable():
+		var desired_fieldlink_pitch := WRIST_LOOK_PITCH
+		if is_local_player and wrist_mouse_look_owns_pitch:
+			desired_fieldlink_pitch = _focused_fieldlink_pose_pitch(
+				_resolved_camera_pitch()
 			)
+		elif not is_local_player:
+			desired_fieldlink_pitch = _focused_fieldlink_pose_pitch(
+				target_look_pitch
+			)
+		var fieldlink_pitch_response := (
+			1.0
+			- exp(
+				-FIELDLINK_POSE_PITCH_RESPONSE_HZ
+				* clampf(delta, 0.0, 0.1)
+			)
+		)
+		fieldlink_pose_pitch = lerp_angle(
+			fieldlink_pose_pitch,
+			desired_fieldlink_pitch,
+			fieldlink_pitch_response
+		)
+		var fieldlink_view_basis := (
+			global_basis.orthonormalized()
+			* Basis.from_euler(Vector3(fieldlink_pose_pitch, 0.0, 0.0))
+			* Basis.from_euler(
+				fieldlink_hold_motion.rotation_offset
+				* FIELDLINK_HOLD_ROTATION_SCALE
+			)
+		).orthonormalized()
+		character_skin.sync_from_procedural_pose(
+			procedural_leg_rig,
+			character_pose,
+			wrist_pose_weight,
+			has_left_arm,
+			fieldlink_view_basis,
+			fieldlink_hold_motion.position_offset
+			* FIELDLINK_HOLD_POSITION_SCALE
+		)
+	if is_local_player:
+		if character_skin != null and character_skin.is_usable():
+			camera_pivot_rest_position = to_local(
+				character_skin.get_camera_mount().global_position
+			)
+			audio_listener_rest_position = camera_pivot_rest_position
+			audio_listener.position = audio_listener_rest_position
+		camera_pivot.position = camera_pivot_rest_position + character_pose.camera_position
+
+
+func _sync_character_appearance() -> void:
+	if (
+		character_skin == null
+		or torso_visual == null
+		or head_visual == null
+		or left_arm_visual == null
+		or right_arm_visual == null
+		or procedural_leg_rig == null
+	):
+		return
+	var uses_authored_skin := character_skin.is_usable()
+	torso_visual.visible = not uses_authored_skin
+	head_visual.visible = not uses_authored_skin
+	left_arm_visual.visible = has_left_arm and not uses_authored_skin
+	right_arm_visual.visible = has_right_arm and not uses_authored_skin
+	procedural_leg_rig.visible = not uses_authored_skin
+	character_skin.visible = uses_authored_skin
+	character_skin.set_local_view(is_local_player)
+	character_skin.set_limb_presence(
+		has_left_arm,
+		has_right_arm,
+		has_left_leg,
+		has_right_leg
+	)
+	_reparent_equipment_visuals()
+	_reparent_held_item_visual()
+	_sync_local_wrist_presentation_mount()
+
+
+func _sync_local_wrist_presentation_mount() -> void:
+	var wrist_visual := equipment_visuals.get(
+		PlayerInventoryRules.WRIST_DEVICE_SLOT
+	) as Node3D
+	_sync_plasma_cutter_emitter()
+	if wrist_presentation == null:
+		return
+	wrist_presentation.bind_equipped_visual(wrist_visual)
+	var mount: Node3D
+	if character_skin != null and character_skin.is_usable():
+		if has_left_arm:
+			mount = character_skin.get_wrist_mount(true)
+		elif has_right_arm:
+			mount = character_skin.get_wrist_mount(false)
+	wrist_presentation.bind_wrist_mount(mount)
 
 
 func _update_ocular_expression(delta: float, expression_clock: float) -> void:

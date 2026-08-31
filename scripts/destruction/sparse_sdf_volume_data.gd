@@ -9,6 +9,11 @@ const MIN_VOXEL_SIZE := 0.005
 const MAX_BRICK_CELLS := 48
 const MIN_BRICK_CELLS := 4
 const MAX_CRACK_OPERATIONS := 12
+const MAX_DAMAGE_OPERATIONS := MAX_CRACK_OPERATIONS + 3
+const OPERATION_SPHERE := 0
+const OPERATION_CAPSULE := 1
+const OPERATION_TAPERED_CAPSULE := 2
+const MAX_CACHED_NOISE_LATTICE_VALUES := 8192
 
 var size := Vector3.ONE
 var half_extents := Vector3.ONE * 0.5
@@ -20,8 +25,41 @@ var brick_counts := Vector3i.ONE
 var total_cells := Vector3i.ONE
 var material_index := 1
 var revision := 0
+var prefer_native_backend := true
 
 var _bricks: Dictionary[Vector3i, SparseSdfBrick] = {}
+var _operation_count := 0
+var _operation_kinds := PackedByteArray()
+var _operation_starts := PackedVector3Array()
+var _operation_ends := PackedVector3Array()
+var _operation_first_radii := PackedFloat32Array()
+var _operation_second_radii := PackedFloat32Array()
+var _operation_bounds: Array[AABB] = []
+var _operation_combined_bounds := AABB()
+var _operation_maximum_radius := 0.0
+var _changed_chunk_stamps := PackedInt32Array()
+var _ring_chunk_stamps := PackedInt32Array()
+var _changed_chunks_buffer: Array[Vector3i] = []
+var _change_collection_stamp := 0
+var _ring_collection_stamp := 0
+var _last_change_has_sample_bounds := false
+var _last_changed_sample_minimum := Vector3i.ZERO
+var _last_changed_sample_maximum := Vector3i.ZERO
+var _last_accumulated_changed_samples := 0
+var _last_accumulated_peak_damage := 0
+var _noise_lattice_values := PackedFloat32Array()
+var _noise_lattice_origin := Vector3i.ZERO
+var _noise_lattice_size := Vector3i.ZERO
+var _noise_lattice_frequency := 1.0
+var _noise_lattice_valid := false
+var _noise_lattice_growth_count := 0
+var _native_kernel: Object
+var _native_mutation_request: Dictionary = {}
+var _native_brick_request: Dictionary = {}
+var _fragment_scan_regions: Array[Dictionary] = []
+## Structural attachment faces in local volume space. Standing volumes are grounded on -Y by
+## default; authored ceiling/side-mounted volumes can replace this mask through DestructibleVolume3D.
+var structural_anchor_faces := 1 << 1
 
 
 func configure(
@@ -50,11 +88,93 @@ func configure(
 	material_index = clampi(new_material_index, 1, 255)
 	revision = 0
 	_bricks.clear()
+	_initialize_operation_buffer()
+	_changed_chunk_stamps.resize(brick_counts.x * brick_counts.y * brick_counts.z)
+	_changed_chunk_stamps.fill(0)
+	_ring_chunk_stamps.resize(_changed_chunk_stamps.size())
+	_ring_chunk_stamps.fill(0)
+	_changed_chunks_buffer.clear()
+	_change_collection_stamp = 0
+	_ring_collection_stamp = 0
+	_noise_lattice_values.resize(0)
+	_noise_lattice_valid = false
+	_noise_lattice_growth_count = 0
+	_fragment_scan_regions.clear()
+	_native_kernel = (
+		SdfDualContouringMesher.create_native_kernel()
+		if prefer_native_backend
+		else null
+	)
+	_synchronize_native_dense_field()
 	return self
+
+
+func initialize_from_dense_samples(
+	dense_sample_size: Vector3i,
+	distances: PackedFloat32Array
+) -> bool:
+	## Replace the analytic base with a complete, cropped sample field. Detached fragments use this
+	## path so an extracted island retains the exact SDF that produced its mesh and can be cut again.
+	## Every storage brick is materialized, including the positive padding outside the logical crop;
+	## native and scripted mutation therefore never fall back to the original analytic box.
+	if (
+		dense_sample_size.x < 2
+		or dense_sample_size.y < 2
+		or dense_sample_size.z < 2
+		or distances.size()
+		!= dense_sample_size.x * dense_sample_size.y * dense_sample_size.z
+	):
+		return false
+	_bricks.clear()
+	var samples_per_axis := brick_cells + 1
+	var brick_values := PackedFloat32Array()
+	brick_values.resize(samples_per_axis * samples_per_axis * samples_per_axis)
+	for brick_z: int in range(brick_counts.z):
+		for brick_y: int in range(brick_counts.y):
+			for brick_x: int in range(brick_counts.x):
+				var coordinate := Vector3i(brick_x, brick_y, brick_z)
+				var global_origin := coordinate * brick_cells
+				var write_index := 0
+				for sample_z: int in range(samples_per_axis):
+					var global_z := global_origin.z + sample_z
+					for sample_y: int in range(samples_per_axis):
+						var global_y := global_origin.y + sample_y
+						for sample_x: int in range(samples_per_axis):
+							var global_x := global_origin.x + sample_x
+							brick_values[write_index] = (
+								distances[global_x + dense_sample_size.x * (
+									global_y + dense_sample_size.y * global_z
+								)]
+								if global_x < dense_sample_size.x
+								and global_y < dense_sample_size.y
+								and global_z < dense_sample_size.z
+								else narrow_band
+							)
+							write_index += 1
+				var brick := SparseSdfBrick.new().configure(
+					coordinate,
+					brick_cells,
+					voxel_size,
+					narrow_band,
+					material_index
+				)
+				brick.initialize_from_distances(brick_values)
+				_bricks[coordinate] = brick
+	revision = 0
+	_fragment_scan_regions.clear()
+	structural_anchor_faces = 0
+	_synchronize_native_dense_field()
+	return true
 
 
 func bounds() -> AABB:
 	return AABB(-half_extents, size)
+
+
+func structural_native_kernel() -> Object:
+	if prefer_native_backend and _native_kernel != null and is_instance_valid(_native_kernel):
+		return _native_kernel
+	return null
 
 
 func base_distance(local_position: Vector3) -> float:
@@ -160,18 +280,8 @@ func ensure_brick(brick_coordinate: Vector3i) -> SparseSdfBrick:
 		narrow_band,
 		material_index
 	)
-	var distances := PackedFloat32Array()
-	distances.resize(brick.sample_count())
-	var index := 0
 	var global_origin := brick_coordinate * brick_cells
-	for z: int in range(brick.samples_per_axis):
-		for y: int in range(brick.samples_per_axis):
-			for x: int in range(brick.samples_per_axis):
-				distances[index] = base_distance(
-					global_sample_position(global_origin + Vector3i(x, y, z))
-				)
-				index += 1
-	brick.initialize_from_distances(distances)
+	brick.initialize_from_box_samples(global_origin, -half_extents, half_extents)
 	_bricks[brick_coordinate] = brick
 	return brick
 
@@ -188,20 +298,20 @@ func apply_damage_event(
 	texture.sanitize()
 	var normalized_energy := texture.normalized_energy(event.energy)
 	if normalized_energy < texture.geometry_threshold:
-		var accumulated := _apply_accumulated_damage(
+		var accumulated_changed := _apply_accumulated_damage(
 			local_position,
 			event,
 			texture,
 			normalized_energy
 		)
-		if not bool(accumulated.get("changed", false)):
+		if not accumulated_changed:
 			return {
 				"changed": false,
 				"reason": &"below_geometry_threshold",
 				"normalized_energy": normalized_energy,
 			}
-		var accumulated_chunks: Array[Vector3i] = accumulated.get("changed_chunks", [])
-		if int(accumulated.get("peak_damage", 0)) < 255:
+		var accumulated_chunks: Array[Vector3i] = _changed_chunks_buffer.duplicate()
+		if _last_accumulated_peak_damage < 255:
 			revision += 1
 			_stamp_changed_bricks(accumulated_chunks)
 			return {
@@ -209,7 +319,7 @@ func apply_damage_event(
 				"geometry_changed": false,
 				"revision": revision,
 				"changed_chunks": accumulated_chunks,
-				"changed_samples": int(accumulated.get("changed_samples", 0)),
+				"changed_samples": _last_accumulated_changed_samples,
 				"operation_count": 0,
 				"normalized_energy": normalized_energy,
 				"perforated": false,
@@ -256,7 +366,7 @@ func _apply_geometry_event(
 		if local_direction.length_squared() > 0.000001
 		else -local_normal.normalized()
 	)
-	var operations := _build_operations(
+	_build_operations(
 		local_position,
 		direction,
 		local_normal,
@@ -264,11 +374,8 @@ func _apply_geometry_event(
 		texture,
 		normalized_energy
 	)
-	var changed_set: Dictionary[Vector3i, bool] = {}
-	for coordinate: Vector3i in prechanged_chunks:
-		changed_set[coordinate] = true
-	var operation_result := _apply_operations(operations, texture, event.seed, changed_set)
-	var changed_samples := int(operation_result.get("changed_samples", 0))
+	_begin_changed_chunk_collection(prechanged_chunks)
+	var changed_samples := _apply_operations(texture, event.seed)
 	if changed_samples <= 0:
 		if not prechanged_chunks.is_empty():
 			revision += 1
@@ -289,11 +396,19 @@ func _apply_geometry_event(
 			"reason": &"no_surface_change",
 			"normalized_energy": normalized_energy,
 		}
+	var structural_region := _merge_fragment_scan_region(
+		_last_changed_sample_minimum,
+		_last_changed_sample_maximum
+	)
+	var fragmentation := SdfStructuralFragmenter.detach_components(
+		self,
+		structural_region.get("minimum", _last_changed_sample_minimum),
+		structural_region.get("maximum", _last_changed_sample_maximum),
+		texture
+	)
+	changed_samples += int(fragmentation.get("removed_samples", 0))
 	revision += 1
-	var changed_chunks: Array[Vector3i] = []
-	for coordinate: Vector3i in changed_set.keys():
-		changed_chunks.append(coordinate)
-	changed_chunks.sort_custom(_vector3i_less)
+	var changed_chunks: Array[Vector3i] = _changed_chunks_buffer.duplicate()
 	_stamp_changed_bricks(changed_chunks)
 	var perforated := texture.perforates(event.energy)
 	var aperture_radius := (
@@ -307,28 +422,167 @@ func _apply_geometry_event(
 		"revision": revision,
 		"changed_chunks": changed_chunks,
 		"changed_samples": changed_samples,
-		"changed_sample_bounds": operation_result.get("changed_sample_bounds", {}),
-		"operation_count": operations.size(),
+		"has_changed_sample_bounds": _last_change_has_sample_bounds,
+		"changed_sample_minimum": _last_changed_sample_minimum,
+		"changed_sample_maximum": _last_changed_sample_maximum,
+		"operation_count": _operation_count,
 		"normalized_energy": normalized_energy,
 		"perforated": perforated,
 		"aperture_radius": aperture_radius,
+		"detached_fragments": fragmentation.get("fragments", []),
+		"detached_component_count": int(fragmentation.get("detached_component_count", 0)),
+		"fragment_scan_cells": int(fragmentation.get("scan_cells", 0)),
+		"fragment_mesh_failures": int(fragmentation.get("fragment_mesh_failures", 0)),
+		"fragment_mapping_usec": int(fragmentation.get("mapping_usec", 0)),
+		"fragment_grouping_usec": int(fragmentation.get("grouping_usec", 0)),
+		"fragment_mesh_usec": int(fragmentation.get("mesh_usec", 0)),
+		"fragment_erase_usec": int(fragmentation.get("erase_usec", 0)),
+		"fragment_total_usec": int(fragmentation.get("total_usec", 0)),
+		"retained_detached_cell_count": int(
+			fragmentation.get("retained_detached_cell_count", 0)
+		),
 	}
 
 
+func erase_detached_cells(cells: Array[Vector3i]) -> int:
+	if cells.is_empty():
+		return 0
+	if (
+		_native_kernel != null
+		and is_instance_valid(_native_kernel)
+		and _native_kernel.has_method(&"erase_cached_cells")
+	):
+		var native_result := _native_kernel.call(
+			&"erase_cached_cells",
+			cells,
+			changed_brick_states()
+		) as Dictionary
+		if bool(native_result.get("valid", false)):
+			var changed := int(native_result.get("changed_samples", 0))
+			for packet_value: Variant in native_result.get("bricks", []):
+				if not packet_value is Dictionary:
+					continue
+				var packet := packet_value as Dictionary
+				var coordinate: Vector3i = packet.get("coordinate", Vector3i(-1, -1, -1))
+				if not brick_is_valid(coordinate):
+					continue
+				var brick := _bricks.get(coordinate) as SparseSdfBrick
+				if brick == null:
+					# The native packet contains the complete post-erasure brick. Do not initialize an
+					# analytic brick sample-by-sample merely to overwrite every byte immediately after.
+					brick = SparseSdfBrick.new().configure(
+						coordinate,
+						brick_cells,
+						voxel_size,
+						narrow_band,
+						material_index
+					)
+					_bricks[coordinate] = brick
+				if not brick.replace_distance_storage(
+					bool(packet.get("uniform", false)),
+					int(packet.get("uniform_raw", SparseSdfBrick.MAX_RAW)),
+					packet.get("distance_bytes", PackedByteArray())
+				):
+					return 0
+				_mark_changed_chunk(coordinate)
+			if bool(native_result.get("has_changed_sample_bounds", false)):
+				_include_changed_sample(native_result.get("changed_sample_minimum", Vector3i.ZERO))
+				_include_changed_sample(native_result.get("changed_sample_maximum", Vector3i.ZERO))
+			return changed
+	var unique_samples: Dictionary[Vector3i, bool] = {}
+	for cell: Vector3i in cells:
+		for offset_z: int in range(0, 2):
+			for offset_y: int in range(0, 2):
+				for offset_x: int in range(0, 2):
+					unique_samples[cell + Vector3i(offset_x, offset_y, offset_z)] = true
+	var changed := 0
+	for sample: Vector3i in unique_samples.keys():
+		if not _global_sample_is_inside_storage(sample):
+			continue
+		var brick_coordinate := brick_for_global_sample(sample)
+		var brick := ensure_brick(brick_coordinate)
+		if brick == null:
+			continue
+		var local_sample := sample - brick_coordinate * brick_cells
+		if brick.set_distance(local_sample.x, local_sample.y, local_sample.z, narrow_band):
+			changed += 1
+			_mark_changed_chunk(brick_coordinate)
+			_include_changed_sample(sample)
+	return changed
+
+
+func fragment_scan_region_states() -> Array[Dictionary]:
+	return _fragment_scan_regions.duplicate(true)
+
+
+func restore_fragment_scan_regions(states: Array) -> void:
+	_fragment_scan_regions.clear()
+	for value: Variant in states:
+		if not value is Dictionary:
+			continue
+		var minimum: Variant = value.get("minimum", null)
+		var maximum: Variant = value.get("maximum", null)
+		if minimum is Vector3i and maximum is Vector3i:
+			_fragment_scan_regions.append({"minimum": minimum, "maximum": maximum})
+
+
+func _merge_fragment_scan_region(minimum: Vector3i, maximum: Vector3i) -> Dictionary:
+	var merged_minimum := minimum
+	var merged_maximum := maximum
+	var merge_distance := SdfStructuralFragmenter.SCAN_MARGIN_CELLS * 2
+	var write_index := 0
+	for region: Dictionary in _fragment_scan_regions:
+		var region_minimum: Vector3i = region.get("minimum", minimum)
+		var region_maximum: Vector3i = region.get("maximum", maximum)
+		var separated := (
+			merged_maximum.x + merge_distance < region_minimum.x
+			or region_maximum.x + merge_distance < merged_minimum.x
+			or merged_maximum.y + merge_distance < region_minimum.y
+			or region_maximum.y + merge_distance < merged_minimum.y
+			or merged_maximum.z + merge_distance < region_minimum.z
+			or region_maximum.z + merge_distance < merged_minimum.z
+		)
+		if separated:
+			_fragment_scan_regions[write_index] = region
+			write_index += 1
+			continue
+		merged_minimum = Vector3i(
+			mini(merged_minimum.x, region_minimum.x),
+			mini(merged_minimum.y, region_minimum.y),
+			mini(merged_minimum.z, region_minimum.z)
+		)
+		merged_maximum = Vector3i(
+			maxi(merged_maximum.x, region_maximum.x),
+			maxi(merged_maximum.y, region_maximum.y),
+			maxi(merged_maximum.z, region_maximum.z)
+		)
+	_fragment_scan_regions.resize(write_index)
+	var merged := {"minimum": merged_minimum, "maximum": merged_maximum}
+	_fragment_scan_regions.append(merged)
+	return merged
+
+
 func expanded_chunk_ring(coordinates: Array[Vector3i], radius := 1) -> Array[Vector3i]:
-	var unique: Dictionary[Vector3i, bool] = {}
+	_ring_collection_stamp += 1
+	if _ring_collection_stamp >= 0x7fffffff:
+		_ring_chunk_stamps.fill(0)
+		_ring_collection_stamp = 1
 	var safe_radius := clampi(radius, 0, 2)
+	var result: Array[Vector3i] = []
 	for center: Vector3i in coordinates:
 		for z: int in range(-safe_radius, safe_radius + 1):
 			for y: int in range(-safe_radius, safe_radius + 1):
 				for x: int in range(-safe_radius, safe_radius + 1):
 					var coordinate := center + Vector3i(x, y, z)
-					if brick_is_valid(coordinate):
-						unique[coordinate] = true
-	var result: Array[Vector3i] = []
-	for coordinate: Vector3i in unique.keys():
-		result.append(coordinate)
-	result.sort_custom(_vector3i_less)
+					if not brick_is_valid(coordinate):
+						continue
+					var flat_index := coordinate.x + brick_counts.x * (
+						coordinate.y + brick_counts.y * coordinate.z
+					)
+					if _ring_chunk_stamps[flat_index] == _ring_collection_stamp:
+						continue
+					_ring_chunk_stamps[flat_index] = _ring_collection_stamp
+					result.append(coordinate)
 	return result
 
 
@@ -355,7 +609,30 @@ func apply_checkpoint(checkpoint_revision: int, states: Array) -> bool:
 		replacements[brick.coordinate] = brick
 	_bricks = replacements
 	revision = maxi(checkpoint_revision, 0)
+	_synchronize_native_dense_field()
 	return true
+
+
+func synchronize_native_dense_field() -> bool:
+	return _synchronize_native_dense_field()
+
+
+func _synchronize_native_dense_field() -> bool:
+	if (
+		_native_kernel == null
+		or not is_instance_valid(_native_kernel)
+		or not _native_kernel.has_method(&"synchronize_dense_field")
+	):
+		return false
+	return bool(_native_kernel.call(
+		&"synchronize_dense_field",
+		changed_brick_states(),
+		half_extents,
+		voxel_size,
+		total_cells,
+		brick_cells,
+		narrow_band
+	))
 
 
 func checksum() -> int:
@@ -374,11 +651,19 @@ func debug_state() -> Dictionary:
 	var sample_bytes := 0
 	var damage_bricks := 0
 	for brick: SparseSdfBrick in _bricks.values():
-		var state := brick.encoded_state()
-		sample_bytes += (state["distance_bytes"] as PackedByteArray).size()
-		sample_bytes += (state["damage_bytes"] as PackedByteArray).size()
+		sample_bytes += brick.storage_byte_count()
 		if brick.has_damage_channel():
 			damage_bricks += 1
+	var native_ready := (
+		prefer_native_backend
+		and _native_kernel != null
+		and is_instance_valid(_native_kernel)
+	)
+	var native_scratch: Dictionary = (
+		_native_kernel.call(&"scratch_state") as Dictionary
+		if native_ready
+		else {}
+	)
 	return {
 		"revision": revision,
 		"brick_count": _bricks.size(),
@@ -386,6 +671,11 @@ func debug_state() -> Dictionary:
 		"sample_bytes": sample_bytes,
 		"damage_bricks": damage_bricks,
 		"checksum": checksum(),
+		"operation_buffer_capacity": _operation_kinds.size(),
+		"noise_lattice_capacity": _noise_lattice_values.size(),
+		"noise_lattice_growth_count": _noise_lattice_growth_count,
+		"native_backend": native_ready,
+		"native_scratch": native_scratch,
 	}
 
 
@@ -396,55 +686,56 @@ func _build_operations(
 	event: DamageEvent,
 	texture: DestructionTextureDefinition,
 	normalized_energy: float
-) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
+) -> void:
+	_reset_operation_buffer()
 	var radius := texture.response_radius(event.radius, event.energy)
 	var entry_depth := maxf(radius * texture.entry_depth_scale, voxel_size)
 	var entry_start := position - direction * minf(radius * 0.25, voxel_size)
 	var entry_end := position + direction * entry_depth
-	result.append({
-		"kind": &"tapered_capsule",
-		"start": entry_start,
-		"end": entry_end,
-		"start_radius": radius,
-		"end_radius": radius * maxf(texture.channel_radius_scale, 0.1),
-	})
+	var entry_end_radius := radius * maxf(texture.channel_radius_scale, 0.1)
+	var perforates := texture.perforates(event.energy)
+	if not perforates and texture.ductility >= 0.4 and texture.dent_depth_scale > 0.0:
+		var dent_depth := maxf(radius * texture.dent_depth_scale * normalized_energy, voxel_size * 0.25)
+		entry_end = position + direction * minf(dent_depth, radius * 0.9)
+		entry_end_radius = radius * 0.35
+	_append_operation(
+		OPERATION_TAPERED_CAPSULE,
+		entry_start,
+		entry_end,
+		radius,
+		entry_end_radius
+	)
 
-	if texture.perforates(event.energy):
+	if perforates:
 		var penetration_depth := maxf(
 			maxf(event.penetration, radius * 3.0) * texture.penetration_depth_scale,
 			voxel_size * 2.0
 		)
 		var channel_radius := maxf(radius * texture.channel_radius_scale, voxel_size * 0.45)
 		var channel_end := position + direction * penetration_depth
-		result.append({
-			"kind": &"capsule",
-			"start": position,
-			"end": channel_end,
-			"radius": channel_radius,
-		})
+		_append_operation(
+			OPERATION_CAPSULE,
+			position,
+			channel_end,
+			channel_radius,
+			channel_radius
+		)
 		var exit_distance := _find_exit_distance(position, direction, penetration_depth)
 		if exit_distance >= 0.0 and texture.exit_spall_radius_scale > 0.0:
 			var exit_position := position + direction * exit_distance
 			var spall_depth := maxf(radius * texture.exit_spall_depth_scale, voxel_size)
-			result.append({
-				"kind": &"tapered_capsule",
-				"start": exit_position - direction * spall_depth,
-				"end": exit_position + direction * voxel_size,
-				"start_radius": channel_radius,
-				"end_radius": radius * texture.exit_spall_radius_scale,
-			})
-	elif texture.ductility >= 0.4 and texture.dent_depth_scale > 0.0:
-		var dent_depth := maxf(radius * texture.dent_depth_scale * normalized_energy, voxel_size * 0.25)
-		result[0]["end"] = position + direction * minf(dent_depth, radius * 0.9)
-		result[0]["end_radius"] = radius * 0.35
+			_append_operation(
+				OPERATION_TAPERED_CAPSULE,
+				exit_position - direction * spall_depth,
+				exit_position + direction * voxel_size,
+				channel_radius,
+				radius * texture.exit_spall_radius_scale
+			)
 
-	_append_crack_operations(result, position, normal, radius, event.seed, texture)
-	return result
+	_append_crack_operations(position, normal, radius, event.seed, texture)
 
 
 func _append_crack_operations(
-	operations: Array[Dictionary],
 	position: Vector3,
 	normal: Vector3,
 	radius: float,
@@ -475,68 +766,95 @@ func _append_crack_operations(
 		var crack_length := radius * texture.crack_length_scale * length_scale
 		var width := authored_width
 		var embedded_start := position - safe_normal * width * 0.75
-		operations.append({
-			"kind": &"capsule",
-			"start": embedded_start,
-			"end": embedded_start + tangent * crack_length,
-			"radius": width,
-		})
+		_append_operation(
+			OPERATION_CAPSULE,
+			embedded_start,
+			embedded_start + tangent * crack_length,
+			width,
+			width
+		)
+
+
+func _initialize_operation_buffer() -> void:
+	_operation_kinds.resize(MAX_DAMAGE_OPERATIONS)
+	_operation_starts.resize(MAX_DAMAGE_OPERATIONS)
+	_operation_ends.resize(MAX_DAMAGE_OPERATIONS)
+	_operation_first_radii.resize(MAX_DAMAGE_OPERATIONS)
+	_operation_second_radii.resize(MAX_DAMAGE_OPERATIONS)
+	_operation_bounds.resize(MAX_DAMAGE_OPERATIONS)
+	_reset_operation_buffer()
+
+
+func _reset_operation_buffer() -> void:
+	_operation_count = 0
+	_operation_combined_bounds = AABB()
+	_operation_maximum_radius = 0.0
+
+
+func _append_operation(
+	kind: int,
+	start: Vector3,
+	end: Vector3,
+	first_radius: float,
+	second_radius: float
+) -> void:
+	if _operation_count >= MAX_DAMAGE_OPERATIONS:
+		return
+	var index := _operation_count
+	var safe_first_radius := maxf(first_radius, 0.0)
+	var safe_second_radius := maxf(second_radius, 0.0)
+	var maximum_radius := maxf(safe_first_radius, safe_second_radius)
+	_operation_kinds[index] = kind
+	_operation_starts[index] = start
+	_operation_ends[index] = end
+	_operation_first_radii[index] = safe_first_radius
+	_operation_second_radii[index] = safe_second_radius
+	var minimum := Vector3(
+		minf(start.x, end.x),
+		minf(start.y, end.y),
+		minf(start.z, end.z)
+	) - Vector3.ONE * maximum_radius
+	var maximum := Vector3(
+		maxf(start.x, end.x),
+		maxf(start.y, end.y),
+		maxf(start.z, end.z)
+	) + Vector3.ONE * maximum_radius
+	var bounds := AABB(minimum, maximum - minimum).grow(narrow_band + voxel_size)
+	_operation_bounds[index] = bounds
+	_operation_combined_bounds = (
+		bounds
+		if index == 0
+		else _operation_combined_bounds.merge(bounds)
+	)
+	_operation_maximum_radius = maxf(_operation_maximum_radius, maximum_radius)
+	_operation_count += 1
 
 
 func _apply_operations(
-	operations: Array[Dictionary],
 	texture: DestructionTextureDefinition,
-	seed: int,
-	changed_set: Dictionary[Vector3i, bool]
-) -> Dictionary:
-	if operations.is_empty():
-		return {"changed_samples": 0, "changed_sample_bounds": {}}
+	seed: int
+) -> int:
+	if _operation_count <= 0:
+		return 0
 	# Boolean subtraction by the union of all cutters is max(base, -min(cutter distances)). Fusing
 	# the brushes means each touched sample and packed distance is read/written once, even when a
 	# brittle material authors several crack capsules.
-	var operation_bounds: Array[AABB] = []
-	var operation_kinds := PackedInt32Array()
-	var operation_starts := PackedVector3Array()
-	var operation_ends := PackedVector3Array()
-	var characteristic_radii := PackedFloat32Array()
-	var secondary_radii := PackedFloat32Array()
-	var maximum_cutter_radius := 0.0
-	var changed_sample_bounds: Dictionary[Vector3i, PackedInt32Array] = {}
 	# Dual Contouring consumes one cell of sign samples plus one additional sample for central-difference
 	# normals. Distance edits deeper than this cannot affect current topology or its Hermite data, even
 	# though they remain stored for later damage. Excluding them keeps remeshing tied to the visible cut.
 	var mesh_influence_band := voxel_size * 2.5
-	var combined_bounds := _operation_bounds(operations[0]).grow(narrow_band + voxel_size)
-	for operation: Dictionary in operations:
-		var bounds_for_operation := _operation_bounds(operation).grow(narrow_band + voxel_size)
-		operation_bounds.append(bounds_for_operation)
-		var kind := StringName(operation.get("kind", &"sphere"))
-		match kind:
-			&"capsule":
-				operation_kinds.append(1)
-				operation_starts.append(operation.get("start", Vector3.ZERO))
-				operation_ends.append(operation.get("end", Vector3.ZERO))
-				characteristic_radii.append(float(operation.get("radius", 0.0)))
-				secondary_radii.append(float(operation.get("radius", 0.0)))
-			&"tapered_capsule":
-				operation_kinds.append(2)
-				operation_starts.append(operation.get("start", Vector3.ZERO))
-				operation_ends.append(operation.get("end", Vector3.ZERO))
-				characteristic_radii.append(float(operation.get("start_radius", 0.0)))
-				secondary_radii.append(float(operation.get("end_radius", 0.0)))
-			_:
-				operation_kinds.append(0)
-				operation_starts.append(operation.get("center", Vector3.ZERO))
-				operation_ends.append(operation.get("center", Vector3.ZERO))
-				characteristic_radii.append(float(operation.get("radius", 0.0)))
-				secondary_radii.append(float(operation.get("radius", 0.0)))
-		maximum_cutter_radius = maxf(
-			maximum_cutter_radius,
-			maxf(characteristic_radii[-1], secondary_radii[-1])
-		)
-		combined_bounds = combined_bounds.merge(bounds_for_operation)
-	var minimum_brick := _brick_for_local_position(combined_bounds.position)
-	var maximum_brick := _brick_for_local_position(combined_bounds.end)
+	_prepare_noise_lattice(texture, seed)
+	if (
+		prefer_native_backend
+		and _native_kernel != null
+		and is_instance_valid(_native_kernel)
+		and (texture.spatial_warp <= 0.0 or _noise_lattice_valid)
+	):
+		var native_changed := _apply_operations_native(texture)
+		if native_changed >= 0:
+			return native_changed
+	var minimum_brick := _brick_for_local_position(_operation_combined_bounds.position)
+	var maximum_brick := _brick_for_local_position(_operation_combined_bounds.end)
 	var changed_samples := 0
 	for z: int in range(minimum_brick.z, maximum_brick.z + 1):
 		for y: int in range(minimum_brick.y, maximum_brick.y + 1):
@@ -547,14 +865,14 @@ func _apply_operations(
 				var global_origin := coordinate * brick_cells
 				var samples_per_axis := brick_cells + 1
 				var grid_minimum := Vector3i(
-					ceili((combined_bounds.position.x + half_extents.x) / voxel_size),
-					ceili((combined_bounds.position.y + half_extents.y) / voxel_size),
-					ceili((combined_bounds.position.z + half_extents.z) / voxel_size)
+					ceili((_operation_combined_bounds.position.x + half_extents.x) / voxel_size),
+					ceili((_operation_combined_bounds.position.y + half_extents.y) / voxel_size),
+					ceili((_operation_combined_bounds.position.z + half_extents.z) / voxel_size)
 				) - global_origin
 				var grid_maximum := Vector3i(
-					floori((combined_bounds.end.x + half_extents.x) / voxel_size),
-					floori((combined_bounds.end.y + half_extents.y) / voxel_size),
-					floori((combined_bounds.end.z + half_extents.z) / voxel_size)
+					floori((_operation_combined_bounds.end.x + half_extents.x) / voxel_size),
+					floori((_operation_combined_bounds.end.y + half_extents.y) / voxel_size),
+					floori((_operation_combined_bounds.end.z + half_extents.z) / voxel_size)
 				) - global_origin
 				grid_minimum = Vector3i(
 					clampi(grid_minimum.x, 0, samples_per_axis - 1),
@@ -567,59 +885,70 @@ func _apply_operations(
 					clampi(grid_maximum.z, 0, samples_per_axis - 1)
 				)
 				for sample_z: int in range(grid_minimum.z, grid_maximum.z + 1):
+					var global_z := global_origin.z + sample_z
+					var position_z := -half_extents.z + float(global_z) * voxel_size
 					for sample_y: int in range(grid_minimum.y, grid_maximum.y + 1):
+						var global_y := global_origin.y + sample_y
+						var position_y := -half_extents.y + float(global_y) * voxel_size
+						var linear_index := (
+							grid_minimum.x
+							+ samples_per_axis * (sample_y + samples_per_axis * sample_z)
+						)
+						var position_x := (
+							-half_extents.x + float(global_origin.x + grid_minimum.x) * voxel_size
+						)
 						for sample_x: int in range(grid_minimum.x, grid_maximum.x + 1):
-							var sample_coordinate := global_origin + Vector3i(sample_x, sample_y, sample_z)
-							var sample_position := global_sample_position(sample_coordinate)
+							var current_linear_index := linear_index
+							linear_index += 1
+							var global_x := global_origin.x + sample_x
+							var sample_position := Vector3(position_x, position_y, position_z)
+							position_x += voxel_size
 							var previous := (
-								brick.get_distance(sample_x, sample_y, sample_z)
+								brick.get_distance_at_index(current_linear_index)
 								if brick != null
 								else base_distance(sample_position)
 							)
 							# A cutter cannot increase empty-space distance beyond its own radius. This rejects
 							# most samples outside a thin wall before any brush/noise evaluation.
-							if previous >= maximum_cutter_radius:
+							if previous >= _operation_maximum_radius:
 								continue
 							var cutter_distance := INF
 							var warp_noise := 0.0
 							if texture.spatial_warp > 0.0:
-								warp_noise = (
-									SdfMath.deterministic_signed_noise(
-										sample_position,
-										texture.spatial_warp_frequency,
-										seed
-									)
-									* texture.spatial_warp
-								)
-							for operation_index: int in range(operations.size()):
-								if not operation_bounds[operation_index].has_point(sample_position):
+								warp_noise = _sample_spatial_noise(
+									sample_position,
+									texture.spatial_warp_frequency,
+									seed
+								) * texture.spatial_warp
+							for operation_index: int in range(_operation_count):
+								if not _operation_bounds[operation_index].has_point(sample_position):
 									continue
 								var characteristic_radius := maxf(
-									characteristic_radii[operation_index],
-									secondary_radii[operation_index]
+									_operation_first_radii[operation_index],
+									_operation_second_radii[operation_index]
 								)
 								var brush_distance := 0.0
-								match operation_kinds[operation_index]:
+								match int(_operation_kinds[operation_index]):
 									1:
 										brush_distance = SdfMath.capsule(
 											sample_position,
-											operation_starts[operation_index],
-											operation_ends[operation_index],
-											characteristic_radii[operation_index]
+											_operation_starts[operation_index],
+											_operation_ends[operation_index],
+											_operation_first_radii[operation_index]
 										)
 									2:
 										brush_distance = SdfMath.tapered_capsule(
 											sample_position,
-											operation_starts[operation_index],
-											operation_ends[operation_index],
-											characteristic_radii[operation_index],
-											secondary_radii[operation_index]
+											_operation_starts[operation_index],
+											_operation_ends[operation_index],
+											_operation_first_radii[operation_index],
+											_operation_second_radii[operation_index]
 										)
 									_:
 										brush_distance = SdfMath.sphere(
 											sample_position,
-											operation_starts[operation_index],
-											characteristic_radii[operation_index]
+											_operation_starts[operation_index],
+											_operation_first_radii[operation_index]
 										)
 								if warp_noise != 0.0 and characteristic_radius > 0.0:
 									brush_distance -= warp_noise * characteristic_radius
@@ -631,42 +960,232 @@ func _apply_operations(
 								continue
 							if brick == null:
 								brick = ensure_brick(coordinate)
-							if brick != null and brick.set_distance(sample_x, sample_y, sample_z, next):
+							if brick != null and brick.set_distance_at_index(current_linear_index, next):
 								brick_changed = true
 								changed_samples += 1
 								if (
 									(previous < 0.0) != (next < 0.0)
 									or minf(absf(previous), absf(next)) <= mesh_influence_band
 								):
-									_include_changed_sample(
-										changed_sample_bounds,
-										coordinate,
-										sample_coordinate
-									)
+									_include_changed_sample(Vector3i(global_x, global_y, global_z))
 				if brick_changed:
-					changed_set[coordinate] = true
-	return {
-		"changed_samples": changed_samples,
-		"changed_sample_bounds": changed_sample_bounds,
-	}
+					_mark_changed_chunk(coordinate)
+	return changed_samples
 
 
-static func _include_changed_sample(
-	bounds_by_chunk: Dictionary[Vector3i, PackedInt32Array],
-	coordinate: Vector3i,
-	sample: Vector3i
-) -> void:
-	var bounds: PackedInt32Array = bounds_by_chunk.get(coordinate, PackedInt32Array())
-	if bounds.is_empty():
-		bounds = PackedInt32Array([sample.x, sample.y, sample.z, sample.x, sample.y, sample.z])
-	else:
-		bounds[0] = mini(bounds[0], sample.x)
-		bounds[1] = mini(bounds[1], sample.y)
-		bounds[2] = mini(bounds[2], sample.z)
-		bounds[3] = maxi(bounds[3], sample.x)
-		bounds[4] = maxi(bounds[4], sample.y)
-		bounds[5] = maxi(bounds[5], sample.z)
-	bounds_by_chunk[coordinate] = bounds
+func _apply_operations_native(texture: DestructionTextureDefinition) -> int:
+	_native_mutation_request["half_extents"] = half_extents
+	_native_mutation_request["voxel_size"] = voxel_size
+	_native_mutation_request["narrow_band"] = narrow_band
+	_native_mutation_request["brick_cells"] = brick_cells
+	_native_mutation_request["combined_minimum"] = _operation_combined_bounds.position
+	_native_mutation_request["combined_maximum"] = _operation_combined_bounds.end
+	_native_mutation_request["maximum_radius"] = _operation_maximum_radius
+	_native_mutation_request["operation_count"] = _operation_count
+	_native_mutation_request["operation_kinds"] = _operation_kinds
+	_native_mutation_request["operation_starts"] = _operation_starts
+	_native_mutation_request["operation_ends"] = _operation_ends
+	_native_mutation_request["operation_first_radii"] = _operation_first_radii
+	_native_mutation_request["operation_second_radii"] = _operation_second_radii
+	_native_mutation_request["spatial_warp"] = texture.spatial_warp
+	_native_mutation_request["noise_frequency"] = _noise_lattice_frequency
+	_native_mutation_request["noise_origin"] = _noise_lattice_origin
+	_native_mutation_request["noise_size"] = _noise_lattice_size
+	_native_mutation_request["noise_values"] = _noise_lattice_values
+	var began: bool = _native_kernel.call(&"begin_brush_union", _native_mutation_request)
+	if not began:
+		return -1
+	var minimum_brick := _brick_for_local_position(_operation_combined_bounds.position)
+	var maximum_brick := _brick_for_local_position(_operation_combined_bounds.end)
+	var changed_samples := 0
+	for z: int in range(minimum_brick.z, maximum_brick.z + 1):
+		for y: int in range(minimum_brick.y, maximum_brick.y + 1):
+			for x: int in range(minimum_brick.x, maximum_brick.x + 1):
+				var coordinate := Vector3i(x, y, z)
+				var brick := _bricks.get(coordinate) as SparseSdfBrick
+				_native_brick_request["coordinate"] = coordinate
+				_native_brick_request["exists"] = brick != null
+				_native_brick_request["uniform"] = (
+					brick.native_is_uniform() if brick != null else true
+				)
+				_native_brick_request["uniform_raw"] = (
+					brick.native_uniform_raw() if brick != null else SparseSdfBrick.MAX_RAW
+				)
+				_native_brick_request["distance_bytes"] = (
+					brick.native_distance_bytes() if brick != null else PackedByteArray()
+				)
+				var native_result: Dictionary = _native_kernel.call(
+					&"apply_brush_union_to_brick",
+					_native_brick_request
+				)
+				if not bool(native_result.get("valid", false)):
+					# begin_brush_union validates the entire immutable event contract. Reaching this
+					# branch means corrupt brick state; do not mix native and scripted writes silently.
+					push_error("Native SDF mutation rejected brick %s" % coordinate)
+					return changed_samples
+				if not bool(native_result.get("changed", false)):
+					continue
+				if brick == null:
+					brick = SparseSdfBrick.new().configure(
+						coordinate,
+						brick_cells,
+						voxel_size,
+						narrow_band,
+						material_index
+					)
+					_bricks[coordinate] = brick
+				var distances: PackedByteArray = native_result.get(
+					"distance_bytes",
+					PackedByteArray()
+				)
+				if not brick.replace_native_distances(
+					distances,
+					int(native_result.get("uniform_raw", SparseSdfBrick.MAX_RAW))
+				):
+					push_error("Native SDF mutation returned invalid packed brick %s" % coordinate)
+					return changed_samples
+				changed_samples += int(native_result.get("changed_samples", 0))
+				if bool(native_result.get("has_changed_sample_bounds", false)):
+					_include_changed_sample(native_result.get(
+						"changed_sample_minimum",
+						Vector3i.ZERO
+					))
+					_include_changed_sample(native_result.get(
+						"changed_sample_maximum",
+						Vector3i.ZERO
+					))
+				_mark_changed_chunk(coordinate)
+	return changed_samples
+
+
+func _prepare_noise_lattice(texture: DestructionTextureDefinition, seed: int) -> void:
+	_noise_lattice_valid = false
+	if texture.spatial_warp <= 0.0:
+		return
+	var frequency := maxf(texture.spatial_warp_frequency, 0.0001)
+	var scaled_minimum := _operation_combined_bounds.position * frequency
+	var scaled_maximum := _operation_combined_bounds.end * frequency
+	var minimum := Vector3i(
+		floori(scaled_minimum.x),
+		floori(scaled_minimum.y),
+		floori(scaled_minimum.z)
+	)
+	var maximum := Vector3i(
+		floori(scaled_maximum.x) + 1,
+		floori(scaled_maximum.y) + 1,
+		floori(scaled_maximum.z) + 1
+	)
+	var lattice_size := maximum - minimum + Vector3i.ONE
+	var value_count := lattice_size.x * lattice_size.y * lattice_size.z
+	if value_count <= 0 or value_count > MAX_CACHED_NOISE_LATTICE_VALUES:
+		return
+	if _noise_lattice_values.size() < value_count:
+		_noise_lattice_values.resize(value_count)
+		_noise_lattice_growth_count += 1
+	_noise_lattice_origin = minimum
+	_noise_lattice_size = lattice_size
+	_noise_lattice_frequency = frequency
+	var write_index := 0
+	for z: int in range(lattice_size.z):
+		for y: int in range(lattice_size.y):
+			for x: int in range(lattice_size.x):
+				_noise_lattice_values[write_index] = SdfMath.deterministic_lattice_noise(
+					minimum.x + x,
+					minimum.y + y,
+					minimum.z + z,
+					seed
+				)
+				write_index += 1
+	_noise_lattice_valid = true
+
+
+func _sample_spatial_noise(point: Vector3, frequency: float, seed: int) -> float:
+	if not _noise_lattice_valid:
+		return SdfMath.deterministic_signed_noise(point, frequency, seed)
+	var scaled := point * _noise_lattice_frequency
+	var lattice_x := floori(scaled.x)
+	var lattice_y := floori(scaled.y)
+	var lattice_z := floori(scaled.z)
+	var local_x := lattice_x - _noise_lattice_origin.x
+	var local_y := lattice_y - _noise_lattice_origin.y
+	var local_z := lattice_z - _noise_lattice_origin.z
+	if (
+		local_x < 0
+		or local_y < 0
+		or local_z < 0
+		or local_x + 1 >= _noise_lattice_size.x
+		or local_y + 1 >= _noise_lattice_size.y
+		or local_z + 1 >= _noise_lattice_size.z
+	):
+		return SdfMath.deterministic_signed_noise(point, frequency, seed)
+	var stride_y := _noise_lattice_size.x
+	var stride_z := stride_y * _noise_lattice_size.y
+	var base_index := local_x + stride_y * local_y + stride_z * local_z
+	var tx := SdfMath.quintic_fade(scaled.x - float(lattice_x))
+	var ty := SdfMath.quintic_fade(scaled.y - float(lattice_y))
+	var tz := SdfMath.quintic_fade(scaled.z - float(lattice_z))
+	var x00 := lerpf(
+		_noise_lattice_values[base_index],
+		_noise_lattice_values[base_index + 1],
+		tx
+	)
+	var x10 := lerpf(
+		_noise_lattice_values[base_index + stride_y],
+		_noise_lattice_values[base_index + stride_y + 1],
+		tx
+	)
+	var x01 := lerpf(
+		_noise_lattice_values[base_index + stride_z],
+		_noise_lattice_values[base_index + stride_z + 1],
+		tx
+	)
+	var x11 := lerpf(
+		_noise_lattice_values[base_index + stride_z + stride_y],
+		_noise_lattice_values[base_index + stride_z + stride_y + 1],
+		tx
+	)
+	return lerpf(lerpf(x00, x10, ty), lerpf(x01, x11, ty), tz)
+
+
+func _include_changed_sample(sample: Vector3i) -> void:
+	if not _last_change_has_sample_bounds:
+		_last_change_has_sample_bounds = true
+		_last_changed_sample_minimum = sample
+		_last_changed_sample_maximum = sample
+		return
+	_last_changed_sample_minimum = Vector3i(
+		mini(_last_changed_sample_minimum.x, sample.x),
+		mini(_last_changed_sample_minimum.y, sample.y),
+		mini(_last_changed_sample_minimum.z, sample.z)
+	)
+	_last_changed_sample_maximum = Vector3i(
+		maxi(_last_changed_sample_maximum.x, sample.x),
+		maxi(_last_changed_sample_maximum.y, sample.y),
+		maxi(_last_changed_sample_maximum.z, sample.z)
+	)
+
+
+func _begin_changed_chunk_collection(prechanged_chunks: Array[Vector3i] = []) -> void:
+	_change_collection_stamp += 1
+	if _change_collection_stamp >= 0x7fffffff:
+		_changed_chunk_stamps.fill(0)
+		_change_collection_stamp = 1
+	_changed_chunks_buffer.clear()
+	_last_change_has_sample_bounds = false
+	for coordinate: Vector3i in prechanged_chunks:
+		_mark_changed_chunk(coordinate)
+
+
+func _mark_changed_chunk(coordinate: Vector3i) -> void:
+	var flat_index := coordinate.x + brick_counts.x * (
+		coordinate.y + brick_counts.y * coordinate.z
+	)
+	if flat_index < 0 or flat_index >= _changed_chunk_stamps.size():
+		return
+	if _changed_chunk_stamps[flat_index] == _change_collection_stamp:
+		return
+	_changed_chunk_stamps[flat_index] = _change_collection_stamp
+	_changed_chunks_buffer.append(coordinate)
 
 
 func _apply_accumulated_damage(
@@ -674,20 +1193,21 @@ func _apply_accumulated_damage(
 	event: DamageEvent,
 	texture: DestructionTextureDefinition,
 	normalized_energy: float
-) -> Dictionary:
+) -> bool:
+	_begin_changed_chunk_collection()
+	_last_accumulated_changed_samples = 0
+	_last_accumulated_peak_damage = 0
 	if texture.damage_accumulation <= 0.0 or normalized_energy <= 0.0:
-		return {"changed": false}
+		return false
 	var radius := maxf(event.radius * texture.entry_radius_scale, voxel_size)
-	var operation := {
-		"kind": &"sphere",
-		"center": position,
-		"radius": radius,
-	}
-	var operation_bounds := _operation_bounds(operation).grow(voxel_size)
+	var operation_bounds := AABB(
+		position - Vector3.ONE * radius,
+		Vector3.ONE * radius * 2.0
+	).grow(voxel_size)
 	var minimum_brick := _brick_for_local_position(operation_bounds.position)
 	var maximum_brick := _brick_for_local_position(operation_bounds.end)
 	var amount := clampi(roundi(normalized_energy * texture.damage_accumulation * 32.0), 1, 255)
-	var changed_set: Dictionary[Vector3i, bool] = {}
+	var radius_squared := radius * radius
 	var changed_samples := 0
 	var peak_damage := 0
 	for z: int in range(minimum_brick.z, maximum_brick.z + 1):
@@ -699,28 +1219,32 @@ func _apply_accumulated_damage(
 					continue
 				var global_origin := coordinate * brick_cells
 				for sample_z: int in range(brick.samples_per_axis):
+					var position_z := (
+						-half_extents.z + float(global_origin.z + sample_z) * voxel_size
+					)
 					for sample_y: int in range(brick.samples_per_axis):
+						var position_y := (
+							-half_extents.y + float(global_origin.y + sample_y) * voxel_size
+						)
+						var linear_index := brick.samples_per_axis * (
+							sample_y + brick.samples_per_axis * sample_z
+						)
+						var position_x := -half_extents.x + float(global_origin.x) * voxel_size
 						for sample_x: int in range(brick.samples_per_axis):
-							var sample_position := global_sample_position(
-								global_origin + Vector3i(sample_x, sample_y, sample_z)
-							)
-							if SdfMath.sphere(sample_position, position, radius) <= 0.0:
-								var previous := brick.get_damage(sample_x, sample_y, sample_z)
-								var next := brick.add_damage(sample_x, sample_y, sample_z, amount)
+							var current_linear_index := linear_index
+							linear_index += 1
+							var sample_position := Vector3(position_x, position_y, position_z)
+							position_x += voxel_size
+							if sample_position.distance_squared_to(position) <= radius_squared:
+								var previous := brick.get_damage_at_index(current_linear_index)
+								var next := brick.add_damage_at_index(current_linear_index, amount)
 								peak_damage = maxi(peak_damage, next)
 								if next != previous:
 									changed_samples += 1
-									changed_set[coordinate] = true
-	var changed_chunks: Array[Vector3i] = []
-	for coordinate: Vector3i in changed_set.keys():
-		changed_chunks.append(coordinate)
-	changed_chunks.sort_custom(_vector3i_less)
-	return {
-		"changed": changed_samples > 0,
-		"changed_samples": changed_samples,
-		"changed_chunks": changed_chunks,
-		"peak_damage": peak_damage,
-	}
+									_mark_changed_chunk(coordinate)
+	_last_accumulated_changed_samples = changed_samples
+	_last_accumulated_peak_damage = peak_damage
+	return changed_samples > 0
 
 
 func _clear_accumulated_damage(
@@ -735,6 +1259,7 @@ func _clear_accumulated_damage(
 	).grow(voxel_size)
 	var minimum_brick := _brick_for_local_position(bounds_to_clear.position)
 	var maximum_brick := _brick_for_local_position(bounds_to_clear.end)
+	var radius_squared := radius * radius
 	for z: int in range(minimum_brick.z, maximum_brick.z + 1):
 		for y: int in range(minimum_brick.y, maximum_brick.y + 1):
 			for x: int in range(minimum_brick.x, maximum_brick.x + 1):
@@ -744,13 +1269,24 @@ func _clear_accumulated_damage(
 					continue
 				var global_origin := coordinate * brick_cells
 				for sample_z: int in range(brick.samples_per_axis):
+					var position_z := (
+						-half_extents.z + float(global_origin.z + sample_z) * voxel_size
+					)
 					for sample_y: int in range(brick.samples_per_axis):
+						var position_y := (
+							-half_extents.y + float(global_origin.y + sample_y) * voxel_size
+						)
+						var linear_index := brick.samples_per_axis * (
+							sample_y + brick.samples_per_axis * sample_z
+						)
+						var position_x := -half_extents.x + float(global_origin.x) * voxel_size
 						for sample_x: int in range(brick.samples_per_axis):
-							var sample_position := global_sample_position(
-								global_origin + Vector3i(sample_x, sample_y, sample_z)
-							)
-							if SdfMath.sphere(sample_position, position, radius) <= 0.0:
-								brick.set_damage(sample_x, sample_y, sample_z, 0)
+							var current_linear_index := linear_index
+							linear_index += 1
+							var sample_position := Vector3(position_x, position_y, position_z)
+							position_x += voxel_size
+							if sample_position.distance_squared_to(position) <= radius_squared:
+								brick.set_damage_at_index(current_linear_index, 0)
 
 
 func _stamp_changed_bricks(coordinates: Array[Vector3i]) -> void:
@@ -771,38 +1307,6 @@ func _find_exit_distance(position: Vector3, direction: Vector3, maximum_distance
 		entered_solid = entered_solid or current_solid
 		distance += step
 	return -1.0
-
-
-func _operation_bounds(operation: Dictionary) -> AABB:
-	var kind := StringName(operation.get("kind", &"sphere"))
-	if kind == &"capsule" or kind == &"tapered_capsule":
-		var start: Vector3 = operation.get("start", Vector3.ZERO)
-		var end: Vector3 = operation.get("end", Vector3.ZERO)
-		var radius := _operation_radius(operation)
-		var minimum := Vector3(
-			minf(start.x, end.x),
-			minf(start.y, end.y),
-			minf(start.z, end.z)
-		) - Vector3.ONE * radius
-		var maximum := Vector3(
-			maxf(start.x, end.x),
-			maxf(start.y, end.y),
-			maxf(start.z, end.z)
-		) + Vector3.ONE * radius
-		return AABB(minimum, maximum - minimum)
-	var center: Vector3 = operation.get("center", Vector3.ZERO)
-	var sphere_radius := _operation_radius(operation)
-	return AABB(center - Vector3.ONE * sphere_radius, Vector3.ONE * sphere_radius * 2.0)
-
-
-func _operation_radius(operation: Dictionary) -> float:
-	return maxf(
-		float(operation.get("radius", 0.0)),
-		maxf(
-			float(operation.get("start_radius", 0.0)),
-			float(operation.get("end_radius", 0.0))
-		)
-	)
 
 
 func _brick_for_local_position(local_position: Vector3) -> Vector3i:

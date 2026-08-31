@@ -931,7 +931,10 @@ func _test_large_bunker_renderer_lifecycle(raw_states: Dictionary) -> void:
 		wet_path_is_live = (
 			renderer._shared_program_players[group_slot].playing
 			and wet_rack.reverb.wet > 0.001
-			and is_zero_approx(AudioServer.get_bus_volume_db(wet_rack.bus_index))
+			and is_equal_approx(
+				AudioServer.get_bus_volume_db(wet_rack.bus_index),
+				wet_rack.get_presentation_gain_db()
+			)
 			and not AudioServer.is_bus_effect_enabled(
 				wet_rack.bus_index,
 				wet_rack._tail_lowpass_effect_index
@@ -1006,7 +1009,10 @@ func _test_large_bunker_renderer_lifecycle(raw_states: Dictionary) -> void:
 		settled_resume_is_clean = (
 			settled_resume_is_clean
 			and renderer._shared_program_players[group_slot].playing
-			and is_zero_approx(AudioServer.get_bus_volume_db(wet_rack.bus_index))
+			and is_equal_approx(
+				AudioServer.get_bus_volume_db(wet_rack.bus_index),
+				wet_rack.get_presentation_gain_db()
+			)
 			and not AudioServer.is_bus_effect_enabled(
 				wet_rack.bus_index,
 				wet_rack._tail_lowpass_effect_index

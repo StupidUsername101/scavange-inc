@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="CharacterPoseDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/characters/character_pose_definition.gd" id="1_pose"]
+
+[resource]
+script = ExtResource("1_pose")
+pose_id = &"flute_runner_playing"
+procedural_inheritance = 0.62
+upper_body_weight = 0.72
+upper_body_position = Vector3(0, 0.018, -0.012)
+upper_body_rotation = Vector3(-0.055, 0, 0)
+head_weight = 0.34
+head_rotation = Vector3(0.045, 0, 0)
+left_arm_weight = 1.0
+left_arm_rotation = Vector3(1.08, -0.26, 0.92)
+left_forearm_weight = 1.0
+left_forearm_rotation = Vector3(-0.16, 0.08, -1.16)
+right_arm_weight = 1.0
+right_arm_rotation = Vector3(1.03, 0.24, -0.92)
+right_forearm_weight = 1.0
+right_forearm_rotation = Vector3(-0.12, -0.08, 1.12)

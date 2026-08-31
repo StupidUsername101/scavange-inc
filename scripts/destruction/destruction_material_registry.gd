@@ -61,11 +61,13 @@ static func _concrete() -> DestructionTextureDefinition:
 	profile.perforation_threshold = 2.4
 	profile.hardness = 0.78
 	profile.fracture_toughness = 0.28
+	profile.support_strength = 0.52
 	profile.ductility = 0.02
 	profile.entry_radius_scale = 1.25
 	profile.exit_spall_radius_scale = 2.0
 	profile.crack_count = 4
 	profile.spatial_warp = 0.18
+	profile.fragment_density_kg_m3 = 2200.0
 	return profile.sanitize()
 
 
@@ -81,6 +83,7 @@ static func _metal() -> DestructionTextureDefinition:
 	profile.perforation_threshold = 4.2
 	profile.hardness = 0.9
 	profile.fracture_toughness = 0.82
+	profile.support_strength = 0.92
 	profile.ductility = 0.86
 	profile.damage_accumulation = 0.85
 	profile.entry_radius_scale = 0.62
@@ -90,6 +93,7 @@ static func _metal() -> DestructionTextureDefinition:
 	profile.crack_count = 0
 	profile.spatial_warp = 0.035
 	profile.maximum_physical_fragments = 2
+	profile.fragment_density_kg_m3 = 7850.0
 	profile.metallic = 0.85
 	profile.roughness = 0.42
 	return profile.sanitize()
@@ -107,6 +111,7 @@ static func _wood() -> DestructionTextureDefinition:
 	profile.perforation_threshold = 1.35
 	profile.hardness = 0.38
 	profile.fracture_toughness = 0.38
+	profile.support_strength = 0.64
 	profile.ductility = 0.12
 	profile.entry_radius_scale = 0.85
 	profile.channel_radius_scale = 0.72
@@ -116,6 +121,7 @@ static func _wood() -> DestructionTextureDefinition:
 	profile.anisotropy = 0.82
 	profile.grain_axis = Vector3.UP
 	profile.spatial_warp = 0.12
+	profile.fragment_density_kg_m3 = 650.0
 	return profile.sanitize()
 
 
@@ -131,11 +137,13 @@ static func _stone() -> DestructionTextureDefinition:
 	profile.perforation_threshold = 2.8
 	profile.hardness = 0.84
 	profile.fracture_toughness = 0.22
+	profile.support_strength = 0.44
 	profile.ductility = 0.0
 	profile.entry_radius_scale = 1.05
 	profile.exit_spall_radius_scale = 1.35
 	profile.crack_count = 4
 	profile.spatial_warp = 0.14
+	profile.fragment_density_kg_m3 = 2650.0
 	return profile.sanitize()
 
 
@@ -151,6 +159,7 @@ static func _soil() -> DestructionTextureDefinition:
 	profile.perforation_threshold = 0.35
 	profile.hardness = 0.08
 	profile.fracture_toughness = 0.15
+	profile.support_strength = 0.18
 	profile.ductility = 0.62
 	profile.entry_radius_scale = 1.45
 	profile.channel_radius_scale = 1.1
@@ -159,4 +168,5 @@ static func _soil() -> DestructionTextureDefinition:
 	profile.crack_count = 0
 	profile.spatial_warp = 0.22
 	profile.maximum_physical_fragments = 0
+	profile.fragment_density_kg_m3 = 1500.0
 	return profile.sanitize()

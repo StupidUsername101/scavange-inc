@@ -14,8 +14,12 @@ extends Resource
 @export var head_rotation := Vector3.ZERO
 @export_range(0.0, 1.0, 0.01) var left_arm_weight := 0.0
 @export var left_arm_rotation := Vector3.ZERO
+@export_range(0.0, 1.0, 0.01) var left_forearm_weight := 0.0
+@export var left_forearm_rotation := Vector3.ZERO
 @export_range(0.0, 1.0, 0.01) var right_arm_weight := 0.0
 @export var right_arm_rotation := Vector3.ZERO
+@export_range(0.0, 1.0, 0.01) var right_forearm_weight := 0.0
+@export var right_forearm_rotation := Vector3.ZERO
 @export_range(0.0, 1.0, 0.01) var camera_weight := 0.0
 @export var camera_position := Vector3.ZERO
 @export var camera_rotation := Vector3.ZERO

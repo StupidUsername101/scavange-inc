@@ -1,0 +1,109 @@
+[gd_resource type="Resource" script_class="EnemyDestructibleAnatomyDefinition" load_steps=10 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/enemy_destructible_anatomy_definition.gd" id="1_anatomy"]
+[ext_resource type="Script" path="res://scripts/enemies/enemy_anatomy_part_definition.gd" id="2_part"]
+[ext_resource type="Resource" path="res://resources/destruction/flesh.tres" id="3_flesh"]
+
+[sub_resource type="Resource" id="Part_head"]
+script = ExtResource("2_part")
+part_id = &"head"
+vital = true
+severable = true
+local_center = Vector3(0, 1.66, 0)
+size = Vector3(0.4, 0.38, 0.38)
+contribution_weight = 0.12
+remaining_threshold = 0.56
+critical_points = PackedVector3Array(0, 1.66, 0)
+presentation_start_bone = &"mixamorig_Head"
+rest_axis_start = Vector3(0, 1.66, 0)
+rest_axis_end = Vector3(0, 1.66, 0)
+stump_local_position = Vector3(0, 1.5, 0)
+stump_inward_direction = Vector3(0, -1, 0)
+stump_radius = 0.13
+
+[sub_resource type="Resource" id="Part_torso"]
+script = ExtResource("2_part")
+part_id = &"torso"
+vital = true
+local_center = Vector3(0, 1.18, 0)
+size = Vector3(0.62, 0.76, 0.44)
+contribution_weight = 0.36
+remaining_threshold = 0.34
+critical_points = PackedVector3Array(-0.11, 1.28, -0.035)
+presentation_start_bone = &"mixamorig_Spine1"
+rest_axis_start = Vector3(0, 1.18, 0)
+rest_axis_end = Vector3(0, 1.18, 0)
+
+[sub_resource type="Resource" id="Part_left_arm"]
+script = ExtResource("2_part")
+part_id = &"left_arm"
+severable = true
+local_center = Vector3(-0.38, 1.22, 0)
+size = Vector3(0.2, 0.7, 0.22)
+contribution_weight = 0.09
+remaining_threshold = 0.38
+presentation_start_bone = &"mixamorig_LeftArm"
+presentation_end_bone = &"mixamorig_LeftHand"
+rest_axis_start = Vector3(-0.38, 1.53, 0)
+rest_axis_end = Vector3(-0.38, 1, 0)
+stump_local_position = Vector3(-0.32, 1.47, 0)
+stump_inward_direction = Vector3(1, 0, 0)
+stump_radius = 0.105
+
+[sub_resource type="Resource" id="Part_right_arm"]
+script = ExtResource("2_part")
+part_id = &"right_arm"
+severable = true
+local_center = Vector3(0.38, 1.22, 0)
+size = Vector3(0.2, 0.7, 0.22)
+contribution_weight = 0.09
+remaining_threshold = 0.38
+presentation_start_bone = &"mixamorig_RightArm"
+presentation_end_bone = &"mixamorig_RightHand"
+rest_axis_start = Vector3(0.38, 1.53, 0)
+rest_axis_end = Vector3(0.38, 1, 0)
+stump_local_position = Vector3(0.32, 1.47, 0)
+stump_inward_direction = Vector3(-1, 0, 0)
+stump_radius = 0.105
+
+[sub_resource type="Resource" id="Part_left_leg"]
+script = ExtResource("2_part")
+part_id = &"left_leg"
+severable = true
+local_center = Vector3(-0.17, 0.48, 0)
+size = Vector3(0.24, 0.9, 0.28)
+contribution_weight = 0.17
+remaining_threshold = 0.38
+presentation_start_bone = &"mixamorig_LeftUpLeg"
+presentation_end_bone = &"mixamorig_LeftFoot"
+rest_axis_start = Vector3(-0.17, 0.92, 0)
+rest_axis_end = Vector3(-0.17, 0.05, 0)
+stump_local_position = Vector3(-0.17, 0.91, 0)
+stump_inward_direction = Vector3(0, 1, 0)
+stump_radius = 0.12
+
+[sub_resource type="Resource" id="Part_right_leg"]
+script = ExtResource("2_part")
+part_id = &"right_leg"
+severable = true
+local_center = Vector3(0.17, 0.48, 0)
+size = Vector3(0.24, 0.9, 0.28)
+contribution_weight = 0.17
+remaining_threshold = 0.38
+presentation_start_bone = &"mixamorig_RightUpLeg"
+presentation_end_bone = &"mixamorig_RightFoot"
+rest_axis_start = Vector3(0.17, 0.92, 0)
+rest_axis_end = Vector3(0.17, 0.05, 0)
+stump_local_position = Vector3(0.17, 0.91, 0)
+stump_inward_direction = Vector3(0, 1, 0)
+stump_radius = 0.12
+
+[resource]
+script = ExtResource("1_anatomy")
+damage_texture = ExtResource("3_flesh")
+parts = Array[ExtResource("2_part")]([SubResource("Part_head"), SubResource("Part_torso"), SubResource("Part_left_arm"), SubResource("Part_right_arm"), SubResource("Part_left_leg"), SubResource("Part_right_leg")])
+voxel_size = 0.045
+brick_cells = 12
+aggregate_destruction_threshold = 0.58
+critical_air_margin = 0.008
+replicated_wound_limit = 24

@@ -17,7 +17,7 @@ const SURFACE_SPECS: Array[Dictionary] = [
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_concrete_3.ogg"),
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_concrete_4.ogg"),
 		],
-		"footstep_volume_db": -5.0,
+		"footstep_volume_db": -7.0,
 	},
 	{
 		"surface": &"metal",
@@ -27,7 +27,7 @@ const SURFACE_SPECS: Array[Dictionary] = [
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_metal_3.ogg"),
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_metal_4.ogg"),
 		],
-		"footstep_volume_db": -6.0,
+		"footstep_volume_db": -8.0,
 	},
 	{
 		"surface": &"wood",
@@ -37,7 +37,7 @@ const SURFACE_SPECS: Array[Dictionary] = [
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_wood_3.ogg"),
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_wood_4.ogg"),
 		],
-		"footstep_volume_db": -5.5,
+		"footstep_volume_db": -7.5,
 	},
 	{
 		"surface": &"stone",
@@ -47,7 +47,7 @@ const SURFACE_SPECS: Array[Dictionary] = [
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_stone_3.ogg"),
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_stone_4.ogg"),
 		],
-		"footstep_volume_db": -5.0,
+		"footstep_volume_db": -7.0,
 	},
 	{
 		"surface": &"soil",
@@ -57,7 +57,7 @@ const SURFACE_SPECS: Array[Dictionary] = [
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_soil_3.ogg"),
 			preload("res://assets/third_party/pizza_doggy/audio/rust_and_blood/footstep_soil_4.ogg"),
 		],
-		"footstep_volume_db": -5.0,
+		"footstep_volume_db": -7.0,
 	},
 ]
 
@@ -285,8 +285,8 @@ func _ready() -> void:
 			StringName("footstep_%s" % surface),
 			footstep_streams,
 			float(surface_spec.get("footstep_volume_db", -5.0)),
-			0.96,
-			1.04,
+			0.93,
+			1.07,
 			0.0,
 			0.78
 		)

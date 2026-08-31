@@ -1,0 +1,89 @@
+[gd_scene load_steps=11 format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_body"]
+albedo_color = Color(0.035, 0.048, 0.047, 1)
+metallic = 0.72
+roughness = 0.34
+
+[sub_resource type="StandardMaterial3D" id="Material_grip"]
+albedo_color = Color(0.055, 0.043, 0.035, 1)
+roughness = 0.88
+
+[sub_resource type="StandardMaterial3D" id="Material_trim"]
+albedo_color = Color(0.52, 0.24, 0.035, 1)
+metallic = 0.56
+roughness = 0.38
+
+[sub_resource type="StandardMaterial3D" id="Material_emitter"]
+shading_mode = 0
+albedo_color = Color(0.15, 0.95, 0.73, 1)
+emission_enabled = true
+emission = Color(0.02, 0.82, 0.54, 1)
+emission_energy_multiplier = 2.4
+
+[sub_resource type="BoxMesh" id="Mesh_body"]
+material = SubResource("Material_body")
+size = Vector3(0.18, 0.16, 0.42)
+
+[sub_resource type="BoxMesh" id="Mesh_grip"]
+material = SubResource("Material_grip")
+size = Vector3(0.105, 0.25, 0.12)
+
+[sub_resource type="BoxMesh" id="Mesh_guard"]
+material = SubResource("Material_trim")
+size = Vector3(0.22, 0.035, 0.17)
+
+[sub_resource type="CylinderMesh" id="Mesh_nozzle"]
+material = SubResource("Material_body")
+top_radius = 0.055
+bottom_radius = 0.078
+height = 0.18
+radial_segments = 10
+
+[sub_resource type="CylinderMesh" id="Mesh_emitter"]
+material = SubResource("Material_emitter")
+top_radius = 0.026
+bottom_radius = 0.036
+height = 0.038
+radial_segments = 10
+
+[sub_resource type="BoxMesh" id="Mesh_heat_sink"]
+material = SubResource("Material_trim")
+size = Vector3(0.025, 0.115, 0.11)
+
+[node name="HandheldPlasmaCutterVisual" type="Node3D"]
+
+[node name="Body" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0, -0.08)
+mesh = SubResource("Mesh_body")
+
+[node name="Grip" type="MeshInstance3D" parent="."]
+position = Vector3(0, -0.17, 0.015)
+rotation = Vector3(-0.18, 0, 0)
+mesh = SubResource("Mesh_grip")
+
+[node name="HandGuard" type="MeshInstance3D" parent="."]
+position = Vector3(0, -0.075, -0.115)
+mesh = SubResource("Mesh_guard")
+
+[node name="Nozzle" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0, -0.36)
+rotation = Vector3(1.5708, 0, 0)
+mesh = SubResource("Mesh_nozzle")
+
+[node name="EmitterCore" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0, -0.462)
+rotation = Vector3(1.5708, 0, 0)
+cast_shadow = 0
+mesh = SubResource("Mesh_emitter")
+
+[node name="HeatSinkLeft" type="MeshInstance3D" parent="."]
+position = Vector3(-0.106, 0.02, -0.045)
+mesh = SubResource("Mesh_heat_sink")
+
+[node name="HeatSinkRight" type="MeshInstance3D" parent="."]
+position = Vector3(0.106, 0.02, -0.045)
+mesh = SubResource("Mesh_heat_sink")
+
+[node name="PlasmaEmitter" type="Marker3D" parent="."]
+position = Vector3(0, 0, -0.49)

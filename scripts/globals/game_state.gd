@@ -39,13 +39,14 @@ func get_player_id(peer_id: int) -> int:
 func try_register_player(
 	peer_id: int,
 	default_money: int,
-	max_players: int = -1
+	max_players: int = -1,
+	steam_id: int = 0
 ) -> int:
 	if player_id_by_peer_id.has(peer_id):
 		return -1
 	if (
 		max_players >= 0
-		and player_id_by_peer_id.size() >= max_players
+		and peers_by_player_id.size() >= max_players
 	):
 		return -1
 	
@@ -54,7 +55,8 @@ func try_register_player(
 	var state = PlayerState.new(
 		player_id, 
 		peer_id, 
-		default_money
+		default_money,
+		steam_id
 	)
 	
 	player_id_by_peer_id[peer_id] = player_id
@@ -66,13 +68,60 @@ func unregister_peer(peer_id: int) -> void:
 	if not player_id_by_peer_id.has(peer_id):
 		return
 
-	var player_id = player_id_by_peer_id[peer_id]
-		
-	player_id_by_peer_id.erase(peer_id)
+	unregister_player(player_id_by_peer_id[peer_id])
+
+
+func unregister_player(player_id: int) -> void:
+	var state := get_player_state(player_id)
+	if state == null:
+		return
+	if state.peer_id > 0:
+		player_id_by_peer_id.erase(state.peer_id)
 	peers_by_player_id.erase(player_id)
 	player_input_by_player_id.erase(player_id)
 
+
+func suspend_peer(peer_id: int) -> int:
+	var player_id := get_player_id(peer_id)
+	if player_id < 0:
+		return -1
+	var state := get_player_state(player_id)
+	player_id_by_peer_id.erase(peer_id)
+	player_input_by_player_id[player_id] = Vector2.ZERO
+	if state != null:
+		state.peer_id = -1
+		state.connected = false
+	return player_id
+
+
+func rebind_player_peer(player_id: int, peer_id: int) -> bool:
+	if peer_id <= 0 or player_id_by_peer_id.has(peer_id):
+		return false
+	var state := get_player_state(player_id)
+	if state == null or state.connected:
+		return false
+	state.peer_id = peer_id
+	state.connected = true
+	player_id_by_peer_id[peer_id] = player_id
+	player_input_by_player_id[player_id] = Vector2.ZERO
+	return true
+
+
+func get_player_id_for_steam_id(steam_id: int) -> int:
+	if steam_id <= 0:
+		return -1
+	for player_id: int in peers_by_player_id:
+		var state := peers_by_player_id[player_id] as PlayerState
+		if state != null and state.steam_id == steam_id:
+			return player_id
+	return -1
+
 func get_player_count() -> int:
+	# Disconnected players retain their slot for the bounded reconnect lease.
+	return peers_by_player_id.size()
+
+
+func get_connected_player_count() -> int:
 	return player_id_by_peer_id.size()
 
 

@@ -1,0 +1,26 @@
+import os
+
+
+godot_cpp_path = ARGUMENTS.get("godot_cpp_path", os.environ.get("GODOT_CPP_PATH", ""))
+if not godot_cpp_path:
+    print("Missing godot_cpp_path=<path-to-godot-cpp> (or GODOT_CPP_PATH).")
+    Exit(1)
+
+env = SConscript(
+    os.path.join(godot_cpp_path, "SConstruct"),
+    {"api_version": "4.7"},
+)
+env.Append(CPPPATH=["src"])
+# Checkpoint parity is more important than compiler-selected fused arithmetic. Keep the numerical
+# contract identical across GCC/Clang/MSVC without relying on any platform math or SIMD extension.
+if env["platform"] == "windows" and not env.get("use_mingw", False):
+    env.Append(CXXFLAGS=["/fp:strict"])
+else:
+    env.Append(CXXFLAGS=["-fno-fast-math", "-ffp-contract=off"])
+
+sources = Glob("src/*.cpp")
+output_dir = "../../addons/scavange_sdf/bin"
+library_name = "libscavange_sdf{}{}".format(env["suffix"], env["SHLIBSUFFIX"])
+library = env.SharedLibrary(os.path.join(output_dir, library_name), source=sources)
+
+Default(library)

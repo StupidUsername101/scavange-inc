@@ -2,8 +2,8 @@ class_name MovementParkourLayout
 extends RefCounted
 
 ## Shared, deterministic movement-course geometry. Authoritative movement uses three smooth hidden
-## ramps; client foot placement sees the matching individual tread tops. The remaining platforms
-## and height course are ordinary shared boxes, so collision and presentation cannot drift apart.
+## ramps; client foot placement sees the matching individual tread tops. Platforms are ordinary
+## shared boxes, so collision and presentation cannot drift apart.
 
 const CENTER := Vector3(55.0, 0.0, -30.0)
 const CLEAR_HALF_EXTENTS := Vector2(16.5, 12.0)
@@ -21,38 +21,13 @@ const MIRROR_STAIR_WIDTH := 3.4
 const MIRROR_STAIR_RUN := 6.0
 const MIRROR_STAIR_HEIGHT := 2.4
 const MIRROR_STAIR_COUNT := 12
-const MIRROR_GAP := 9.0
+# A normal full-sprint jump travels 11.25 m at equal height. Keep the physical edge-to-edge gap
+# beyond that range; testing against a fully-supported landing position alone is insufficient
+# because the character collider can land as soon as it overlaps the far platform edge.
+const MIRROR_GAP := 11.8
 const MIRROR_PLATFORM_LENGTH := 3.0
 const MIRROR_Z_OFFSET := 6.5
 const JUMP_EDGE_MARKER_SIZE := 0.085
-
-const BOX_HEIGHTS := [
-	0.12,
-	0.26,
-	0.48,
-	0.74,
-	1.02,
-	0.81,
-	0.57,
-	0.35,
-	0.18,
-	1.35,
-	1.65,
-]
-const BOX_OFFSETS := [
-	Vector2(-3.0, -8.0),
-	Vector2(-0.5, -8.0),
-	Vector2(2.0, -8.0),
-	Vector2(4.5, -8.0),
-	Vector2(7.0, -8.0),
-	Vector2(7.0, -5.5),
-	Vector2(4.5, -5.5),
-	Vector2(2.0, -5.5),
-	Vector2(-0.5, -5.5),
-	Vector2(10.0, -8.0),
-	Vector2(10.0, -5.5),
-]
-const BOX_SIZE := Vector2(2.05, 2.05)
 
 static var _built := false
 static var _structural_boxes: Array[Dictionary] = []
@@ -126,24 +101,8 @@ static func _ensure_built() -> void:
 	if _built:
 		return
 	_built = true
-	_append_height_course()
 	_append_precision_stair()
 	_append_mirrored_jump_stairs()
-
-
-static func _append_height_course() -> void:
-	for box_index: int in range(BOX_HEIGHTS.size()):
-		var height: float = BOX_HEIGHTS[box_index]
-		var offset: Vector2 = BOX_OFFSETS[box_index]
-		_append_box(
-			_structural_boxes,
-			StringName("ParkourHeightBox%02d" % (box_index + 1)),
-			CENTER + Vector3(offset.x, height * 0.5, offset.y),
-			Vector3(BOX_SIZE.x, height, BOX_SIZE.y),
-			Vector3.ZERO,
-			&"parkour",
-			true
-		)
 
 
 static func _append_precision_stair() -> void:

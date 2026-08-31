@@ -12,11 +12,18 @@ enum PhysicalVisualStyle {
 	BLOCK_CREATURE,
 }
 
+enum PresentationType {
+	LEGACY,
+	HUMANOID,
+}
+
 @export_group("Identity")
 @export var display_name := "Enemy"
 @export var visual_color := Color(0.72, 0.16, 0.12, 1.0)
 @export var faction_id := 2
 @export var physical_visual_style := PhysicalVisualStyle.SPIDER
+@export var presentation_type := PresentationType.LEGACY
+@export var show_status_label := true
 
 @export_group("Body")
 @export var body_size := Vector3(1.0, 1.8, 1.0)
@@ -28,7 +35,13 @@ enum PhysicalVisualStyle {
 @export_group("Enemy Systems")
 @export var behavior: EnemyBehaviorDefinition
 @export var physical_anatomy: EnemyPhysicalAnatomyDefinition
+@export var destructible_anatomy: EnemyDestructibleAnatomyDefinition
+@export var flute_runner: FluteRunnerDefinition
 @export_range(0.0, 30.0, 0.05, "or_greater") var death_linger_seconds := 0.0
+
+@export_group("Runtime")
+@export var starts_active := false
+@export var automatically_target_players := false
 
 @export_group("Dev Zoo")
 @export_range(0.0, 120.0, 0.1, "or_greater") var respawn_delay_seconds := 2.0
@@ -41,6 +54,12 @@ func create_collision_shape() -> Shape3D:
 
 
 func instantiate_visual() -> Node3D:
+	# Humanoids are assembled by EnemyHumanoidPresentation3D because their visuals depend on compact
+	# replicated gait/awareness state. Keep this fallback empty rather than briefly flashing a box.
+	if presentation_type == PresentationType.HUMANOID:
+		var humanoid_root := Node3D.new()
+		humanoid_root.name = "HumanoidPresentationRoot"
+		return humanoid_root
 	if physical_anatomy != null:
 		var physical_visual := EnemyPhysicalLimbVisual3D.new()
 		physical_visual.configure(self)

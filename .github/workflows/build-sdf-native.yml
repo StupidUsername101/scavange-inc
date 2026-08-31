@@ -1,0 +1,54 @@
+name: Build native SDF backend
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "native/sdf_backend/**"
+      - "tools/build_sdf_native.py"
+      - ".github/workflows/build-sdf-native.yml"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        target: [template_debug, template_release]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            extension: so
+          - os: windows-latest
+            platform: windows
+            extension: dll
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install SCons
+        run: python -m pip install scons==4.11.1
+      - name: Read pinned godot-cpp revision
+        id: pin
+        shell: bash
+        run: echo "revision=$(tr -d '\r\n' < native/sdf_backend/godot-cpp.commit)" >> "$GITHUB_OUTPUT"
+      - name: Check out godot-cpp
+        uses: actions/checkout@v4
+        with:
+          repository: godotengine/godot-cpp
+          ref: ${{ steps.pin.outputs.revision }}
+          path: .native-deps/godot-cpp
+          submodules: false
+      - name: Build
+        run: >-
+          python tools/build_sdf_native.py
+          --godot-cpp .native-deps/godot-cpp
+          --target ${{ matrix.target }}
+          --jobs 4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdf-${{ runner.os }}-${{ matrix.target }}
+          path: addons/scavange_sdf/bin/libscavange_sdf.${{ matrix.platform }}.${{ matrix.target }}.x86_64.${{ matrix.extension }}
+          if-no-files-found: error

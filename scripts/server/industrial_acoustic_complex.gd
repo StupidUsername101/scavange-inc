@@ -13,7 +13,6 @@ const PROP_COLLISION_SHAPES := {
 	&"wood_pallet": preload("res://resources/world/prop_collisions/wood_pallet_1_convex.tres"),
 	&"computer_terminal": preload("res://resources/world/prop_collisions/computer_terminal_1_convex.tres"),
 	&"control_panel": preload("res://resources/world/prop_collisions/control_panel_1_convex.tres"),
-	&"fuse_box": preload("res://resources/world/prop_collisions/fuse_box_1_convex.tres"),
 }
 const PROP_SURFACES := {
 	&"generator": &"metal",
@@ -23,7 +22,6 @@ const PROP_SURFACES := {
 	&"wood_pallet": &"wood",
 	&"computer_terminal": &"metal",
 	&"control_panel": &"metal",
-	&"fuse_box": &"metal",
 }
 
 @export var acoustic_material: AcousticMaterial
@@ -37,7 +35,6 @@ func _ready() -> void:
 	PHYSICAL_SURFACE.apply_to(self, &"concrete")
 	_build_collision()
 	_build_prop_collision()
-	_build_building_acoustic_probe_grid()
 	_build_large_bunker_acoustic_probe_grid()
 	_build_valve_bunker_acoustic_probe_grid()
 	_build_tunnel_acoustics()
@@ -45,16 +42,6 @@ func _ready() -> void:
 
 func get_acoustic_material() -> AcousticMaterial:
 	return acoustic_material
-
-
-func _build_building_acoustic_probe_grid() -> void:
-	for descriptor: Dictionary in LAYOUT.building_room_probe_descriptors():
-		_add_probe_from_descriptor(descriptor, {
-			"name": "BuildingRoomProbe",
-			"auto_connect_radius": 4.7,
-			"reflection_sample_distance": 18.0,
-			"environment_influence_radius": 5.0,
-		})
 
 
 func _build_large_bunker_acoustic_probe_grid() -> void:

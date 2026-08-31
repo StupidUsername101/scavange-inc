@@ -24,7 +24,9 @@ class RecordingServerPlayer:
 		_sound_id: StringName,
 		_max_distance: float,
 		_priority: float,
-		_local_prediction_key := 0
+		_local_prediction_key := 0,
+		_source_position := Vector3(INF, INF, INF),
+		_base_volume_db := 0.0
 	) -> void:
 		pass
 
@@ -54,14 +56,11 @@ func _run() -> void:
 func _test_layout_contract() -> void:
 	var structural := PARKOUR.structural_boxes()
 	var details := PARKOUR.contact_detail_boxes()
-	var height_boxes: Array[Dictionary] = []
 	var left_treads: Array[Dictionary] = []
 	var right_treads: Array[Dictionary] = []
 	var hidden_ramp_count := 0
 	for descriptor: Dictionary in structural:
 		var name := str(descriptor.get("name", ""))
-		if name.begins_with("ParkourHeightBox"):
-			height_boxes.append(descriptor)
 		if name.ends_with("Ramp") and not bool(descriptor.get("visual", true)):
 			hidden_ramp_count += 1
 	for descriptor: Dictionary in details:
@@ -71,24 +70,10 @@ func _test_layout_contract() -> void:
 		elif name.begins_with("ParkourMirrorRightTread"):
 			right_treads.append(descriptor)
 	_expect(
-		height_boxes.size() == PARKOUR.BOX_HEIGHTS.size()
-		and details.size()
+		details.size()
 		== PARKOUR.PRECISION_STAIR_COUNT + PARKOUR.MIRROR_STAIR_COUNT * 2
 		and hidden_ramp_count == 3,
-		"one shared layout owns the height course and all three smooth-ramp/discrete-tread staircases"
-	)
-	var box_top_min := INF
-	var box_top_max := -INF
-	for descriptor: Dictionary in height_boxes:
-		var position: Vector3 = descriptor.get("position", Vector3.ZERO)
-		var size: Vector3 = descriptor.get("size", Vector3.ZERO)
-		box_top_min = minf(box_top_min, position.y + size.y * 0.5)
-		box_top_max = maxf(box_top_max, position.y + size.y * 0.5)
-	_expect(
-		box_top_min <= 0.13
-		and box_top_max >= 1.0
-		and box_top_max - box_top_min >= 0.85,
-		"the box loop spans subtle curb contacts through metre-high split-foot and jump contacts"
+		"one shared layout owns all three smooth-ramp/discrete-tread staircases"
 	)
 	var mirrored_heights := true
 	for tread_index: int in range(PARKOUR.MIRROR_STAIR_COUNT):
@@ -120,17 +105,29 @@ func _test_layout_contract() -> void:
 	)
 	var walk_range := ServerPlayer.WALK_SPEED * equal_height_flight_seconds
 	var run_range := ServerPlayer.RUN_SPEED * equal_height_flight_seconds
+	var front_flip_range := _estimate_flip_equal_height_range(
+		ServerPlayer.RUN_SPEED,
+		-1
+	)
+	var back_flip_range := _estimate_flip_equal_height_range(
+		ServerPlayer.RUN_SPEED,
+		1
+	)
 	var start := PARKOUR.mirror_jump_start_position(PLAYER_HALF_WIDTH)
-	var predicted_landing_x := start.x + run_range
+	var predicted_run_landing_x := start.x + run_range
+	var predicted_front_flip_landing_x := start.x + front_flip_range
+	var predicted_back_flip_landing_x := start.x + back_flip_range
 	var landing_bounds := PARKOUR.mirror_landing_center_bounds(
 		PLAYER_HALF_WIDTH
 	)
 	_expect(
 		walk_range < PARKOUR.MIRROR_GAP
-		and run_range > PARKOUR.MIRROR_GAP
-		and predicted_landing_x > landing_bounds.x
-		and predicted_landing_x < landing_bounds.y,
-		"the nine-metre transfer rejects walking speed while a committed sprint lands inside the far deck"
+		and run_range < PARKOUR.MIRROR_GAP
+		and predicted_run_landing_x < landing_bounds.x
+		and predicted_back_flip_landing_x < landing_bounds.x
+		and predicted_front_flip_landing_x > landing_bounds.x
+		and predicted_front_flip_landing_x < landing_bounds.y,
+		"the mirrored transfer specifically rewards the frontflip range bonus rather than an ordinary or backflip jump"
 	)
 
 
@@ -147,11 +144,6 @@ func _test_runtime_geometry_and_jump() -> void:
 	detail_samples.append(detail_boxes[PARKOUR.PRECISION_STAIR_COUNT - 1])
 	detail_samples.append(detail_boxes[PARKOUR.PRECISION_STAIR_COUNT])
 	detail_samples.append(detail_boxes.back())
-	var height_box := _find_descriptor(
-		PARKOUR.structural_boxes(),
-		"ParkourHeightBox05"
-	)
-	detail_samples.append(height_box)
 	var every_detail_top_matches := true
 	for descriptor: Dictionary in detail_samples:
 		var position: Vector3 = descriptor.get("position", Vector3.ZERO)
@@ -171,28 +163,81 @@ func _test_runtime_geometry_and_jump() -> void:
 		)
 	_expect(
 		every_detail_top_matches,
-		"client foot rays resolve the real first, final, mirrored, and height-box top surfaces"
+		"client foot rays resolve the real first, final, and mirrored tread surfaces"
 	)
 	_expect(
-		client_complex.get_node_or_null("ParkourHeightBox01") != null
+		client_complex.get_node_or_null("ParkourHeightBox01") == null
 		and client_complex.get_node_or_null("ParkourPrecisionTread01") != null
 		and client_complex.get_node_or_null("ParkourMirrorLeftTread12") != null
 		and client_complex.get_node_or_null("ParkourMirrorRightTread12") != null
 		and client_complex.get_node_or_null("ParkourJumpEdgeLeft") != null
 		and client_complex.get_node_or_null("ParkourJumpEdgeRight") != null
 		and client_complex.get_node_or_null("ParkourMirrorLeftRamp") == null,
-		"the proxy renders every test contact and edge marker while keeping movement-guide ramps invisible"
+		"the proxy omits the retired height boxes, renders stair contacts and edge markers, and keeps movement-guide ramps invisible"
 	)
 
-	var player := _make_physics_player()
+	var ordinary_player := _make_physics_player()
 	var takeoff_surface := PARKOUR.mirror_jump_start_position(PLAYER_HALF_WIDTH)
+	ordinary_player.global_position = takeoff_surface + Vector3.UP * (
+		ServerPlayer.STANDING_COLLISION_HEIGHT * 0.5 + 0.01
+	)
+	ordinary_player.velocity = Vector3(ServerPlayer.RUN_SPEED, 0.0, 0.0)
+	ordinary_player.on_floor = true
+	ordinary_player.set_input(Vector2.UP, -PI * 0.5, 0.0, true)
+	ordinary_player.request_jump(0, 0, 1, true)
+	var ordinary_landed_on_far_deck := false
+	for _frame: int in range(120):
+		ordinary_player.server_physics_tick(STEP)
+		if (
+			ordinary_player.on_floor
+			and ordinary_player.global_position.x > PARKOUR.CENTER.x
+		):
+			ordinary_landed_on_far_deck = true
+			break
+		if ordinary_player.global_position.y < PARKOUR.mirror_platform_top_y() - 1.0:
+			break
+	_expect(
+		not ordinary_landed_on_far_deck
+		and ordinary_player.flip_sequence == 0,
+		"a real full-sprint ordinary jump falls through the mirrored gap instead of catching the far collider edge"
+	)
+	ordinary_player.free()
+
+	var backflip_player := _make_physics_player()
+	backflip_player.global_position = takeoff_surface + Vector3.UP * (
+		ServerPlayer.STANDING_COLLISION_HEIGHT * 0.5 + 0.01
+	)
+	backflip_player.velocity = Vector3(ServerPlayer.RUN_SPEED, 0.0, 0.0)
+	backflip_player.on_floor = true
+	backflip_player.set_input(Vector2.UP, -PI * 0.5, 0.0, true)
+	backflip_player.request_jump(0, 1, 2, true)
+	var backflip_landed_on_far_deck := false
+	for _frame: int in range(120):
+		backflip_player.server_physics_tick(STEP)
+		if (
+			backflip_player.on_floor
+			and backflip_player.global_position.x > PARKOUR.CENTER.x
+		):
+			backflip_landed_on_far_deck = true
+			break
+		if backflip_player.global_position.y < PARKOUR.mirror_platform_top_y() - 1.0:
+			break
+	_expect(
+		not backflip_landed_on_far_deck
+		and backflip_player.flip_sequence == 1
+		and backflip_player.flip_direction == 1,
+		"a real full-sprint backflip trades away enough distance to fall through the frontflip-only transfer"
+	)
+	backflip_player.free()
+
+	var player := _make_physics_player()
 	player.global_position = takeoff_surface + Vector3.UP * (
 		ServerPlayer.STANDING_COLLISION_HEIGHT * 0.5 + 0.01
 	)
 	player.velocity = Vector3(ServerPlayer.RUN_SPEED, 0.0, 0.0)
 	player.on_floor = true
 	player.set_input(Vector2.UP, -PI * 0.5, 0.0, true)
-	player.request_jump()
+	player.request_jump(0, -1, 1, true)
 	var saw_airborne := false
 	var landed := false
 	for _frame: int in range(120):
@@ -207,13 +252,15 @@ func _test_runtime_geometry_and_jump() -> void:
 	_expect(
 		landed
 		and not player.ragdoll_active
+		and player.flip_sequence == 1
+		and player.flip_direction == -1
 		and player.global_position.x > landing_bounds.x
 		and player.global_position.x < landing_bounds.y
 		and absf(
 			player.global_position.z
 			- (PARKOUR.CENTER.z + PARKOUR.MIRROR_Z_OFFSET)
 		) < 0.25,
-		"the authoritative controller completes the opposed-stair sprint jump and lands supported on the far deck"
+		"the authoritative controller clears the flip-only transfer and lands supported on the far deck"
 	)
 
 	player.free()
@@ -242,14 +289,31 @@ func _make_physics_player() -> RecordingServerPlayer:
 	return player
 
 
-func _find_descriptor(
-	descriptors: Array[Dictionary],
-	name: String
-) -> Dictionary:
-	for descriptor: Dictionary in descriptors:
-		if str(descriptor.get("name", "")) == name:
-			return descriptor
-	return {}
+func _estimate_flip_equal_height_range(
+	horizontal_speed: float,
+	flip_direction: int
+) -> float:
+	var launch := ServerPlayer.calculate_flip_takeoff_velocity(
+		Vector3(maxf(horizontal_speed, 0.0), 0.0, 0.0),
+		ServerPlayer.JUMP_VELOCITY,
+		flip_direction
+	)
+	var flight_seconds := 2.0 * launch.y / ServerPlayer.GRAVITY
+	var drag_seconds := minf(
+		flight_seconds,
+		ServerPlayer.FLIP_DURATION_SECONDS
+	)
+	var drag := ServerPlayer.FLIP_AIR_MOMENTUM_DRAG
+	var decay := exp(-drag * drag_seconds)
+	var range_during_flip := (
+		launch.x * (1.0 - decay) / drag
+		if drag > 0.00001
+		else launch.x * drag_seconds
+	)
+	return (
+		range_during_flip
+		+ launch.x * decay * maxf(flight_seconds - drag_seconds, 0.0)
+	)
 
 
 func _expect(condition: bool, message: String) -> void:

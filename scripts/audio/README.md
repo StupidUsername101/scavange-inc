@@ -86,8 +86,13 @@ or extending audio:
     grants gameplay authority. A bounded key reconciles the owner's confirmation to exactly one
     voice in either arrival order; remote listeners receive the ordinary unkeyed authoritative event.
     Host and joining-client gait both integrate input sampled on the current physics frame with the
-    same movement acceleration solver as authority; an older snapshot may correct phase forward but
-    never pull an already-rendered local footfall backward in time. The fixed voice/DSP pool is built
+    same movement acceleration solver and deterministic per-step range profile as authority. Actual
+    horizontal speed continuously scales stride width/lift and the restrained impact gain, so walking
+    and sprinting do not replay one invariant cue; an older
+    snapshot may correct phase forward but never pull an already-rendered local footfall backward in
+    time. A predicted footstep begins only when the detailed foot-contact rig plants on sampled world
+    geometry. Authority validates that sequence/limb/rate, resolves the matching floor contact and
+    material, and propagates it from foot height. The fixed voice/DSP pool is built
     during world setup, never on the first input event. If listen-server authority reaches the
     renderer before its local presentation phase in the same frame, the keyed confirmation waits in
     a bounded 50 ms reconciliation window. Same-frame prediction consumes it; absent prediction, the
@@ -99,6 +104,13 @@ or extending audio:
     lifecycle lane is forbidden: cross-channel overtaking can restore stale program state and
     re-excite a populated room return. Reliable movement snapshots are likewise forbidden because
     their backlog reproduces stale-room audio.
+33. A synchronized program's direct cabinets and shared indirect field follow listener-motion gain
+    with one response envelope. Room colour, decay, and filter coefficients may morph more slowly,
+    but the wet level cannot retain a second spatial lag that makes Hall grow relative to dry sound
+    after crossing a doorway. The wet/direct spatial ratio is applied after the persistent reverb
+    network, so samples already circulating in a long room cannot retain the listener's previous
+    indoor gain. This movement envelope is separate from a genuinely undriven RT60 tail, which
+    freezes its last spatial ratio and remains free to decay after playback stops.
 
 ## Static propagation bake and rollback
 

@@ -14,6 +14,8 @@
 [ext_resource type="PackedScene" path="res://scenes/server/weapon_crafting_station.tscn" id="12_weapon_station"]
 [ext_resource type="PackedScene" path="res://scenes/server/speaker_cluster_demo.tscn" id="13_speaker_cluster"]
 [ext_resource type="PackedScene" path="res://scenes/server/acoustic_maze.tscn" id="14_acoustic_maze"]
+[ext_resource type="PackedScene" path="res://scenes/server/server_enemy.tscn" id="15_enemy"]
+[ext_resource type="Resource" path="res://resources/enemies/flute_runner.tres" id="16_flute_runner"]
 [ext_resource type="PackedScene" path="res://scenes/server/destruction_field_test.tscn" id="17_destruction_test"]
 
 [sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_ground"]
@@ -57,7 +59,8 @@ position = Vector3(-5, 0, 2)
 position = Vector3(7.5, 0, -7.5)
 
 [node name="DevWarehouse" parent="." instance=ExtResource("5_warehouse")]
-position = Vector3(0, 0, -12)
+position = Vector3(0, 0, 92)
+rotation = Vector3(0, 3.1415927, 0)
 
 [node name="AcousticTestHouse" parent="." instance=ExtResource("10_acoustic_house")]
 position = Vector3(12, 0, -5)
@@ -70,6 +73,10 @@ position = Vector3(6, 0, -48)
 
 [node name="AcousticMaze" parent="." instance=ExtResource("14_acoustic_maze")]
 position = Vector3(150, 0.02, -10)
+
+[node name="FluteRunnerFieldTest" parent="." instance=ExtResource("15_enemy")]
+position = Vector3(69, 0.02, -20)
+definition = ExtResource("16_flute_runner")
 
 [node name="DestructionFieldTest" parent="." instance=ExtResource("17_destruction_test")]
 position = Vector3(-12, 0, -10)

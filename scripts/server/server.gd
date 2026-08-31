@@ -9,6 +9,7 @@ const SPATIAL_INTEREST_AVOIDANCE := 2
 const LOBBY_MEMBERSHIP_CHECK_ATTEMPTS := 4
 const LOBBY_MEMBERSHIP_CHECK_DELAY := 0.15
 const MIN_DIRECTION_LENGTH_SQUARED := 0.000001
+const MAX_STALE_PLASMA_CUTTER_HITS_PER_TICK := 8
 const STEAM_APP_ID := 480
 const DEFAULT_PLAYER_SPAWN_POSITION := Vector3(0.0, 5.0, 0.0)
 const DEFAULT_DISTORTION_CENTER := Vector2(0.5, 0.5)
@@ -18,6 +19,7 @@ const LOBBY_CREATE_TIMEOUT_SECONDS := 10.0
 const LOBBY_JOIN_TIMEOUT_SECONDS := 10.0
 const HOST_CONNECTION_TIMEOUT_SECONDS := 15.0
 const CLIENT_READY_TIMEOUT_SECONDS := 15.0
+const RECONNECT_ATTEMPT_TIMEOUT_MILLISECONDS := 2400
 const PRIORITY_INTERACTION_CHECK_DISTANCE_SQUARED := 36.0
 const FIELDLINK_CONTROL_RANGE_METERS := 36.0
 const FIELDLINK_CONTROL_RANGE_TOLERANCE_METERS := 1.5
@@ -25,6 +27,8 @@ const FIELDLINK_COMMAND_COOLDOWN_MILLISECONDS := 40
 const GRAB_AIM_ASSIST_HALF_EXTENT := 0.18
 const GRAB_AIM_ASSIST_MAX_RESULTS := 16
 const GRAB_AIM_ASSIST_LATERAL_SCORE := 2.5
+const PLAYER_CORPSE_LIFETIME_SECONDS := 180.0
+const PLAYER_DEATH_HOLD_SECONDS := 2.25
 # Independent rollback switches; each can be evaluated without removing the others.
 const ENABLE_ACOUSTIC_STATIC_BAKE_CACHE := true
 const ENABLE_ACOUSTIC_CUMULATIVE_TRANSMISSION := true
@@ -46,11 +50,17 @@ const MULTIPLAYER_CHANNELS := preload(
 const SERVER_REPLICATION_SERVICE := preload(
 	"res://scripts/network/server_replication_service.gd"
 )
+const SESSION_RECONNECT_LEDGER := preload(
+	"res://scripts/network/session_reconnect_ledger.gd"
+)
 const PHYSICAL_IMPACT_RESPONSE := preload(
 	"res://scripts/audio/physical_impact_response.gd"
 )
 const LOCAL_AUDIO_PREDICTION := preload(
 	"res://scripts/audio/local_audio_prediction.gd"
+)
+const ACOUSTIC_STIMULUS_LEDGER := preload(
+	"res://scripts/enemies/acoustic_stimulus_ledger.gd"
 )
 const STEAM_PRESENCE_CONNECT := "connect"
 const STEAM_PRESENCE_STATUS := "status"
@@ -70,6 +80,12 @@ const FULL_BODY_LOADOUT := preload(
 const DESTRUCTION_CHECKPOINT_STORE_SCRIPT := preload(
 	"res://scripts/destruction/destruction_checkpoint_store.gd"
 )
+const DESTRUCTION_FRAGMENT_SCRIPT := preload(
+	"res://scripts/destruction/destruction_fragment_3d.gd"
+)
+const DAMAGE_EVENT_SCRIPT := preload(
+	"res://scripts/destruction/damage_event.gd"
+)
 
 #######################################################
 # Coordinates authoritative multiplayer state, world entities, interactions, Steam lobby flow,
@@ -85,7 +101,23 @@ enum LobbyState {
 	JOINING,
 	CONNECTING,
 	CONNECTED,
+	RECONNECTING,
 }
+
+# E resolves one context ray instead of binding several unrelated actions directly to the key.
+# Higher values consume the press first; kick is the explicit empty-context fallback. Grab remains
+# above use for dual-purpose physics items such as radios, preserving the established E-grab/F-use
+# contract while still letting E operate a non-grabbable terminal, station, or drone.
+enum ContextAction {
+	NONE,
+	KICK,
+	USE,
+	GRAB,
+}
+
+const CONTEXT_ACTION_PRIORITY_KICK := 0
+const CONTEXT_ACTION_PRIORITY_USE := 100
+const CONTEXT_ACTION_PRIORITY_GRAB := 200
 
 var server_players_by_player_id: Dictionary[int, ServerPlayer] = {}
 var server_items_by_item_id: Dictionary[int, ServerItem] = {}
@@ -96,6 +128,9 @@ var server_drones_by_drone_id: Dictionary[int, ServerDrone] = {}
 var server_projectiles_by_id: Dictionary[int, ServerProjectile] = {}
 var server_drone_parts_by_id: Dictionary[int, RigidBody3D] = {}
 var server_enemies_by_enemy_id: Dictionary[int, ServerEnemy] = {}
+var server_player_corpses_by_id: Dictionary[int, Dictionary] = {}
+var pending_player_respawn_generation_by_player_id: Dictionary[int, int] = {}
+var server_destruction_fragments_by_id: Dictionary[int, Node] = {}
 # Autoloads are parsed before a newly cloned project has necessarily rebuilt Godot's global class
 # cache. Keep this scene-facing registry structural so adding the destruction plugin cannot make the
 # entire game fail at server.gd parse time on first launch.
@@ -113,6 +148,7 @@ var spatial_hash: ServerSpatialHash3D = ServerSpatialHash3D.new(
 )
 var spatial_interest_by_drone_id: Dictionary[int, int] = {}
 var replication_service
+var acoustic_stimulus_ledger := ACOUSTIC_STIMULUS_LEDGER.new()
 
 var server_world: Node3D
 var sync_timer := 0.0
@@ -122,7 +158,11 @@ var next_drone_part_id := 0
 var next_drone_part_token_id := 0
 var next_rope_id := 0
 var next_enemy_id := 0
+var next_player_corpse_id := 0
+var next_player_respawn_generation := 0
+var next_destruction_fragment_id := 0
 var next_body_part_order_id := 0
+var next_plasma_cutter_event_id := 0
 
 var lobby_id := 0
 var pending_lobby_id := 0
@@ -137,10 +177,16 @@ var session_teardown_active := false
 var acoustic_service: ServerAcousticService
 var next_spatial_sound_sequence := 0
 var fieldlink_next_command_msec_by_player_id: Dictionary[int, int] = {}
-var pending_admission_peer_ids: Dictionary[int, bool] = {}
+var pending_admission_peer_ids: Dictionary[int, int] = {}
+var next_admission_generation := 0
 var grab_aim_assist_shape := BoxShape3D.new()
 var last_steam_connection_end_reason := 0
 var last_steam_connection_end_debug := ""
+var reconnect_ledger := SESSION_RECONNECT_LEDGER.new()
+var reconnect_deadline_milliseconds := 0
+var reconnect_next_attempt_milliseconds := 0
+var reconnect_attempt_deadline_milliseconds := 0
+var reconnect_attempt_count := 0
 
 
 func _ready() -> void:
@@ -246,6 +292,9 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	Steam.run_callbacks()
+	_expire_disconnected_player_leases()
+	_expire_player_corpses()
+	_process_client_reconnect()
 
 
 func _physics_process(delta: float) -> void:
@@ -256,6 +305,7 @@ func _physics_process(delta: float) -> void:
 
 	for player: ServerPlayer in server_players_by_player_id.values():
 		player.server_physics_tick(delta)
+		_process_player_plasma_cutter(player)
 		if player.wants_automatic_fire():
 			var prediction_key := player.current_automatic_audio_prediction_key()
 			if try_primary_action(player, prediction_key):
@@ -308,13 +358,51 @@ func spawn_server_world() -> void:
 	print("spawned server world: ", server_world.get_path())
 
 
-func register_peer(peer_id: int) -> bool:
+func register_peer(peer_id: int, steam_id := 0) -> bool:
 	if not multiplayer.is_server():
 		return false
 
-	if GameState.get_player_id(peer_id) != -1:
+	var resolved_steam_id := steam_id
+	if resolved_steam_id <= 0 and steam_peer != null:
+		resolved_steam_id = steam_peer.get_steam_id_for_peer_id(peer_id)
+	if resolved_steam_id <= 0 and peer_id == multiplayer.get_unique_id():
+		resolved_steam_id = Steam.getSteamID()
+
+	var routed_player_id := GameState.get_player_id(peer_id)
+	if routed_player_id != -1:
 		pending_admission_peer_ids.erase(peer_id)
+		_send_initial_session_state(peer_id, routed_player_id)
 		return true
+
+	_expire_disconnected_player_leases()
+	var reserved_player_id := GameState.get_player_id_for_steam_id(
+		resolved_steam_id
+	)
+	if reserved_player_id >= 0:
+		var reserved_state := GameState.get_player_state(reserved_player_id)
+		if reserved_state != null and reserved_state.connected:
+			return false
+		var lease := reconnect_ledger.claim(
+			resolved_steam_id,
+			Time.get_ticks_msec()
+		)
+		if lease.is_empty():
+			_finalize_disconnected_player(reserved_player_id, resolved_steam_id)
+		elif GameState.rebind_player_peer(reserved_player_id, peer_id):
+			pending_admission_peer_ids.erase(peer_id)
+			_send_initial_session_state(peer_id, reserved_player_id)
+			print(
+				"PLAYER SESSION RESUMED: steam_id=",
+				resolved_steam_id,
+				" peer_id=",
+				peer_id,
+				" player_id=",
+				reserved_player_id
+			)
+			_sync_lobby_availability()
+			return true
+		else:
+			return false
 
 	if not LobbyRules.can_register_player(GameState.get_player_count()):
 		return false
@@ -324,7 +412,8 @@ func register_peer(peer_id: int) -> bool:
 	var player_id := GameState.try_register_player(
 		peer_id,
 		DEFAULT_MONEY,
-		LobbyRules.MAX_PLAYERS
+		LobbyRules.MAX_PLAYERS,
+		resolved_steam_id
 	)
 
 	if player_id == -1:
@@ -339,19 +428,7 @@ func register_peer(peer_id: int) -> bool:
 			_get_starting_body_loadout(player_id)
 		)
 
-	Client.rpc_id(
-		peer_id,
-		"set_local_player_id",
-		player_id
-	)
-
-	Client.rpc_id(
-		peer_id,
-		"spawn_client_world"
-	)
-	publish_destruction_checkpoints_to_peer(peer_id)
-	replication_service.publish_all_player_inventories_to_peer(peer_id)
-	replication_service.force_optional_snapshot_refresh()
+	_send_initial_session_state(peer_id, player_id)
 
 	print(
 		"registered peer=",
@@ -363,8 +440,56 @@ func register_peer(peer_id: int) -> bool:
 	return true
 
 
+func _send_initial_session_state(peer_id: int, player_id: int) -> void:
+	if not _is_rpc_peer_reachable(peer_id):
+		return
+	Client.rpc_id(peer_id, "set_local_player_id", player_id)
+	Client.rpc_id(peer_id, "spawn_client_world")
+	publish_destruction_checkpoints_to_peer(peer_id)
+	publish_destruction_fragments_to_peer(peer_id)
+	replication_service.publish_all_player_inventories_to_peer(peer_id)
+	replication_service.force_optional_snapshot_refresh()
+
+
 func _on_player_inventory_changed(_revision: int, player_id: int) -> void:
 	replication_service.publish_player_inventory_state(player_id)
+
+
+func _on_player_jump_request_resolved(
+	request_id: int,
+	jump_accepted: bool,
+	accepted_flip_direction: int,
+	player_id: int
+) -> void:
+	_send_jump_request_result(
+		get_server_player(player_id),
+		request_id,
+		jump_accepted,
+		accepted_flip_direction
+	)
+
+
+func _send_jump_request_result(
+	player: ServerPlayer,
+	request_id: int,
+	jump_accepted: bool,
+	accepted_flip_direction: int
+) -> void:
+	if player == null or request_id <= 0:
+		return
+	var player_state := GameState.get_player_state(player.player_id)
+	if (
+		player_state == null
+		or not _is_rpc_peer_reachable(player_state.peer_id)
+	):
+		return
+	Client.rpc_id(
+		player_state.peer_id,
+		"on_jump_request_resolved",
+		request_id,
+		jump_accepted,
+		clampi(accepted_flip_direction, -1, 1)
+	)
 
 
 func get_sending_player() -> ServerPlayer:
@@ -436,6 +561,13 @@ func spawn_server_player(
 	p.inventory_changed.connect(
 		_on_player_inventory_changed.bind(player_id)
 	)
+	p.jump_request_resolved.connect(
+		_on_player_jump_request_resolved.bind(player_id)
+	)
+	p.ragdoll_backpack_released.connect(
+		_on_player_ragdoll_backpack_released.bind(p)
+	)
+	p.died.connect(_on_server_player_died)
 	spatial_hash.register_entity(
 		_get_player_spatial_key(player_id),
 		p,
@@ -445,6 +577,123 @@ func spawn_server_player(
 	replication_service.publish_player_inventory_state(player_id)
 
 	print("spawned server player=", player_id, " at ", spawn_pos)
+
+
+func _on_server_player_died(player: ServerPlayer) -> void:
+	if player == null or not multiplayer.is_server():
+		return
+	next_player_respawn_generation += 1
+	var generation := next_player_respawn_generation
+	pending_player_respawn_generation_by_player_id[player.player_id] = generation
+	# Preserve the actual death long enough for every peer to see and simulate the same falling body.
+	# The active ragdoll is only detached into a corpse when this hold completes; the respawn then gets
+	# a fresh authority anchor and a fresh presentation rather than appearing to reuse the dead body.
+	var timer := get_tree().create_timer(PLAYER_DEATH_HOLD_SECONDS)
+	timer.timeout.connect(
+		_complete_player_death_respawn.bind(player.player_id, generation),
+		CONNECT_ONE_SHOT
+	)
+
+
+func _complete_player_death_respawn(player_id: int, generation: int) -> void:
+	if (
+		pending_player_respawn_generation_by_player_id.get(player_id, -1)
+		!= generation
+	):
+		return
+	pending_player_respawn_generation_by_player_id.erase(player_id)
+	var player := get_server_player(player_id)
+	if player == null or not player.death_pending or player.health > 0.0:
+		return
+	# Damage and the final timer can both resolve adjacent to physics callbacks. Do the Jolt ownership
+	# transfer deferred, after the ragdoll has enjoyed a real replicated death interval.
+	call_deferred("_finalize_player_death", player_id)
+
+
+func _finalize_player_death(player_id: int) -> void:
+	var player := get_server_player(player_id)
+	if player == null or not player.death_pending or player.health > 0.0:
+		return
+	end_grab(player.grabber)
+	var corpse_id := next_player_corpse_id
+	next_player_corpse_id += 1
+	var death_yaw := player.rotation.y
+	var trip_sequence := player.trip_sequence
+	var trip_direction := player.trip_direction
+	var limbs := player.body_loadout.to_state_dict()
+	var anchor := player.detach_ragdoll_anchor_for_corpse(server_world)
+	if anchor != null:
+		anchor.name = "PlayerCorpseAnchor%d" % corpse_id
+		server_player_corpses_by_id[corpse_id] = {
+			"anchor": anchor,
+			"source_player_id": player_id,
+			"trip_sequence": trip_sequence,
+			"trip_direction": trip_direction,
+			"yaw": death_yaw,
+			"limbs": limbs,
+			"expires_msec": (
+				Time.get_ticks_msec()
+				+ roundi(PLAYER_CORPSE_LIFETIME_SECONDS * 1000.0)
+			),
+		}
+		# Reliable creation captures the still-present living presentation before respawn. The regular
+		# sparse snapshot stream owns subsequent torso correction, late join, and expiration.
+		Client.rpc(
+			"on_player_corpse_spawned",
+			build_player_corpse_state(corpse_id)
+		)
+	player.respawn_at(_player_respawn_position(player_id))
+
+
+func _player_respawn_position(player_id: int) -> Vector3:
+	var lane := posmod(player_id, LobbyRules.MAX_PLAYERS)
+	var centered_lane := float(lane) - float(LobbyRules.MAX_PLAYERS - 1) * 0.5
+	return DEFAULT_PLAYER_SPAWN_POSITION + Vector3(centered_lane * 1.25, 0.0, 0.0)
+
+
+func get_player_death_hold_seconds() -> float:
+	return PLAYER_DEATH_HOLD_SECONDS
+
+
+func build_player_corpse_state(corpse_id: int) -> Dictionary:
+	var record: Dictionary = server_player_corpses_by_id.get(corpse_id, {})
+	var anchor := record.get("anchor") as RigidBody3D
+	if anchor == null or not is_instance_valid(anchor):
+		return {}
+	var position := anchor.global_position
+	if anchor.has_method("get_player_reference_position"):
+		position = anchor.call("get_player_reference_position") as Vector3
+	return {
+		"corpse_id": corpse_id,
+		"source_player_id": int(record.get("source_player_id", -1)),
+		"pos": position,
+		"vel": anchor.linear_velocity,
+		"yaw": float(record.get("yaw", 0.0)),
+		"trip_sequence": int(record.get("trip_sequence", 0)),
+		"trip_direction": record.get("trip_direction", Vector3.FORWARD),
+		"limbs": record.get("limbs", {}),
+		"remaining_seconds": maxf(
+			(float(record.get("expires_msec", 0)) - Time.get_ticks_msec()) / 1000.0,
+			0.0
+		),
+	}
+
+
+func _expire_player_corpses() -> void:
+	if not multiplayer.is_server() or server_player_corpses_by_id.is_empty():
+		return
+	var now_msec := Time.get_ticks_msec()
+	var expired_ids: Array[int] = []
+	for corpse_id: int in server_player_corpses_by_id:
+		var record: Dictionary = server_player_corpses_by_id[corpse_id]
+		if now_msec < int(record.get("expires_msec", 0)):
+			continue
+		var anchor := record.get("anchor") as Node
+		if is_instance_valid(anchor):
+			anchor.queue_free()
+		expired_ids.append(corpse_id)
+	for corpse_id: int in expired_ids:
+		server_player_corpses_by_id.erase(corpse_id)
 
 
 func _get_starting_body_loadout(_player_id: int) -> CharacterLoadout:
@@ -737,6 +986,22 @@ func emit_spatial_sound(
 		)
 	)
 	var safe_priority := clampf(priority, 0.0, 1.0)
+	var stimulus_origin_player_id := (
+		origin_player_id if server_players_by_player_id.has(origin_player_id) else -1
+	)
+	acoustic_stimulus_ledger.record(
+		sequence,
+		sound_id,
+		source_position,
+		# AI hearing must start from the same level-scaled reach as player playback. Storing the
+		# authored range here would make loud gunshots artificially short-ranged and quiet cues
+		# artificially generous before both listeners enter the same geometry solve.
+		level_scaled_max_distance,
+		safe_base_volume_db,
+		safe_priority,
+		stimulus_origin_player_id,
+		source_modifier
+	)
 	var safe_prediction_key := LOCAL_AUDIO_PREDICTION.sanitize_key(
 		local_prediction_key
 	)
@@ -756,6 +1021,12 @@ func emit_spatial_sound(
 	var source_attachment: AcousticSourceAttachment
 	var effective_max_distance := 0.0
 	for player_id: int in server_players_by_player_id.keys():
+		var player_state := GameState.get_player_state(player_id)
+		if (
+			player_state == null
+			or not _is_rpc_peer_reachable(player_state.peer_id)
+		):
+			continue
 		var listener := server_players_by_player_id[player_id]
 		if not is_instance_valid(listener):
 			continue
@@ -805,12 +1076,6 @@ func emit_spatial_sound(
 			source_attachment
 		)
 		if not bool(result.get("audible", false)):
-			continue
-		var player_state := GameState.get_player_state(player_id)
-		if (
-			player_state == null
-			or not _is_rpc_peer_reachable(player_state.peer_id)
-		):
 			continue
 		result.erase("audible")
 		result["version"] = AcousticEventPacket.VERSION
@@ -874,6 +1139,16 @@ func on_destructible_volume_changed(
 		or not event.has_method("to_dict")
 	):
 		return
+	var raw_fragments: Variant = result.get("detached_fragments", [])
+	if raw_fragments is Array and not raw_fragments.is_empty():
+		# The detached body must never enter Jolt while the previous wall collider still contains
+		# that island. Fragmentation is rare, so use the volume's existing synchronous barrier here;
+		# ordinary bullet holes keep the asynchronous chunk rebuild path.
+		if volume.has_method("flush_pending_rebuilds"):
+			volume.call("flush_pending_rebuilds")
+		for descriptor_value: Variant in raw_fragments:
+			if descriptor_value is Dictionary:
+				spawn_destruction_fragment(volume, descriptor_value, event)
 	var changed_bounds: AABB = result.get("world_changed_bounds", AABB())
 	if (
 		acoustic_service != null
@@ -895,6 +1170,101 @@ func on_destructible_volume_changed(
 	})
 
 
+func spawn_destruction_fragment(
+	volume: Node,
+	descriptor: Dictionary,
+	event: RefCounted
+) -> Node:
+	if not multiplayer.is_server() or volume == null or descriptor.is_empty():
+		return null
+	if server_world == null:
+		spawn_server_world()
+	var fragment := DESTRUCTION_FRAGMENT_SCRIPT.new() as Node
+	if fragment == null:
+		return null
+	var fragment_id := next_destruction_fragment_id
+	next_destruction_fragment_id += 1
+	server_world.add_child(fragment)
+	var profile: Variant = volume.get("_profile")
+	if (
+		profile == null
+		or not bool(fragment.call("configure", fragment_id, volume, descriptor, profile, event))
+	):
+		fragment.queue_free()
+		return null
+	var parent_body := volume as RigidBody3D
+	var fragment_body := fragment as RigidBody3D
+	if parent_body != null and fragment_body != null:
+		var center_offset := fragment_body.global_position - parent_body.global_position
+		fragment_body.linear_velocity = (
+			parent_body.linear_velocity + parent_body.angular_velocity.cross(center_offset)
+		)
+		fragment_body.angular_velocity = parent_body.angular_velocity
+	server_destruction_fragments_by_id[fragment_id] = fragment
+	Client.rpc("on_destruction_fragment_spawned", fragment.call("spawn_packet"))
+	return fragment
+
+
+func on_destruction_fragment_changed(
+	fragment: Node,
+	notifications: Array,
+	geometry_packet: Dictionary,
+	removed: bool
+) -> void:
+	if (
+		not multiplayer.is_server()
+		or fragment == null
+		or server_destruction_fragments_by_id.get(int(fragment.get("fragment_id"))) != fragment
+	):
+		return
+	# Fragment fields use the same structural extraction result as authored volumes. Spawn every new
+	# island only after the parent has committed its replacement convex shape, avoiding overlapping
+	# Jolt bodies at the split boundary.
+	for notification_value: Variant in notifications:
+		if not notification_value is Dictionary:
+			continue
+		var notification := notification_value as Dictionary
+		var event := notification.get("event") as RefCounted
+		var result_value: Variant = notification.get("result", {})
+		if event == null or not result_value is Dictionary:
+			continue
+		for descriptor_value: Variant in (result_value as Dictionary).get(
+			"detached_fragments", []
+		):
+			if descriptor_value is Dictionary:
+				spawn_destruction_fragment(fragment, descriptor_value, event)
+	var fragment_id := int(fragment.get("fragment_id"))
+	if removed:
+		release_grabs_for_body(fragment)
+		server_destruction_fragments_by_id.erase(fragment_id)
+		Client.rpc("on_destruction_fragment_removed", fragment_id)
+		fragment.queue_free()
+		return
+	Client.rpc("on_destruction_fragment_geometry_changed", geometry_packet)
+
+
+func get_destruction_fragment(fragment_id: int) -> Node3D:
+	return server_destruction_fragments_by_id.get(fragment_id) as Node3D
+
+
+func unregister_destruction_fragment(fragment_id: int, fragment: Node) -> void:
+	if server_destruction_fragments_by_id.get(fragment_id) == fragment:
+		server_destruction_fragments_by_id.erase(fragment_id)
+
+
+func publish_destruction_fragments_to_peer(peer_id: int) -> void:
+	if not _is_rpc_peer_reachable(peer_id):
+		return
+	for fragment_id: int in server_destruction_fragments_by_id:
+		var fragment := server_destruction_fragments_by_id[fragment_id]
+		if is_instance_valid(fragment):
+			Client.rpc_id(
+				peer_id,
+				"on_destruction_fragment_spawned",
+				fragment.call("spawn_packet")
+			)
+
+
 func publish_destruction_checkpoints_to_peer(peer_id: int) -> void:
 	if not _is_rpc_peer_reachable(peer_id):
 		return
@@ -906,6 +1276,12 @@ func publish_destruction_checkpoints_to_peer(peer_id: int) -> void:
 				"on_destruction_checkpoint_received",
 				volume.call("checkpoint")
 			)
+
+
+func get_destruction_checkpoint(volume_value: StringName) -> Dictionary:
+	var volume_id := StringName(str(volume_value))
+	var volume := destructible_volumes_by_id.get(volume_id) as Node
+	return volume.call("checkpoint") as Dictionary if volume != null else {}
 
 
 func create_destruction_snapshot(world_id: StringName = &"game") -> Dictionary:
@@ -949,13 +1325,12 @@ func request_destruction_checkpoint(volume_value: StringName) -> void:
 	var peer_id := multiplayer.get_remote_sender_id()
 	if not _is_rpc_peer_reachable(peer_id):
 		return
-	var volume_id := StringName(str(volume_value))
-	var volume := destructible_volumes_by_id.get(volume_id) as Node
-	if volume != null:
+	var checkpoint := get_destruction_checkpoint(volume_value)
+	if not checkpoint.is_empty():
 		Client.rpc_id(
 			peer_id,
 			"on_destruction_checkpoint_received",
-			volume.call("checkpoint")
+			checkpoint
 		)
 
 
@@ -1175,6 +1550,96 @@ func get_active_player_ids() -> Array[int]:
 	for player_id: int in server_players_by_player_id.keys():
 		result.append(player_id)
 	return result
+
+
+func get_recent_player_acoustic_stimulus(
+	listener_id: int,
+	listener_position: Vector3,
+	candidate_player_ids: Array[int],
+	maximum_age_seconds: float,
+	listener_hearing_range: float,
+	listener_collision_rid: RID = RID()
+) -> Dictionary:
+	if acoustic_service == null or candidate_player_ids.is_empty():
+		return {}
+	var now_msec := Time.get_ticks_msec()
+	var maximum_age_msec := roundi(maxf(maximum_age_seconds, 0.0) * 1000.0)
+	var candidate_stimuli: Array = []
+	candidate_stimuli.resize(candidate_player_ids.size())
+	var candidate_estimates := PackedFloat32Array()
+	candidate_estimates.resize(candidate_player_ids.size())
+	candidate_estimates.fill(-INF)
+	# Collapse the fixed event ring to at most one promising cue per lobby player before invoking
+	# geometry propagation. Automatic fire can fill all 64 slots; it must not turn one enemy's 8 Hz
+	# hearing update into 64 acoustic graph queries.
+	for stimulus: Variant in acoustic_stimulus_ledger.readonly_records():
+		var candidate_index := candidate_player_ids.find(stimulus.origin_player_id)
+		if candidate_index < 0:
+			continue
+		var age_msec: int = now_msec - int(stimulus.emitted_msec)
+		if age_msec < 0 or age_msec > maximum_age_msec:
+			continue
+		var bounded_distance := minf(
+			stimulus.maximum_distance,
+			maxf(listener_hearing_range, 0.1)
+		)
+		var direct_distance := listener_position.distance_to(stimulus.position)
+		if direct_distance > bounded_distance:
+			continue
+		var estimate_db: float = (
+			stimulus.base_volume_db
+			+ stimulus.priority * 3.0
+			- float(age_msec) / 1000.0 * 4.5
+			- 20.0 * log(maxf(direct_distance, 1.0)) / log(10.0)
+		)
+		if estimate_db > candidate_estimates[candidate_index]:
+			candidate_estimates[candidate_index] = estimate_db
+			candidate_stimuli[candidate_index] = stimulus
+	var best_score_db := -INF
+	var best_stimulus: Variant
+	for candidate_index: int in range(candidate_stimuli.size()):
+		var stimulus: Variant = candidate_stimuli[candidate_index]
+		if stimulus == null:
+			continue
+		var age_msec: int = now_msec - int(stimulus.emitted_msec)
+		var bounded_distance := minf(
+			stimulus.maximum_distance,
+			maxf(listener_hearing_range, 0.1)
+		)
+		var exclusions: Array[RID] = []
+		if listener_collision_rid.is_valid():
+			exclusions.append(listener_collision_rid)
+		var acoustic_result := acoustic_service.calculate_listener_result(
+			listener_id,
+			listener_position,
+			stimulus.position,
+			bounded_distance,
+			stimulus.source_modifier,
+			AcousticPropagationGraph.DEFAULT_REFERENCE_DISTANCE,
+			false,
+			exclusions,
+			0
+		)
+		if not bool(acoustic_result.get("audible", false)):
+			continue
+		var age_seconds := float(age_msec) / 1000.0
+		var score_db: float = (
+			float(acoustic_result.get("volume_db", AcousticPathModifier.MIN_VOLUME_DB))
+			+ stimulus.base_volume_db
+			+ stimulus.priority * 3.0
+			- age_seconds * 4.5
+		)
+		if score_db > best_score_db:
+			best_score_db = score_db
+			best_stimulus = stimulus
+	if best_stimulus == null:
+		return {}
+	return {
+		"player_id": best_stimulus.origin_player_id,
+		"position": best_stimulus.position,
+		"score_db": best_score_db,
+		"sequence": best_stimulus.sequence,
+	}
 
 
 func schedule_body_part_order(
@@ -1874,6 +2339,105 @@ func _raycast_player_aim(player: ServerPlayer) -> Dictionary:
 	return player.get_world_3d().direct_space_state.intersect_ray(query)
 
 
+func _process_player_plasma_cutter(player: ServerPlayer) -> void:
+	if player == null or not player.plasma_cutter_active:
+		return
+	var cutter := player.get_plasma_cutter_definition()
+	if cutter == null:
+		player.set_plasma_cutter_triggered(false)
+		return
+	var origin := player.grabber.get_grab_origin()
+	var direction := player.grabber.get_grab_direction().normalized()
+	var maximum_range := clampf(float(cutter.get("range_meters")), 0.25, 12.0)
+	var finish := origin + direction * maximum_range
+	var hit := _first_current_plasma_cutter_hit(player, origin, finish)
+	var has_hit := not hit.is_empty()
+	var endpoint: Vector3 = hit.get("position", finish)
+	player.set_plasma_cutter_aim_result(endpoint, has_hit)
+	if not has_hit or not player.consume_plasma_cutter_pulse():
+		return
+	var collider := hit.get("collider") as Node
+	if collider == null:
+		return
+	var hit_normal: Vector3 = hit.get("normal", -direction)
+	var pulse_interval := maxf(float(cutter.get("pulse_interval")), 0.04)
+	if collider.has_method("apply_damage_event"):
+		next_plasma_cutter_event_id += 1
+		var event_id := 1000000000 + next_plasma_cutter_event_id
+		var damage_event := DAMAGE_EVENT_SCRIPT.from_dict({
+			"event_id": event_id,
+			"sequence": event_id,
+			"source_kind": &"plasma_cutter",
+			"source_id": player.player_id,
+			"world_position": endpoint,
+			"normal": hit_normal,
+			"direction": direction,
+			"brush_kind": DAMAGE_EVENT_SCRIPT.BRUSH_CAPSULE,
+			"radius": float(cutter.get("cut_radius")),
+			"length": float(cutter.get("cut_depth")),
+			"energy": float(cutter.get("destruction_energy")),
+			"impulse": 0.0,
+			"penetration": float(cutter.get("cut_depth")),
+			"heat": float(cutter.get("heat_energy")),
+			"damage_tags": PackedStringArray(["blade", "heat"]),
+			"seed": DAMAGE_EVENT_SCRIPT.deterministic_seed(
+				&"plasma_cutter",
+				event_id,
+				player.player_id,
+				Engine.get_physics_frames()
+			),
+			"timestamp_tick": Engine.get_physics_frames(),
+		})
+		collider.call("apply_damage_event", damage_event)
+	elif collider.has_method("apply_damage"):
+		collider.call(
+			"apply_damage",
+			float(cutter.get("contact_damage_per_second")) * pulse_interval
+		)
+
+
+func _first_current_plasma_cutter_hit(
+	player: ServerPlayer,
+	start: Vector3,
+	finish: Vector3
+) -> Dictionary:
+	var exclusions := player.plasma_cutter_ray_exclusions
+	exclusions.clear()
+	exclusions.append(player.get_rid())
+	var held_body := get_grabbed_body(player.grabber)
+	if held_body != null:
+		exclusions.append(held_body.get_rid())
+	var direction := (finish - start).normalized()
+	var query := player.plasma_cutter_ray_query
+	if query == null:
+		query = PhysicsRayQueryParameters3D.new()
+		player.plasma_cutter_ray_query = query
+	query.from = start
+	query.to = finish
+	query.collide_with_areas = false
+	for _attempt: int in range(MAX_STALE_PLASMA_CUTTER_HITS_PER_TICK):
+		query.exclude = exclusions
+		var hit := player.get_world_3d().direct_space_state.intersect_ray(query)
+		if hit.is_empty():
+			return {}
+		var collider := hit.get("collider") as Node
+		if (
+			collider == null
+			or not collider.has_method("accepts_current_sdf_hit")
+			or bool(collider.call(
+				"accepts_current_sdf_hit",
+				hit.get("position", finish),
+				direction
+			))
+		):
+			return hit
+		var rid: RID = hit.get("rid", RID())
+		if not rid.is_valid():
+			return hit
+		exclusions.append(rid)
+	return {}
+
+
 func _get_context_item(
 	player: ServerPlayer,
 	hit: Dictionary
@@ -1937,6 +2501,66 @@ func _drop_entry_for_player(
 		var forward = -Basis(Vector3.UP, player.look_yaw).z.normalized()
 		item.linear_velocity = player.velocity + forward * 1.2
 	return item
+
+
+func _on_player_ragdoll_backpack_released(
+	backpack_entry: Dictionary,
+	spilled_entries: Array,
+	release_position: Vector3,
+	release_velocity: Vector3,
+	release_direction: Vector3,
+	player: ServerPlayer
+) -> void:
+	if not multiplayer.is_server() or player == null:
+		return
+	var safe_position := (
+		release_position
+		if release_position.is_finite()
+		else player.global_position + Vector3.UP * 0.45
+	)
+	var safe_velocity := (
+		release_velocity if release_velocity.is_finite() else player.velocity
+	)
+	var outward := release_direction
+	if not outward.is_finite() or outward.length_squared() <= 0.000001:
+		outward = player.trip_direction
+	outward = outward.normalized()
+	var pack := spawn_item_from_entry(
+		backpack_entry,
+		Transform3D(Basis.IDENTITY, safe_position + outward * 0.24)
+	)
+	if pack != null:
+		pack.linear_velocity = safe_velocity + outward * 0.9 + Vector3.UP * 0.35
+		pack.angular_velocity = Vector3(outward.z, 0.6, -outward.x) * 1.8
+
+	# Contents are separate authoritative items. A deterministic golden-angle fan avoids overlapping
+	# rigid bodies without allocating an RNG or making peers depend on dictionary iteration order.
+	const GOLDEN_ANGLE := 2.399963229728653
+	for index: int in range(spilled_entries.size()):
+		var entry: Dictionary = SafeVariant.dictionary_copy(
+			spilled_entries[index],
+			true
+		)
+		if entry.is_empty():
+			continue
+		var angle := GOLDEN_ANGLE * float(index + 1)
+		var radial := Vector3(cos(angle), 0.0, sin(angle))
+		var item := spawn_item_from_entry(
+			entry,
+			Transform3D(
+				Basis.IDENTITY,
+				safe_position
+				+ Vector3.UP * (0.10 + float(index % 3) * 0.08)
+				+ radial * (0.16 + 0.045 * float(index))
+			)
+		)
+		if item != null:
+			item.linear_velocity = (
+				safe_velocity
+				+ radial * (0.7 + 0.08 * float(index % 4))
+				+ Vector3.UP * (0.38 + 0.06 * float(index % 3))
+			)
+			item.angular_velocity = Vector3(radial.z, 0.4, -radial.x) * 2.1
 
 
 func _try_store_context_item(
@@ -2064,14 +2688,14 @@ func try_use(player: ServerPlayer) -> void:
 	_try_use_hit(player, _raycast_player_aim(player))
 
 
-func _try_use_hit(player: ServerPlayer, hit: Dictionary) -> void:
+func _try_use_hit(player: ServerPlayer, hit: Dictionary) -> bool:
 	if hit.is_empty():
-		return
+		return false
 
 	var collider := hit.get("collider") as Node
 	if collider != null and collider.has_method("server_use"):
 		collider.call("server_use", player, hit)
-		return
+		return true
 
 	var drone := collider as ServerDrone
 	if drone != null:
@@ -2080,6 +2704,8 @@ func _try_use_hit(player: ServerPlayer, hit: Dictionary) -> void:
 		else:
 			drone.set_ai_follow_player(player.player_id)
 			drone.toggle_activated()
+		return true
+	return false
 
 
 func _update_player_edit_aim(player: ServerPlayer) -> void:
@@ -2135,6 +2761,19 @@ func _get_player_interaction_hint(
 
 	if collider == null:
 		var selected := player.get_selected_inventory_entry()
+		if (
+			PlayerInventoryRules.get_definition(selected)
+			is PlasmaCutterDefinition
+		):
+			return (
+				"LMB // CUT   HEAT %03d%%"
+				% roundi(player.plasma_cutter_heat_ratio * 100.0)
+				if (
+					player.body_loadout != null
+					and player.body_loadout.has_any_arm()
+				)
+				else "NO ARM // CUTTER INOPERABLE"
+			)
 		if (
 			PlayerInventoryRules.get_definition(selected)
 			is GunItemDefinition
@@ -2196,6 +2835,8 @@ func try_primary_action(
 	):
 		priority_collider.call("server_primary_action", player, priority_hit)
 		return false
+	if player.get_plasma_cutter_definition() != null:
+		return player.set_plasma_cutter_triggered(true)
 	var gun_result := player.try_fire_selected_gun()
 	if bool(gun_result.get("handled", false)):
 		var fired := bool(gun_result.get("fired", false))
@@ -2422,9 +3063,88 @@ func remove_player_limb(
 		player.remove_limb(slot)
 
 
-func try_begin_grab(grabber: GrabberComponent) -> void:
+func try_ranked_context_action(
+	player: ServerPlayer,
+	preferred_kick_side := -1,
+	dropkick_tilt_input: float = 0.0
+) -> ContextAction:
+	if player == null:
+		return ContextAction.NONE
+	var hit := _raycast_player_aim(player)
+	var body := hit.get("collider") as PhysicsBody3D
+	var direct_action := _ranked_context_action_for_collider(
+		body,
+		player.grabber,
+		hit.get("position", Vector3.INF)
+	)
+	match direct_action:
+		ContextAction.GRAB:
+			if _begin_grab_candidate(
+				player.grabber,
+				body,
+				hit.get("position", body.global_position)
+			):
+				return ContextAction.GRAB
+		ContextAction.USE:
+			if _try_use_hit(player, hit):
+				return ContextAction.USE
+
+	# The existing narrow grab assist remains a higher-priority interaction, but is considered only
+	# when the direct ray did not hit an actionable target. A wall/tree/floor therefore does not eat
+	# E: if assist finds no item either, the request reaches the kick fallback.
+	if try_begin_grab(player.grabber, hit):
+		return ContextAction.GRAB
+	if player.request_kick(preferred_kick_side, dropkick_tilt_input):
+		return ContextAction.KICK
+	return ContextAction.NONE
+
+
+func _ranked_context_action_for_collider(
+	collider: Node,
+	grabber: GrabberComponent = null,
+	hit_position: Vector3 = Vector3.INF
+) -> ContextAction:
+	var best_action := ContextAction.NONE
+	var best_priority := -1
+	var body := collider as PhysicsBody3D
+	var grab_is_in_range := true
+	if grabber != null:
+		grab_is_in_range = (
+			grabber.can_grab()
+			and hit_position.is_finite()
+			and grabber.get_grab_origin().distance_to(hit_position)
+			<= grabber.capability.max_distance
+		)
+	if _is_grab_candidate(body) and grab_is_in_range:
+		best_action = ContextAction.GRAB
+		best_priority = CONTEXT_ACTION_PRIORITY_GRAB
+	if (
+		collider != null
+		and (collider.has_method("server_use") or collider is ServerDrone)
+		and CONTEXT_ACTION_PRIORITY_USE > best_priority
+	):
+		best_action = ContextAction.USE
+	return best_action
+
+
+func context_action_priority(action: int) -> int:
+	match action:
+		ContextAction.GRAB:
+			return CONTEXT_ACTION_PRIORITY_GRAB
+		ContextAction.USE:
+			return CONTEXT_ACTION_PRIORITY_USE
+		ContextAction.KICK:
+			return CONTEXT_ACTION_PRIORITY_KICK
+		_:
+			return -1
+
+
+func try_begin_grab(
+	grabber: GrabberComponent,
+	direct_hit: Dictionary = {}
+) -> bool:
 	if grabber == null or not grabber.can_grab():
-		return
+		return false
 
 	end_grab(grabber)
 
@@ -2443,9 +3163,16 @@ func try_begin_grab(grabber: GrabberComponent) -> void:
 	query.collide_with_areas = false
 
 	var space_state := grabber.get_world_3d().direct_space_state
-	var hit := space_state.intersect_ray(query)
+	var hit := (
+		direct_hit
+		if not direct_hit.is_empty()
+		else space_state.intersect_ray(query)
+	)
 	var body := hit.get("collider") as PhysicsBody3D
 	var hit_position: Vector3 = hit.get("position", origin)
+	if origin.distance_to(hit_position) > capability.max_distance:
+		body = null
+		hit_position = origin
 	if not _is_grab_candidate(body):
 		var assisted := _find_assisted_grab_candidate(
 			space_state,
@@ -2457,8 +3184,18 @@ func try_begin_grab(grabber: GrabberComponent) -> void:
 		body = assisted.get("body") as PhysicsBody3D
 		hit_position = assisted.get("position", origin)
 	if not _prepare_grab_candidate(body):
-		return
-	_begin_grab_body(grabber, body, hit_position)
+		return false
+	return _begin_grab_body(grabber, body, hit_position)
+
+
+func _begin_grab_candidate(
+	grabber: GrabberComponent,
+	body: PhysicsBody3D,
+	hit_position: Vector3
+) -> bool:
+	if not _prepare_grab_candidate(body):
+		return false
+	return _begin_grab_body(grabber, body, hit_position)
 
 
 func _is_grab_candidate(body: PhysicsBody3D) -> bool:
@@ -2573,9 +3310,9 @@ func _begin_grab_body(
 	grabber: GrabberComponent,
 	body: PhysicsBody3D,
 	hit_position: Vector3
-) -> void:
+) -> bool:
 	if grabber == null or body == null or not grabber.can_grab():
-		return
+		return false
 
 	end_grab(grabber)
 	var capability := grabber.capability
@@ -2595,7 +3332,10 @@ func _begin_grab_body(
 		_get_initial_grab_basis(grabber, body)
 	)
 	grab_states_by_grabber_id[grabber.get_instance_id()] = state
+	if body.has_method("on_server_grab_started"):
+		body.call("on_server_grab_started")
 	_center_grab_rotation_anchor(state)
+	return true
 
 
 func _get_initial_grab_basis(
@@ -2744,11 +3484,18 @@ static func _get_rigid_body_center_of_mass_local(
 
 func _end_grab_by_id(grabber_id: int) -> void:
 	var state := grab_states_by_grabber_id.get(grabber_id) as GrabState
+	var grabbed_body: PhysicsBody3D = (
+		state.body
+		if state != null and is_instance_valid(state.body)
+		else null
+	)
 
 	if state != null and is_instance_valid(state.grabber):
 		state.grabber.clear_load()
 
 	grab_states_by_grabber_id.erase(grabber_id)
+	if grabbed_body != null and grabbed_body.has_method("on_server_grab_ended"):
+		grabbed_body.call("on_server_grab_ended")
 
 
 func _release_grabs_for_body(body: PhysicsBody3D) -> void:
@@ -3022,6 +3769,7 @@ func cancel_pending_lobby_join() -> void:
 	if (
 		lobby_state != LobbyState.JOINING
 		and lobby_state != LobbyState.CONNECTING
+		and lobby_state != LobbyState.RECONNECTING
 	):
 		return
 
@@ -3029,7 +3777,7 @@ func cancel_pending_lobby_join() -> void:
 	if lobby_id > 0:
 		Steam.leaveLobby(lobby_id)
 	_reset_lobby_identity()
-	_set_offline_multiplayer_peer()
+	_retire_steam_transport()
 
 
 func is_steam_available() -> bool:
@@ -3250,8 +3998,9 @@ func _on_peer_connected(peer_id: int) -> void:
 	# Transport connection is not the same as application readiness. Do not construct gameplay state
 	# or begin the 20 Hz replication streams until the client proves that it can send an RPC using
 	# this exact protocol schema.
-	pending_admission_peer_ids[peer_id] = true
-	_schedule_client_ready_timeout(peer_id)
+	next_admission_generation += 1
+	pending_admission_peer_ids[peer_id] = next_admission_generation
+	_schedule_client_ready_timeout(peer_id, next_admission_generation)
 
 
 @rpc("any_peer", "reliable")
@@ -3264,19 +4013,25 @@ func confirm_client_session_ready(
 	var peer_id := multiplayer.get_remote_sender_id()
 	if peer_id <= 1 or not multiplayer.get_peers().has(peer_id):
 		return
+	var admission_generation := int(pending_admission_peer_ids.get(peer_id, -1))
+	if admission_generation < 0:
+		return
 	if protocol_version != LobbyRules.PROTOCOL_VERSION:
-		_reject_connected_peer(peer_id, "the game protocol does not match")
+		_reject_connected_peer(
+			peer_id,
+			"the game protocol does not match",
+			admission_generation
+		)
 		return
 	var transport_steam_id := 0
 	if steam_peer != null:
 		transport_steam_id = steam_peer.get_steam_id_for_peer_id(peer_id)
 	if claimed_steam_id <= 0 or claimed_steam_id != transport_steam_id:
-		_reject_connected_peer(peer_id, "the Steam identity does not match the transport")
-		return
-	if GameState.get_player_id(peer_id) != -1:
-		pending_admission_peer_ids.erase(peer_id)
-		return
-	if not pending_admission_peer_ids.has(peer_id):
+		_reject_connected_peer(
+			peer_id,
+			"the Steam identity does not match the transport",
+			admission_generation
+		)
 		return
 	print(
 		"CLIENT READY: peer=",
@@ -3286,46 +4041,77 @@ func confirm_client_session_ready(
 		" protocol=",
 		protocol_version
 	)
-	_admit_connected_peer(peer_id)
+	_admit_connected_peer(peer_id, transport_steam_id, admission_generation)
 
 
-func _schedule_client_ready_timeout(peer_id: int) -> void:
+func _schedule_client_ready_timeout(peer_id: int, admission_generation: int) -> void:
 	get_tree().create_timer(CLIENT_READY_TIMEOUT_SECONDS).timeout.connect(
 		func() -> void:
 			if (
-				pending_admission_peer_ids.has(peer_id)
+				int(pending_admission_peer_ids.get(peer_id, -1))
+				== admission_generation
 				and multiplayer.is_server()
 				and multiplayer.get_peers().has(peer_id)
 				and GameState.get_player_id(peer_id) == -1
 			):
 				_reject_connected_peer(
 					peer_id,
-					"the client did not finish its application handshake"
+					"the client did not finish its application handshake",
+					admission_generation
 				)
 	)
 
 
-func _admit_connected_peer(peer_id: int) -> void:
+func _admit_connected_peer(
+	peer_id: int,
+	peer_steam_id: int,
+	admission_generation: int
+) -> void:
+	if not _is_current_admission(peer_id, admission_generation):
+		return
+	# A previously authenticated Steam identity owns its reserved player lease. Reconnection does not
+	# depend on Steam's eventually-consistent lobby member list catching up first.
+	if GameState.get_player_id_for_steam_id(peer_steam_id) >= 0:
+		if register_peer(peer_id, peer_steam_id):
+			return
+		_reject_connected_peer(
+			peer_id,
+			"that Steam identity is already connected",
+			admission_generation
+		)
+		return
+
 	for _attempt: int in range(LOBBY_MEMBERSHIP_CHECK_ATTEMPTS):
-		if not multiplayer.get_peers().has(peer_id):
+		if not _is_current_admission(peer_id, admission_generation):
 			return
 		if _is_peer_in_current_lobby(peer_id):
-			if register_peer(peer_id):
+			if register_peer(peer_id, peer_steam_id):
 				return
 			_reject_connected_peer(
 				peer_id,
-				"the four-player lobby is full"
+				"the four-player lobby is full",
+				admission_generation
 			)
 			return
 		await get_tree().create_timer(
 			LOBBY_MEMBERSHIP_CHECK_DELAY
 		).timeout
 
-	if multiplayer.get_peers().has(peer_id):
+	if _is_current_admission(peer_id, admission_generation):
 		_reject_connected_peer(
 			peer_id,
-			"the Steam account is not in this lobby"
+			"the Steam account is not in this lobby",
+			admission_generation
 		)
+
+
+func _is_current_admission(peer_id: int, admission_generation: int) -> bool:
+	return (
+		admission_generation >= 0
+		and int(pending_admission_peer_ids.get(peer_id, -1))
+		== admission_generation
+		and multiplayer.get_peers().has(peer_id)
+	)
 
 
 func _is_peer_in_current_lobby(peer_id: int) -> bool:
@@ -3348,7 +4134,17 @@ func _is_peer_in_current_lobby(peer_id: int) -> bool:
 	return false
 
 
-func _reject_connected_peer(peer_id: int, reason: String) -> void:
+func _reject_connected_peer(
+	peer_id: int,
+	reason: String,
+	expected_admission_generation := -1
+) -> void:
+	if (
+		expected_admission_generation >= 0
+		and int(pending_admission_peer_ids.get(peer_id, -1))
+		!= expected_admission_generation
+	):
+		return
 	pending_admission_peer_ids.erase(peer_id)
 	push_warning("Rejecting peer %d: %s." % [peer_id, reason])
 	multiplayer.multiplayer_peer.disconnect_peer(peer_id, true)
@@ -3365,10 +4161,61 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	var player_id := GameState.get_player_id(peer_id)
 	if player_id == -1:
 		return
+	var player_state := GameState.get_player_state(player_id)
+	var player_steam_id := player_state.steam_id if player_state != null else 0
 	# The transport has already removed this peer before emitting peer_disconnected. Invalidate its
-	# application route before cleanup can close the PBD, spill equipment, or emit other effects.
-	# Those effects may still be sent to the remaining players through the normal broadcasters.
-	GameState.unregister_peer(peer_id)
+	# application route immediately, but preserve its authoritative body and inventory behind a
+	# Steam-identity lease. A momentary outage must not turn into an in-world death/drop event.
+	GameState.suspend_peer(peer_id)
+
+	var player := get_server_player(player_id)
+	if player != null:
+		end_grab(player.grabber)
+		player.suspend_network_input()
+	rope_placements_by_player_id.erase(player_id)
+
+	if reconnect_ledger.suspend(
+		player_steam_id,
+		player_id,
+		peer_id,
+		Time.get_ticks_msec()
+	):
+		_sync_lobby_availability()
+		print(
+			"PEER CONNECTION SUSPENDED: peer_id=",
+			peer_id,
+			" player_id=",
+			player_id,
+			" grace_ms=",
+			SESSION_RECONNECT_LEDGER.DEFAULT_GRACE_MILLISECONDS
+		)
+		return
+
+	# Steam identity should always be available after the application handshake. If it is not, a
+	# secure resume cannot distinguish this player from another account, so finish cleanup now.
+	_finalize_disconnected_player(player_id, player_steam_id)
+
+
+func _expire_disconnected_player_leases() -> void:
+	if reconnect_ledger.is_empty() or not multiplayer.is_server():
+		return
+	var expired := reconnect_ledger.take_expired(Time.get_ticks_msec())
+	for lease: Dictionary in expired:
+		_finalize_disconnected_player(
+			int(lease.get("player_id", -1)),
+			int(lease.get("steam_id", 0))
+		)
+
+
+func _finalize_disconnected_player(player_id: int, steam_id: int) -> void:
+	if player_id < 0:
+		return
+	var player_state := GameState.get_player_state(player_id)
+	if player_state == null or player_state.connected:
+		return
+	reconnect_ledger.erase(steam_id)
+	# Routing remains invalid while teardown emits item/PBD sounds to the surviving peers.
+	GameState.unregister_player(player_id)
 	if acoustic_service != null:
 		acoustic_service.forget_listener(player_id)
 
@@ -3390,8 +4237,7 @@ func _on_peer_disconnected(peer_id: int) -> void:
 		server_players_by_player_id.erase(player_id)
 
 	_sync_lobby_availability()
-
-	print("PEER DISCONNECTED: ", peer_id)
+	print("PLAYER SESSION EXPIRED: player_id=", player_id, " steam_id=", steam_id)
 
 
 func _on_connected_to_server() -> void:
@@ -3403,12 +4249,21 @@ func _on_connected_to_server() -> void:
 		" transport_status=",
 		steam_peer.get_connection_status() if steam_peer != null else -1
 	)
-	if lobby_state != LobbyState.CONNECTING:
+	if (
+		lobby_state != LobbyState.CONNECTING
+		and lobby_state != LobbyState.RECONNECTING
+	):
 		return
+	var resumed_session := lobby_state == LobbyState.RECONNECTING
 	lobby_state = LobbyState.CONNECTED
+	_clear_client_reconnect_state()
 	_refresh_lobby_presence_from_membership()
-	_emit_lobby_status("Connected to lobby host.", false)
-	SceneController.enter_game()
+	_emit_lobby_status(
+		"Connection restored." if resumed_session else "Connected to lobby host.",
+		false
+	)
+	if not resumed_session:
+		SceneController.enter_game()
 	rpc_id(
 		1,
 		"confirm_client_session_ready",
@@ -3430,6 +4285,8 @@ func _on_connection_failed() -> void:
 		or lobby_state == LobbyState.JOINING
 	):
 		_fail_lobby_operation("Could not connect to the lobby host.")
+	elif lobby_state == LobbyState.RECONNECTING:
+		_retire_client_reconnect_attempt()
 
 
 func _on_server_disconnected() -> void:
@@ -3438,18 +4295,130 @@ func _on_server_disconnected() -> void:
 		lobby_state,
 		_steam_connection_end_suffix()
 	)
+	if lobby_state == LobbyState.RECONNECTING:
+		return
 	if lobby_state != LobbyState.CONNECTED:
 		return
-	if lobby_id > 0:
+	_begin_client_reconnect()
+
+
+func _begin_client_reconnect() -> void:
+	if lobby_owner_id <= 0 or lobby_id <= 0:
+		_finish_client_reconnect_failure()
+		return
+	lobby_operation_generation += 1
+	lobby_state = LobbyState.RECONNECTING
+	var now_milliseconds := Time.get_ticks_msec()
+	reconnect_deadline_milliseconds = (
+		now_milliseconds
+		+ SESSION_RECONNECT_LEDGER.CLIENT_RETRY_WINDOW_MILLISECONDS
+	)
+	reconnect_next_attempt_milliseconds = (
+		now_milliseconds
+		+ SESSION_RECONNECT_LEDGER.FIRST_RETRY_DELAY_MILLISECONDS
+	)
+	reconnect_attempt_deadline_milliseconds = 0
+	reconnect_attempt_count = 0
+	_retire_steam_transport()
+	_emit_lobby_status(
+		"Connection interrupted — restoring session...",
+		false
+	)
+
+
+func _process_client_reconnect() -> void:
+	if lobby_state != LobbyState.RECONNECTING:
+		return
+	var now_milliseconds := Time.get_ticks_msec()
+	if now_milliseconds > reconnect_deadline_milliseconds:
+		_finish_client_reconnect_failure()
+		return
+
+	if steam_peer != null:
+		var connection_status := steam_peer.get_connection_status()
+		if connection_status == MultiplayerPeer.CONNECTION_CONNECTED:
+			# connected_to_server normally owns this transition. This fallback covers a signal lost while
+			# swapping SceneMultiplayer's peer during an engine frame.
+			_on_connected_to_server()
+			return
+		if (
+			connection_status == MultiplayerPeer.CONNECTION_CONNECTING
+			and now_milliseconds < reconnect_attempt_deadline_milliseconds
+		):
+			return
+		_retire_client_reconnect_attempt(now_milliseconds)
+
+	if now_milliseconds >= reconnect_next_attempt_milliseconds:
+		_start_client_reconnect_attempt(now_milliseconds)
+
+
+func _start_client_reconnect_attempt(now_milliseconds: int) -> void:
+	if lobby_state != LobbyState.RECONNECTING or lobby_owner_id <= 0:
+		return
+	var candidate := SteamMultiplayerPeer.new()
+	candidate.server_relay = true
+	candidate.debug_level = 2
+	var err := candidate.create_client(lobby_owner_id)
+	if err != OK:
+		reconnect_attempt_count += 1
+		reconnect_next_attempt_milliseconds = (
+			now_milliseconds
+			+ SESSION_RECONNECT_LEDGER.retry_delay_milliseconds(
+				reconnect_attempt_count
+			)
+		)
+		return
+	steam_peer = candidate
+	multiplayer.multiplayer_peer = steam_peer
+	reconnect_attempt_deadline_milliseconds = (
+		now_milliseconds + RECONNECT_ATTEMPT_TIMEOUT_MILLISECONDS
+	)
+	print(
+		"RECONNECTING TO HOST: ",
+		lobby_owner_id,
+		" attempt=",
+		reconnect_attempt_count + 1
+	)
+
+
+func _retire_client_reconnect_attempt(now_milliseconds := -1) -> void:
+	if lobby_state != LobbyState.RECONNECTING:
+		return
+	var resolved_now := (
+		Time.get_ticks_msec()
+		if now_milliseconds < 0
+		else now_milliseconds
+	)
+	_retire_steam_transport()
+	reconnect_attempt_deadline_milliseconds = 0
+	reconnect_attempt_count += 1
+	reconnect_next_attempt_milliseconds = (
+		resolved_now
+		+ SESSION_RECONNECT_LEDGER.retry_delay_milliseconds(
+			reconnect_attempt_count
+		)
+	)
+
+
+func _finish_client_reconnect_failure() -> void:
+	var failure_suffix := _steam_connection_end_suffix()
+	if lobby_id > 0 and is_steam_available():
 		Steam.leaveLobby(lobby_id)
 	_reset_lobby_identity()
-	_set_offline_multiplayer_peer()
+	_retire_steam_transport()
 	Client.reset_session()
 	_emit_lobby_status(
-		"The lobby host disconnected.%s" % _steam_connection_end_suffix(),
+		"The lobby host did not return.%s" % failure_suffix,
 		true
 	)
 	SceneController.open_main_menu()
+
+
+func _clear_client_reconnect_state() -> void:
+	reconnect_deadline_milliseconds = 0
+	reconnect_next_attempt_milliseconds = 0
+	reconnect_attempt_deadline_milliseconds = 0
+	reconnect_attempt_count = 0
 
 
 func _on_steam_connection_status_changed(
@@ -3508,6 +4477,8 @@ func _on_lobby_chat_update(
 	if lobby_state == LobbyState.HOSTING:
 		_sync_lobby_availability()
 	elif lobby_state == LobbyState.CONNECTED:
+		_refresh_lobby_presence_from_membership()
+	elif lobby_state == LobbyState.RECONNECTING:
 		_refresh_lobby_presence_from_membership()
 
 
@@ -3619,7 +4590,7 @@ func leave_steam_session() -> void:
 	if previous_lobby_id > 0 and is_steam_available():
 		Steam.leaveLobby(previous_lobby_id)
 	_reset_lobby_identity()
-	_set_offline_multiplayer_peer()
+	_retire_steam_transport()
 	_clear_runtime_session()
 	Client.reset_session()
 	session_teardown_active = false
@@ -3643,6 +4614,9 @@ func _clear_runtime_session() -> void:
 	server_projectiles_by_id.clear()
 	server_drone_parts_by_id.clear()
 	server_enemies_by_enemy_id.clear()
+	server_player_corpses_by_id.clear()
+	pending_player_respawn_generation_by_player_id.clear()
+	server_destruction_fragments_by_id.clear()
 	destructible_volumes_by_id.clear()
 	inspection_stations_by_id.clear()
 	body_part_shop_terminals_by_id.clear()
@@ -3655,15 +4629,22 @@ func _clear_runtime_session() -> void:
 	spatial_interest_by_drone_id.clear()
 	fieldlink_next_command_msec_by_player_id.clear()
 	pending_admission_peer_ids.clear()
+	next_admission_generation = 0
+	reconnect_ledger.reset()
+	acoustic_stimulus_ledger.clear()
+	_clear_client_reconnect_state()
 	spatial_hash = ServerSpatialHash3D.new(SPATIAL_CELL_SIZE)
 	sync_timer = 0.0
 	next_drone_id = 0
 	next_projectile_id = 0
 	next_drone_part_id = 0
+	next_destruction_fragment_id = 0
 	next_drone_part_token_id = 0
 	next_rope_id = 0
 	next_enemy_id = 0
+	next_player_corpse_id = 0
 	next_body_part_order_id = 0
+	next_plasma_cutter_event_id = 0
 	next_spatial_sound_sequence = 0
 	replication_service.reset()
 	GameState.reset_session()
@@ -3764,22 +4745,30 @@ func _fail_lobby_operation(message: String) -> void:
 	if lobby_id > 0:
 		Steam.leaveLobby(lobby_id)
 	_reset_lobby_identity()
-	_set_offline_multiplayer_peer()
+	_retire_steam_transport()
 	_emit_lobby_status(message, true)
 
 
 func _reset_lobby_identity() -> void:
 	_clear_lobby_presence()
 	lobby_operation_generation += 1
+	_clear_client_reconnect_state()
 	lobby_id = 0
 	pending_lobby_id = 0
 	lobby_owner_id = 0
 	lobby_state = LobbyState.IDLE
-	steam_peer = null
 
 
-func _set_offline_multiplayer_peer() -> void:
+func _retire_steam_transport() -> void:
+	# SceneMultiplayer and this service both retain the Steam peer. Merely replacing/nulling those
+	# references leaves native SteamNetworkingSockets teardown to RefCounted destruction, which may
+	# happen after the player has already requested another host. Close first so the listen socket is
+	# synchronously released before a subsequent SteamMultiplayerPeer.create_host() can run.
+	var retiring_peer := steam_peer
+	if retiring_peer != null:
+		retiring_peer.close()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	steam_peer = null
 
 
 func _emit_lobby_status(message: String, is_error: bool) -> void:
@@ -3826,7 +4815,12 @@ func _get_lobby_join_error(response: int) -> String:
 			return "Steam could not join the lobby (response %d)." % response
 
 @rpc("any_peer", "call_local", "reliable", 3)
-func receive_jump(local_prediction_key := 0) -> void:
+func receive_jump(
+	local_prediction_key := 0,
+	flip_intent := 0,
+	request_id := 0,
+	flip_run_committed := false
+) -> void:
 	if not multiplayer.is_server():
 		return
 
@@ -3837,8 +4831,33 @@ func receive_jump(local_prediction_key := 0) -> void:
 
 	if not player.on_floor:
 		_reject_local_audio_prediction(player, local_prediction_key)
+		_send_jump_request_result(player, request_id, false, 0)
 		return
-	player.request_jump(local_prediction_key)
+	player.request_jump(
+		local_prediction_key,
+		clampi(flip_intent, -1, 1),
+		maxi(request_id, 0),
+		bool(flip_run_committed)
+	)
+
+
+@rpc("any_peer", "call_local", "unreliable_ordered", 3)
+func receive_foot_contact(
+	contact_sequence: int,
+	side: int,
+	local_prediction_key: int
+) -> void:
+	if not multiplayer.is_server():
+		return
+	var player := get_sending_player()
+	if player == null:
+		return
+	if not player.accept_presented_foot_contact(
+		contact_sequence,
+		side,
+		local_prediction_key
+	):
+		_reject_local_audio_prediction(player, local_prediction_key)
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
@@ -3884,6 +4903,16 @@ func select_inventory_slot(slot_index: int) -> void:
 	if player == null:
 		return
 	player.select_inventory_slot(slot_index)
+
+
+@rpc("any_peer", "call_local", "reliable", 3)
+func cycle_inventory_slot(direction: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var player := get_sending_player()
+	if player == null:
+		return
+	player.cycle_inventory_slot(direction)
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
@@ -4074,7 +5103,12 @@ func set_primary_action_held(
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
-func begin_grab(yaw: float, pitch: float) -> void:
+func begin_grab(
+	yaw: float,
+	pitch: float,
+	preferred_kick_side := -1,
+	dropkick_tilt_input: float = 0.0
+) -> void:
 	if not multiplayer.is_server():
 		return
 
@@ -4083,7 +5117,12 @@ func begin_grab(yaw: float, pitch: float) -> void:
 		return
 
 	player.set_look_direction(yaw, pitch)
-	try_begin_grab(player.grabber)
+	player.set_context_action_held(true)
+	try_ranked_context_action(
+		player,
+		preferred_kick_side,
+		clampf(dropkick_tilt_input, -1.0, 1.0)
+	)
 
 
 @rpc("any_peer", "call_local", "reliable", 3)
@@ -4095,6 +5134,7 @@ func release_grab() -> void:
 	if player == null:
 		return
 
+	player.set_context_action_held(false)
 	end_grab(player.grabber)
 
 

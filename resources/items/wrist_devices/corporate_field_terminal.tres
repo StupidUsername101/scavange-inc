@@ -1,6 +1,6 @@
-[gd_resource type="Resource" script_class="EquippableItemDefinition" format=3 uid="uid://b5o42enh8dj1r"]
+[gd_resource type="Resource" script_class="WristDeviceDefinition" load_steps=4 format=3 uid="uid://b5o42enh8dj1r"]
 
-[ext_resource type="Script" uid="uid://b0bx1qf7owq46" path="res://scripts/items/equippable_item_definition.gd" id="1_definition"]
+[ext_resource type="Script" path="res://scripts/items/wrist_device_definition.gd" id="1_definition"]
 [ext_resource type="PackedScene" path="res://scenes/items/visuals/corporate_field_terminal_visual.tscn" id="2_visual"]
 
 [sub_resource type="BoxShape3D" id="Shape_terminal"]

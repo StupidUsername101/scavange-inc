@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://d7ua7jmq566a"]
+[gd_scene load_steps=12 format=3 uid="uid://d7ua7jmq566a"]
 
 [ext_resource type="Script" uid="uid://c6ucunx40lk05" path="res://scripts/client/player_proxy.gd" id="1_435og"]
 [ext_resource type="Script" path="res://scripts/client/player_inventory_hud.gd" id="2_hud"]
@@ -6,6 +6,7 @@
 [ext_resource type="PackedScene" path="res://scenes/proxy/player_procedural_leg_rig.tscn" id="4_legs"]
 [ext_resource type="Script" path="res://scripts/characters/player_ragdoll_3d.gd" id="5_ragdoll"]
 [ext_resource type="Script" path="res://scripts/client/eyeless_acoustic_perception.gd" id="6_acoustic_perception"]
+[ext_resource type="Script" path="res://scripts/characters/player_character_skin.gd" id="7_character_skin"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_torso"]
 size = Vector3(0.7, 0.85, 0.4)
@@ -36,6 +37,23 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55575824, -0.42391348)
 position = Vector3(0, 0.555758, 0)
 
 [node name="BodyVisual" type="Node3D" parent="."]
+
+[node name="CharacterSkin" type="Node3D" parent="BodyVisual"]
+script = ExtResource("7_character_skin")
+
+[node name="BackpackMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
+
+[node name="EyesMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
+
+[node name="CameraMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
+
+[node name="LeftWristMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
+
+[node name="RightWristMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
+
+[node name="LeftHandItemMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
+
+[node name="RightHandItemMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
 
 [node name="UpperBodyPose" type="Node3D" parent="BodyVisual"]
 

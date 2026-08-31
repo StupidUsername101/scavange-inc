@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="PlasmaCutterDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/items/plasma_cutter_definition.gd" id="1_cutter"]
+[ext_resource type="PackedScene" path="res://scenes/items/visuals/handheld_plasma_cutter_visual.tscn" id="2_visual"]
+
+[sub_resource type="BoxShape3D" id="Shape_cutter"]
+size = Vector3(0.23, 0.38, 0.58)
+
+[resource]
+script = ExtResource("1_cutter")
+display_name = "Industrial Plasma Cutter"
+inventory_code = "CUT"
+mass = 2.35
+physical_surface = &"metal"
+grip_surface_tags = PackedStringArray("carryable", "tool", "electronics")
+default_grab_rotation_degrees = Vector3(0, 0, 0)
+visual_scene = ExtResource("2_visual")
+collision_shape = SubResource("Shape_cutter")
+shape_position = Vector3(0, -0.07, -0.1)
+range_meters = 4.5
+cut_radius = 0.055
+cut_depth = 0.18
+destruction_energy = 5.5
+heat_energy = 18.0
+contact_damage_per_second = 32.0
+pulse_interval = 0.085
+heat_per_second = 0.34
+cooling_per_second = 0.26
+overheat_recovery_ratio = 0.28

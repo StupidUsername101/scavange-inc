@@ -1,5 +1,7 @@
 extends SceneTree
 
+const FULL_BODY := preload("res://resources/character_loadouts/full_body.tres")
+
 class AuthoredGrabBody:
 	extends RigidBody3D
 
@@ -7,6 +9,21 @@ class AuthoredGrabBody:
 
 	func get_default_grab_basis() -> Basis:
 		return default_grab_basis
+
+
+class UsableGrabBody:
+	extends RigidBody3D
+
+	func server_use(_player: ServerPlayer, _hit: Dictionary) -> void:
+		pass
+
+
+class UsableStaticBody:
+	extends StaticBody3D
+	var use_count := 0
+
+	func server_use(_player: ServerPlayer, _hit: Dictionary) -> void:
+		use_count += 1
 
 
 #######################################################
@@ -34,7 +51,75 @@ func _run() -> void:
 	await _test_physical_mouse_pitch_control()
 	await _test_portable_radio_full_turn()
 	await _test_narrow_assisted_item_acquisition()
+	await _test_ranked_context_action_contract()
 	_finish()
+
+
+func _test_ranked_context_action_contract() -> void:
+	var server := root.get_node_or_null("Server")
+	var dual_purpose := UsableGrabBody.new()
+	var use_only := UsableStaticBody.new()
+	root.add_child(dual_purpose)
+	root.add_child(use_only)
+	_expect(
+		int(server.call(
+			"_ranked_context_action_for_collider",
+			dual_purpose
+		)) == 3
+		and int(server.call(
+			"_ranked_context_action_for_collider",
+			use_only
+		)) == 2
+		and int(server.call(
+			"_ranked_context_action_for_collider",
+			null
+		)) == 0
+		and int(server.call("context_action_priority", 3))
+		> int(server.call("context_action_priority", 2))
+		and int(server.call("context_action_priority", 2))
+		> int(server.call("context_action_priority", 1)),
+		"E ranks direct grab/use interactions above the empty-context kick fallback"
+	)
+	var player := ServerPlayer.new()
+	var player_collision := CollisionShape3D.new()
+	player_collision.name = "CollisionShape3D"
+	player_collision.shape = BoxShape3D.new()
+	player.add_child(player_collision)
+	var player_grabber := GrabberComponent.new()
+	player_grabber.name = "Grabber"
+	player_grabber.capability = GrabCapability.new()
+	player.add_child(player_grabber)
+	player.body_loadout = FULL_BODY
+	root.add_child(player)
+	player.global_position = Vector3(160.0, 0.0, 0.0)
+	var use_collision := CollisionShape3D.new()
+	use_collision.shape = BoxShape3D.new()
+	use_only.add_child(use_collision)
+	use_only.global_position = Vector3(160.0, 0.0, -2.0)
+	await physics_frame
+	var use_action := int(server.call(
+		"try_ranked_context_action",
+		player,
+		PlayerGait.FootSide.LEFT
+	))
+	use_only.global_position = Vector3(170.0, 0.0, 0.0)
+	await physics_frame
+	var empty_action := int(server.call(
+		"try_ranked_context_action",
+		player,
+		PlayerGait.FootSide.LEFT
+	))
+	_expect(
+		use_action == 2
+		and use_only.use_count == 1
+		and empty_action == 1
+		and player.kick_active
+		and player.kick_side == PlayerGait.FootSide.LEFT,
+		"one E ray is consumed by a higher-priority use target and falls through to kick only after that target leaves"
+	)
+	player.free()
+	dual_purpose.free()
+	use_only.free()
 
 
 func _test_narrow_assisted_item_acquisition() -> void:

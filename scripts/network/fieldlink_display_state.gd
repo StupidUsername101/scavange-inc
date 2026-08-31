@@ -11,7 +11,10 @@ const PAGE_SCANNER: StringName = &"scanner"
 
 static func sanitize_page(value: Variant) -> StringName:
 	var page := StringName(str(value))
-	return page if page == PAGE_SCANNER else PAGE_HOME
+	match page:
+		PAGE_SCANNER:
+			return page
+	return PAGE_HOME
 
 
 static func make_replication_packet(

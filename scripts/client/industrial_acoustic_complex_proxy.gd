@@ -18,7 +18,6 @@ const PROP_SCENES := {
 	&"wood_pallet": preload("res://assets/third_party/pizza_doggy/models/bunkers/wood_pallet_1.glb"),
 	&"computer_terminal": preload("res://assets/third_party/pizza_doggy/models/tech/computer_terminal_1.glb"),
 	&"control_panel": preload("res://assets/third_party/pizza_doggy/models/tech/control_panel_1.glb"),
-	&"fuse_box": preload("res://assets/third_party/pizza_doggy/models/tech/fuse_box_1.glb"),
 }
 const PROP_COLLISION_SHAPES := {
 	&"generator": preload("res://resources/world/prop_collisions/generator_1_convex.tres"),
@@ -28,7 +27,6 @@ const PROP_COLLISION_SHAPES := {
 	&"wood_pallet": preload("res://resources/world/prop_collisions/wood_pallet_1_convex.tres"),
 	&"computer_terminal": preload("res://resources/world/prop_collisions/computer_terminal_1_convex.tres"),
 	&"control_panel": preload("res://resources/world/prop_collisions/control_panel_1_convex.tres"),
-	&"fuse_box": preload("res://resources/world/prop_collisions/fuse_box_1_convex.tres"),
 }
 const PROP_SURFACES := {
 	&"generator": &"metal",
@@ -38,13 +36,11 @@ const PROP_SURFACES := {
 	&"wood_pallet": &"wood",
 	&"computer_terminal": &"metal",
 	&"control_panel": &"metal",
-	&"fuse_box": &"metal",
 }
 
 var _unit_box: BoxMesh
 var _materials: Dictionary[StringName, Material] = {}
 var _light_material: StandardMaterial3D
-var _window_material: StandardMaterial3D
 
 
 func _ready() -> void:
@@ -53,7 +49,6 @@ func _ready() -> void:
 	_unit_box.size = Vector3.ONE
 	_build_materials()
 	_build_structure()
-	_build_building_details()
 	_build_tunnel_details()
 	_build_large_bunker_details()
 	_build_valve_bunker_details()
@@ -89,10 +84,6 @@ func _build_materials() -> void:
 		Color("ff8c32"),
 		2.8
 	)
-	_window_material = VisualMaterialFactory.standard(Color("152b34"), 0.52, 0.2)
-	_window_material.emission_enabled = true
-	_window_material.emission = Color("0e3542")
-	_window_material.emission_energy_multiplier = 0.65
 
 
 func _build_structure() -> void:
@@ -106,64 +97,6 @@ func _build_structure() -> void:
 			descriptor.get("rotation", Vector3.ZERO),
 			_materials.get(descriptor.get("material_id", &"concrete")) as Material
 		)
-
-
-func _build_building_details() -> void:
-	var center: Vector3 = LAYOUT.BUILDING_CENTER
-	var front_z: float = center.z - LAYOUT.BUILDING_DEPTH * 0.5 - 0.13
-	var door_x: float = center.x + LAYOUT.DOOR_CENTER_X
-	for descriptor: Dictionary in LAYOUT.stair_tread_boxes():
-		_add_box(
-			str(descriptor.get("name", &"BuildingTread")),
-			descriptor.get("position", Vector3.ZERO),
-			descriptor.get("size", Vector3.ONE),
-			Vector3.ZERO,
-			_materials[&"ramp"]
-		)
-	_add_box(
-		"BuildingDoorHeader",
-		Vector3(door_x, LAYOUT.DOOR_HEIGHT + 0.12, front_z - 0.03),
-		Vector3(LAYOUT.DOOR_WIDTH + 0.34, 0.2, 0.18),
-		Vector3.ZERO,
-		_materials[&"rail"]
-	)
-	for floor_index: int in [1, 2]:
-		var y := LAYOUT.STOREY_HEIGHT * float(floor_index) + 1.25
-		for window_x: float in [-4.7, -1.2, 2.2, 5.0]:
-			_add_box(
-				"Window%d_%s" % [floor_index, str(window_x)],
-				center + Vector3(window_x, y, -LAYOUT.BUILDING_DEPTH * 0.5 - 0.135),
-				Vector3(1.55, 1.45, 0.035),
-				Vector3.ZERO,
-				_window_material
-			)
-	for floor_index: int in [0, 1, 2]:
-		var light_y := float(floor_index + 1) * LAYOUT.STOREY_HEIGHT - 0.22
-		for light_z: float in [-2.6, 2.4]:
-			_add_box(
-				"BuildingLight%d_%s" % [floor_index, str(light_z)],
-				center + Vector3(-1.0, light_y, light_z),
-				Vector3(2.2, 0.055, 0.16),
-				Vector3.ZERO,
-				_light_material
-			)
-			_add_omni_light(
-				center + Vector3(-1.0, light_y - 0.16, light_z),
-				6.0,
-				0.65
-			)
-	_add_label(
-		"SUBLEVEL 19  //  ACOUSTIC ANNEX",
-		Vector3(door_x, LAYOUT.DOOR_HEIGHT + 0.5, front_z - 0.08),
-		36,
-		Color("ffb451")
-	)
-	_add_label(
-		"LEVELS 01—03",
-		Vector3(door_x, 1.5, front_z - 0.08),
-		22,
-		Color("a8bbc2")
-	)
 
 
 func _build_tunnel_details() -> void:

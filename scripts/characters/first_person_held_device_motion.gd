@@ -27,6 +27,17 @@ const WALK_SHOULDER_ROTATION_AMPLITUDE := Vector3(0.012, 0.010, 0.016)
 const RUN_SHOULDER_ROTATION_AMPLITUDE := Vector3(0.040, 0.030, 0.050)
 const FATIGUE_SHOULDER_POSITION_LIFT := 0.32
 const FATIGUE_SHOULDER_ROTATION_LIFT := 0.38
+# Constant lateral motion carries a small shoulder lean; changes in lateral speed add the brief
+# opposite translation expected from a heavy device lagging behind the player's acceleration.
+const LATERAL_ACCELERATION_FULL_SCALE_PER_SECOND := 3.4
+const LATERAL_SPEED_POSITION_OFFSET := 0.0040
+const LATERAL_ACCELERATION_LAG_OFFSET := 0.0100
+const LATERAL_SPEED_VERTICAL_DROP := 0.0025
+const LATERAL_ACCELERATION_VERTICAL_DROP := 0.0015
+const LATERAL_SPEED_YAW := 0.014
+const LATERAL_ACCELERATION_YAW := 0.008
+const LATERAL_SPEED_ROLL := 0.056
+const LATERAL_ACCELERATION_ROLL := 0.018
 const MAX_FRAME_DELTA_SECONDS := 0.1
 const TIME_ROLLOVER_SECONDS := 4096.0
 const CRITICALLY_DAMPED_VECTOR3 := preload(
@@ -41,6 +52,9 @@ var _gait_bob_offset := Vector3.ZERO
 var _movement_weight := 0.0
 var _gait_cycle := 0.0
 var _run_weight := 0.0
+var _lateral_motion_ratio := 0.0
+var _previous_lateral_motion_ratio := 0.0
+var _lateral_motion_initialized := false
 var fatigue_weight := 0.0
 var _fatigue_target := 0.0
 var _motion_time := 0.0
@@ -66,6 +80,21 @@ func set_endurance_spent_ratio(endurance_spent_ratio: float) -> void:
 	_fatigue_target = fatigue_from_endurance_spent_ratio(endurance_spent_ratio)
 
 
+func set_lateral_motion_ratio(lateral_motion_ratio: float) -> void:
+	_lateral_motion_ratio = clampf(
+		lateral_motion_ratio if is_finite(lateral_motion_ratio) else 0.0,
+		-1.0,
+		1.0
+	)
+	if not _lateral_motion_initialized:
+		synchronize_lateral_motion()
+
+
+func synchronize_lateral_motion() -> void:
+	_previous_lateral_motion_ratio = _lateral_motion_ratio
+	_lateral_motion_initialized = true
+
+
 func advance(delta: float) -> void:
 	var safe_delta := clampf(delta, 0.0, MAX_FRAME_DELTA_SECONDS)
 	if safe_delta <= 0.0:
@@ -81,6 +110,17 @@ func advance(delta: float) -> void:
 		_fatigue_target,
 		1.0 - exp(-fatigue_speed * safe_delta)
 	)
+	var lateral_acceleration_ratio := clampf(
+		(
+			_lateral_motion_ratio
+			- _previous_lateral_motion_ratio
+		) / (
+			safe_delta * LATERAL_ACCELERATION_FULL_SCALE_PER_SECOND
+		),
+		-1.0,
+		1.0
+	)
+	_previous_lateral_motion_ratio = _lateral_motion_ratio
 	var target_position := (
 		_gait_bob_offset
 		* GAIT_POSITION_INHERITANCE
@@ -96,6 +136,10 @@ func advance(delta: float) -> void:
 			_run_weight,
 			fatigue_weight
 		)
+		+ lateral_position_response(
+			_lateral_motion_ratio,
+			lateral_acceleration_ratio
+		)
 	)
 	var target_rotation := Vector3(
 		_gait_bob_offset.y * GAIT_PITCH_PER_METER,
@@ -110,6 +154,9 @@ func advance(delta: float) -> void:
 		_movement_weight,
 		_run_weight,
 		fatigue_weight
+	) + lateral_rotation_response(
+		_lateral_motion_ratio,
+		lateral_acceleration_ratio
 	)
 	position_offset = _position_spring.advance(
 		target_position,
@@ -120,6 +167,42 @@ func advance(delta: float) -> void:
 		target_rotation,
 		safe_delta,
 		RESPONSE_FREQUENCY_HZ
+	)
+
+
+static func lateral_position_response(
+	lateral_motion_ratio: float,
+	lateral_acceleration_ratio: float
+) -> Vector3:
+	var motion := clampf(lateral_motion_ratio, -1.0, 1.0)
+	var acceleration := clampf(lateral_acceleration_ratio, -1.0, 1.0)
+	return Vector3(
+		motion * LATERAL_SPEED_POSITION_OFFSET
+		- acceleration * LATERAL_ACCELERATION_LAG_OFFSET,
+		-(
+			absf(motion) * LATERAL_SPEED_VERTICAL_DROP
+			+ absf(acceleration) * LATERAL_ACCELERATION_VERTICAL_DROP
+		),
+		0.0
+	)
+
+
+static func lateral_rotation_response(
+	lateral_motion_ratio: float,
+	lateral_acceleration_ratio: float
+) -> Vector3:
+	var motion := clampf(lateral_motion_ratio, -1.0, 1.0)
+	var acceleration := clampf(lateral_acceleration_ratio, -1.0, 1.0)
+	return Vector3(
+		0.0,
+		-(
+			motion * LATERAL_SPEED_YAW
+			+ acceleration * LATERAL_ACCELERATION_YAW
+		),
+		-(
+			motion * LATERAL_SPEED_ROLL
+			+ acceleration * LATERAL_ACCELERATION_ROLL
+		)
 	)
 
 

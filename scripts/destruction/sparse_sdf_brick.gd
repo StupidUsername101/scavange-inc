@@ -60,8 +60,49 @@ func initialize_from_distances(values: PackedFloat32Array) -> void:
 		_write_raw(index, quantize(values[index]))
 
 
+func initialize_from_box_samples(
+	global_sample_origin: Vector3i,
+	field_origin: Vector3,
+	box_half_extents: Vector3
+) -> void:
+	# First-write bricks previously allocated a full float field, filled it, then allocated the
+	# packed field and converted every value a second time. Generate quantized samples directly into
+	# their final storage. The bytes are discarded again if the analytic region is uniform.
+	var count := sample_count()
+	_distance_bytes.resize(count * 2)
+	_uniform = false
+	var first_raw := 0
+	var remains_uniform := true
+	var linear_index := 0
+	for z: int in range(samples_per_axis):
+		var position_z := field_origin.z + float(global_sample_origin.z + z) * voxel_size
+		for y: int in range(samples_per_axis):
+			var position_y := field_origin.y + float(global_sample_origin.y + y) * voxel_size
+			var position_x := field_origin.x + float(global_sample_origin.x) * voxel_size
+			for _x: int in range(samples_per_axis):
+				var raw := quantize(SdfMath.box(
+					Vector3(position_x, position_y, position_z),
+					box_half_extents
+				))
+				position_x += voxel_size
+				if linear_index == 0:
+					first_raw = raw
+				elif raw != first_raw:
+					remains_uniform = false
+				_write_raw(linear_index, raw)
+				linear_index += 1
+	_uniform_raw = first_raw
+	_uniform = remains_uniform
+	if remains_uniform:
+		_distance_bytes.clear()
+
+
 func get_distance(x: int, y: int, z: int) -> float:
 	return dequantize(get_raw(x, y, z))
+
+
+func get_distance_at_index(index: int) -> float:
+	return dequantize(_uniform_raw if _uniform else _read_raw(index))
 
 
 func get_raw(x: int, y: int, z: int) -> int:
@@ -73,8 +114,29 @@ func set_distance(x: int, y: int, z: int, value: float) -> bool:
 	return set_raw(x, y, z, quantize(value))
 
 
+func set_distance_at_index(index: int, value: float) -> bool:
+	return set_raw_at_index(index, quantize(value))
+
+
+func replace_distance_storage(
+	uniform: bool,
+	uniform_raw: int,
+	distance_bytes: PackedByteArray
+) -> bool:
+	if not uniform and distance_bytes.size() != sample_count() * 2:
+		return false
+	_uniform = uniform
+	_uniform_raw = clampi(uniform_raw, MIN_RAW, MAX_RAW)
+	_distance_bytes = PackedByteArray() if uniform else distance_bytes
+	return true
+
+
 func set_raw(x: int, y: int, z: int, value: int) -> bool:
 	var index := sample_index(x, y, z)
+	return set_raw_at_index(index, value)
+
+
+func set_raw_at_index(index: int, value: int) -> bool:
 	var safe_value := clampi(value, MIN_RAW, MAX_RAW)
 	var previous := _uniform_raw if _uniform else _read_raw(index)
 	if previous == safe_value:
@@ -86,23 +148,29 @@ func set_raw(x: int, y: int, z: int, value: int) -> bool:
 
 
 func add_damage(x: int, y: int, z: int, amount: int) -> int:
+	return add_damage_at_index(sample_index(x, y, z), amount)
+
+
+func add_damage_at_index(index: int, amount: int) -> int:
 	if _damage_bytes.is_empty():
 		_damage_bytes.resize(sample_count())
 		_damage_bytes.fill(0)
-	var index := sample_index(x, y, z)
 	var next := clampi(int(_damage_bytes[index]) + amount, 0, 255)
 	_damage_bytes[index] = next
 	return next
 
 
 func set_damage(x: int, y: int, z: int, value: int) -> bool:
+	return set_damage_at_index(sample_index(x, y, z), value)
+
+
+func set_damage_at_index(index: int, value: int) -> bool:
 	var safe_value := clampi(value, 0, 255)
 	if _damage_bytes.is_empty():
 		if safe_value == 0:
 			return false
 		_damage_bytes.resize(sample_count())
 		_damage_bytes.fill(0)
-	var index := sample_index(x, y, z)
 	if int(_damage_bytes[index]) == safe_value:
 		return false
 	_damage_bytes[index] = safe_value
@@ -110,13 +178,42 @@ func set_damage(x: int, y: int, z: int, value: int) -> bool:
 
 
 func get_damage(x: int, y: int, z: int) -> int:
+	return get_damage_at_index(sample_index(x, y, z))
+
+
+func get_damage_at_index(index: int) -> int:
 	if _damage_bytes.is_empty():
 		return 0
-	return int(_damage_bytes[sample_index(x, y, z)])
+	return int(_damage_bytes[index])
 
 
 func has_damage_channel() -> bool:
 	return not _damage_bytes.is_empty()
+
+
+func storage_byte_count() -> int:
+	return _distance_bytes.size() + _damage_bytes.size()
+
+
+func native_is_uniform() -> bool:
+	return _uniform
+
+
+func native_uniform_raw() -> int:
+	return _uniform_raw
+
+
+func native_distance_bytes() -> PackedByteArray:
+	return _distance_bytes
+
+
+func replace_native_distances(values: PackedByteArray, baseline_uniform_raw: int) -> bool:
+	if values.size() != sample_count() * 2:
+		return false
+	_uniform = false
+	_uniform_raw = clampi(baseline_uniform_raw, MIN_RAW, MAX_RAW)
+	_distance_bytes = values
+	return true
 
 
 func compact_if_uniform() -> bool:

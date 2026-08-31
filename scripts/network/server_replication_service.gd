@@ -17,6 +17,8 @@ const PROJECTILE_SNAPSHOT_STREAM := &"projectiles"
 const DRONE_PART_SNAPSHOT_STREAM := &"drone_parts"
 const ENEMY_SNAPSHOT_STREAM := &"enemies"
 const ROPE_SNAPSHOT_STREAM := &"ropes"
+const PLAYER_CORPSE_SNAPSHOT_STREAM := &"player_corpses"
+const DESTRUCTION_FRAGMENT_SNAPSHOT_STREAM := &"destruction_fragments"
 
 #######################################################
 # Owns authoritative snapshot cadence, sequencing, optional-stream lifecycle, and publication.
@@ -27,6 +29,7 @@ var coordinator
 var stream_tracker := SNAPSHOT_STREAM_TRACKER.new()
 var snapshot_sequence := 0
 var item_motion_sequence := 0
+var fragment_motion_sequence := 0
 
 
 func bind(owner: Node) -> void:
@@ -59,6 +62,8 @@ func publish_states() -> void:
 		_publish_drone_part_states(current_sequence)
 		_publish_enemy_states(current_sequence)
 		_publish_rope_states(current_sequence)
+		_publish_player_corpse_states(current_sequence)
+		_publish_destruction_fragment_states(current_sequence)
 	if REPLICATION_SCHEDULE.is_due(
 		current_sequence,
 		REPLICATION_SCHEDULE.STATION_INTERVAL_TICKS
@@ -68,32 +73,55 @@ func publish_states() -> void:
 
 func publish_grabbed_item_motion_states() -> void:
 	item_motion_sequence += 1
+	fragment_motion_sequence += 1
 	if coordinator == null or coordinator.grab_states_by_grabber_id.is_empty():
 		return
-	var states: Dictionary = {}
+	var item_states: Dictionary = {}
+	var fragment_states: Dictionary = {}
 	for grab_state: GrabState in coordinator.grab_states_by_grabber_id.values():
 		if (
 			grab_state == null
 			or not is_instance_valid(grab_state.grabber)
 			or not is_instance_valid(grab_state.body)
-			or not grab_state.body is ServerItem
 		):
 			continue
-		var item := grab_state.body as ServerItem
-		var state := item.to_motion_state_dict()
-		state["item_motion_sequence"] = item_motion_sequence
-		state["grabber_player_id"] = _grabber_player_id(grab_state.grabber)
-		states[item.item_id] = state
-	if states.is_empty():
+		var grabber_player_id := _grabber_player_id(grab_state.grabber)
+		if grab_state.body is ServerItem:
+			var item := grab_state.body as ServerItem
+			var item_state := item.to_motion_state_dict()
+			item_state["item_motion_sequence"] = item_motion_sequence
+			item_state["grabber_player_id"] = grabber_player_id
+			item_states[item.item_id] = item_state
+		elif grab_state.body.has_method("to_motion_state_dict"):
+			var fragment_id := SafeVariant.integral_int_or(
+				grab_state.body.get("fragment_id"),
+				-1
+			)
+			if fragment_id < 0:
+				continue
+			var fragment_state := (
+				grab_state.body.call("to_motion_state_dict") as Dictionary
+			)
+			fragment_state["fragment_motion_sequence"] = fragment_motion_sequence
+			fragment_state["grabber_player_id"] = grabber_player_id
+			fragment_states[fragment_id] = fragment_state
+	if item_states.is_empty() and fragment_states.is_empty():
 		return
 	# The listen-server presentation follows its authoritative body directly; only remote peers
 	# need serialized interpolation deltas.
 	for peer_id: int in coordinator.multiplayer.get_peers():
-		Client.rpc_id(
-			peer_id,
-			"on_grabbed_item_motion_states_received",
-			states
-		)
+		if not item_states.is_empty():
+			Client.rpc_id(
+				peer_id,
+				"on_grabbed_item_motion_states_received",
+				item_states
+			)
+		if not fragment_states.is_empty():
+			Client.rpc_id(
+				peer_id,
+				"on_grabbed_destruction_fragment_motion_states_received",
+				fragment_states
+			)
 
 
 func force_optional_snapshot_refresh() -> void:
@@ -103,6 +131,8 @@ func force_optional_snapshot_refresh() -> void:
 	stream_tracker.force_next_publish(DRONE_PART_SNAPSHOT_STREAM)
 	stream_tracker.force_next_publish(ENEMY_SNAPSHOT_STREAM)
 	stream_tracker.force_next_publish(ROPE_SNAPSHOT_STREAM)
+	stream_tracker.force_next_publish(PLAYER_CORPSE_SNAPSHOT_STREAM)
+	stream_tracker.force_next_publish(DESTRUCTION_FRAGMENT_SNAPSHOT_STREAM)
 
 
 func publish_all_player_inventories_to_peer(peer_id: int) -> void:
@@ -141,6 +171,7 @@ func reset() -> void:
 	stream_tracker.reset()
 	snapshot_sequence = 0
 	item_motion_sequence = 0
+	fragment_motion_sequence = 0
 
 
 func _publish_player_states(current_sequence: int) -> void:
@@ -266,6 +297,46 @@ func _publish_rope_states(current_sequence: int) -> void:
 		Client.rpc("on_rope_states_received", states)
 
 
+func _publish_player_corpse_states(current_sequence: int) -> void:
+	if coordinator.server_player_corpses_by_id.is_empty():
+		if stream_tracker.should_publish(PLAYER_CORPSE_SNAPSHOT_STREAM, false):
+			Client.rpc("on_player_corpse_states_received", {})
+		return
+	var states: Dictionary = {}
+	for corpse_id: int in coordinator.server_player_corpses_by_id:
+		var state: Dictionary = coordinator.build_player_corpse_state(corpse_id)
+		if not state.is_empty():
+			states[corpse_id] = _sequence_state(state, current_sequence)
+	if stream_tracker.should_publish(
+		PLAYER_CORPSE_SNAPSHOT_STREAM,
+		not states.is_empty()
+	):
+		Client.rpc("on_player_corpse_states_received", states)
+
+
+func _publish_destruction_fragment_states(current_sequence: int) -> void:
+	if coordinator.server_destruction_fragments_by_id.is_empty():
+		if stream_tracker.should_publish(DESTRUCTION_FRAGMENT_SNAPSHOT_STREAM, false):
+			Client.rpc("on_destruction_fragment_states_received", {})
+		return
+	var states: Dictionary = {}
+	var grabber_player_ids := _grabbed_fragment_player_ids()
+	for fragment_id: int in coordinator.server_destruction_fragments_by_id:
+		var fragment: Node = coordinator.server_destruction_fragments_by_id[fragment_id]
+		if is_instance_valid(fragment):
+			var state := _sequence_state(
+				fragment.call("to_state_dict") as Dictionary,
+				current_sequence
+			)
+			state["grabber_player_id"] = int(grabber_player_ids.get(fragment_id, -1))
+			states[fragment_id] = state
+	if stream_tracker.should_publish(
+		DESTRUCTION_FRAGMENT_SNAPSHOT_STREAM,
+		not states.is_empty()
+	):
+		Client.rpc("on_destruction_fragment_states_received", states)
+
+
 func _publish_station_states(current_sequence: int) -> void:
 	var inspection_states: Dictionary = {}
 	for station_id: int in coordinator.inspection_stations_by_id:
@@ -339,6 +410,21 @@ func _publish_radio_states() -> void:
 				coordinator.acoustic_service,
 				listener.get_rid()
 			)
+		for enemy_id: int in coordinator.server_enemies_by_enemy_id:
+			var enemy: ServerEnemy = coordinator.server_enemies_by_enemy_id[enemy_id]
+			if (
+				not is_instance_valid(enemy)
+				or not enemy.has_method("build_flute_listener_state")
+			):
+				continue
+			var enemy_audio_state := enemy.build_flute_listener_state(
+				player_id,
+				listener_position,
+				coordinator.acoustic_service,
+				listener.get_rid()
+			)
+			if not enemy_audio_state.is_empty():
+				radio_states[enemy.get_continuous_audio_source_id()] = enemy_audio_state
 		var payload := RADIO_STATE_SNAPSHOT_CODEC.encode(radio_states)
 		if payload.is_empty():
 			push_warning("Continuous audio snapshot exceeded its bounded wire contract")
@@ -390,6 +476,26 @@ func _grabbed_item_player_ids() -> Dictionary[int, int]:
 			continue
 		var item := grab_state.body as ServerItem
 		result[item.item_id] = _grabber_player_id(grab_state.grabber)
+	return result
+
+
+func _grabbed_fragment_player_ids() -> Dictionary[int, int]:
+	var result: Dictionary[int, int] = {}
+	for grab_state: GrabState in coordinator.grab_states_by_grabber_id.values():
+		if (
+			grab_state == null
+			or not is_instance_valid(grab_state.grabber)
+			or not is_instance_valid(grab_state.body)
+			or grab_state.body is ServerItem
+			or not grab_state.body.has_method("to_motion_state_dict")
+		):
+			continue
+		var fragment_id := SafeVariant.integral_int_or(
+			grab_state.body.get("fragment_id"),
+			-1
+		)
+		if fragment_id >= 0:
+			result[fragment_id] = _grabber_player_id(grab_state.grabber)
 	return result
 
 

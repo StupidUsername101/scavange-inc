@@ -24,8 +24,15 @@ const EFFECT_FOLLOW_SPEED := 38.0
 const VOLUME_FOLLOW_SPEED := 36.0
 const VOLUME_MAX_SLEW_DB_PER_SECOND := 42.0
 const SHARED_DIRECT_EFFECT_FOLLOW_SPEED := 28.0
-const SHARED_LATE_FIELD_FOLLOW_SPEED := 8.0
-const SHARED_LATE_FIELD_MAX_SLEW_DB_PER_SECOND := 16.0
+# Direct and indirect outputs describe one propagated source field. Their level envelopes must track
+# listener motion at the same rate; otherwise the dry cabinets can leave first and make an already
+# fading Hall swell perceptually outside a doorway. Room colour and decay remain on the slower
+# effect follower below, and undriven tails still use the independent RT60-aware retirement path.
+# Network snapshots arrive every 50 ms. Interpolating the authoritative wet/direct ratio to one
+# percent residual over exactly that interval removes packet steps without retaining room energy for
+# a second listener-motion time constant. `-log(0.01) / 0.05` is 92.1034.
+const SHARED_SPATIAL_RATIO_FOLLOW_SPEED := 92.1034
+const SHARED_LATE_FIELD_EFFECT_FOLLOW_SPEED := 8.0
 const SHARED_LATE_FIELD_BLOOM_MAX_GAIN_DB := 1.5
 const SHARED_DIRECTIONAL_REDISTRIBUTION_MAX_GAIN_DB := 12.0
 const MISSING_STATE_FADE_DB_PER_SECOND := 120.0
@@ -111,6 +118,7 @@ var _slot_shared_program_group_ids := PackedInt64Array()
 var _shared_program_group_ids := PackedInt64Array()
 var _shared_program_band_power_sums: Array[Vector3] = []
 var _shared_program_band_amplitude_sums: Array[Vector3] = []
+var _shared_program_direct_target_power_sums := PackedFloat64Array()
 var _shared_program_offsets := PackedFloat32Array()
 var _shared_program_start_delays := PackedFloat32Array()
 var _shared_program_group_slots := PackedInt32Array()
@@ -122,6 +130,9 @@ var _shared_program_players: Array[AudioStreamPlayer] = []
 var _shared_program_bus_group_ids := PackedInt64Array()
 var _shared_program_target_packets: Array[Dictionary] = []
 var _shared_program_target_volumes_db := PackedFloat32Array()
+var _shared_program_target_direct_volumes_db := PackedFloat32Array()
+var _shared_program_presented_wet_to_direct_db := PackedFloat32Array()
+var _shared_program_ratio_initialized := PackedByteArray()
 var _shared_program_group_active := PackedByteArray()
 var _shared_program_revisions := PackedInt32Array()
 var _shared_program_song_paths: Array[String] = []
@@ -171,6 +182,7 @@ func _prepare_shared_program_mix(packets: Array[Dictionary]) -> void:
 	_shared_program_group_ids.clear()
 	_shared_program_band_power_sums.clear()
 	_shared_program_band_amplitude_sums.clear()
+	_shared_program_direct_target_power_sums.clear()
 	_shared_program_offsets.clear()
 	_shared_program_start_delays.clear()
 	_shared_program_group_slots.clear()
@@ -178,6 +190,9 @@ func _prepare_shared_program_mix(packets: Array[Dictionary]) -> void:
 	_shared_program_acoustic_accumulators.clear()
 	_shared_program_group_active.fill(0)
 	_shared_program_target_volumes_db.fill(
+		AcousticPathModifier.MIN_VOLUME_DB
+	)
+	_shared_program_target_direct_volumes_db.fill(
 		AcousticPathModifier.MIN_VOLUME_DB
 	)
 	for packet: Dictionary in packets:
@@ -190,6 +205,7 @@ func _prepare_shared_program_mix(packets: Array[Dictionary]) -> void:
 			_shared_program_group_ids.append(group_id)
 			_shared_program_band_power_sums.append(Vector3.ZERO)
 			_shared_program_band_amplitude_sums.append(Vector3.ZERO)
+			_shared_program_direct_target_power_sums.append(0.0)
 			_shared_program_offsets.append(0.0)
 			_shared_program_start_delays.append(INF)
 			_shared_program_group_slots.append(
@@ -305,6 +321,10 @@ func _prepare_shared_program_mix(packets: Array[Dictionary]) -> void:
 			+ normalization_db,
 			AcousticPathModifier.MIN_VOLUME_DB
 		)
+		_shared_program_direct_target_power_sums[group_index] += pow(
+			10.0,
+			float(packet["volume_db"]) / 10.0
+		)
 		packet["playback_offset_seconds"] = _shared_program_offsets[group_index]
 		packet["start_delay_seconds"] = _shared_program_start_delays[group_index]
 		packet["shared_program_normalization_db"] = normalization_db
@@ -316,6 +336,9 @@ func _prepare_shared_program_mix(packets: Array[Dictionary]) -> void:
 		var group_slot := _shared_program_group_slots[group_index]
 		if group_slot < 0:
 			continue
+		_shared_program_target_direct_volumes_db[group_slot] = (
+			_power_sum_db(_shared_program_direct_target_power_sums[group_index])
+		)
 		var target := _finalize_shared_program_acoustics(
 			_shared_program_acoustic_accumulators[group_index]
 		)
@@ -493,6 +516,7 @@ func _ensure_shared_program_group_slot(group_id: int) -> int:
 			_shared_program_bus_group_ids[group_slot] = group_id
 			_shared_program_racks[group_slot].reset_state()
 			_shared_program_target_packets[group_slot] = {}
+			_shared_program_ratio_initialized[group_slot] = 0
 			AudioServer.set_bus_volume_db(
 				_shared_program_racks[group_slot].bus_index,
 				0.0
@@ -521,6 +545,45 @@ static func shared_program_normalization_db(
 		10.0 * log(safe_power) / log(10.0)
 		- 20.0 * log(safe_amplitude) / log(10.0),
 		0.0
+	)
+
+
+static func _power_sum_db(power_sum: float) -> float:
+	return maxf(
+		10.0 * log(maxf(power_sum, 0.000000000001)) / log(10.0),
+		AcousticPathModifier.MIN_VOLUME_DB
+	)
+
+
+func _shared_program_direct_level_db(
+	group_id: int,
+	presented: bool
+) -> float:
+	var power_sum := 0.0
+	for slot_index: int in range(_slot_item_ids.size()):
+		if (
+			_slot_item_ids[slot_index] < 0
+			or _slot_shared_program_group_ids[slot_index] != group_id
+		):
+			continue
+		var volume_db := (
+			_players[slot_index].volume_db
+			if presented
+			else _target_volumes_db[slot_index]
+		)
+		power_sum += pow(10.0, volume_db / 10.0)
+	return _power_sum_db(power_sum)
+
+
+func _shared_program_target_ratio_db(group_slot: int) -> float:
+	if (
+		group_slot < 0
+		or group_slot >= _shared_program_target_volumes_db.size()
+	):
+		return 0.0
+	return (
+		_shared_program_target_volumes_db[group_slot]
+		- _shared_program_target_direct_volumes_db[group_slot]
 	)
 
 
@@ -565,6 +628,11 @@ func reset_session() -> void:
 		_shared_program_target_volumes_db[group_slot] = (
 			AcousticPathModifier.MIN_VOLUME_DB
 		)
+		_shared_program_target_direct_volumes_db[group_slot] = (
+			AcousticPathModifier.MIN_VOLUME_DB
+		)
+		_shared_program_presented_wet_to_direct_db[group_slot] = 0.0
+		_shared_program_ratio_initialized[group_slot] = 0
 		_shared_program_group_active[group_slot] = 0
 		_shared_program_revisions[group_slot] = -1
 		_shared_program_song_paths[group_slot] = ""
@@ -884,8 +952,12 @@ func _process(delta: float) -> void:
 
 
 func _update_shared_program_late_fields(delta: float) -> void:
-	var late_field_weight := _follow_weight(
-		SHARED_LATE_FIELD_FOLLOW_SPEED,
+	var spatial_ratio_weight := _follow_weight(
+		SHARED_SPATIAL_RATIO_FOLLOW_SPEED,
+		delta
+	)
+	var late_field_effect_weight := _follow_weight(
+		SHARED_LATE_FIELD_EFFECT_FOLLOW_SPEED,
 		delta
 	)
 	for group_slot: int in range(_shared_program_racks.size()):
@@ -914,26 +986,50 @@ func _update_shared_program_late_fields(delta: float) -> void:
 			target,
 			spectral_bloom
 		)
-		var target_volume_db := (
-			_shared_program_target_volumes_db[group_slot]
-			+ bloom_gain_db
-		)
-		var desired_volume_db := target_volume_db + _foreground_duck_db(
-			target_volume_db
-		)
-		player.volume_db = _approach_volume_db(
-			player.volume_db,
-			desired_volume_db,
-			late_field_weight,
-			(
-				MISSING_STATE_FADE_DB_PER_SECOND
-				if _shared_program_group_active[group_slot] == 0
-				else SHARED_LATE_FIELD_MAX_SLEW_DB_PER_SECOND
-			) * maxf(delta, 0.0)
-		)
+		if _shared_program_group_active[group_slot] == 0:
+			# Once the authoritative input disappears, the ordinary input fade and the populated DSP
+			# return own the tail. This is deliberately separate from listener-motion coupling.
+			player.volume_db = _approach_volume_db(
+				player.volume_db,
+				AcousticPathModifier.MIN_VOLUME_DB,
+				1.0,
+				MISSING_STATE_FADE_DB_PER_SECOND * maxf(delta, 0.0)
+			)
+		else:
+			var target_ratio_db := _shared_program_target_ratio_db(group_slot)
+			if _shared_program_ratio_initialized[group_slot] == 0:
+				_shared_program_presented_wet_to_direct_db[group_slot] = (
+					target_ratio_db
+				)
+				_shared_program_ratio_initialized[group_slot] = 1
+			else:
+				_shared_program_presented_wet_to_direct_db[group_slot] = lerpf(
+					_shared_program_presented_wet_to_direct_db[group_slot],
+					target_ratio_db,
+					spatial_ratio_weight
+				)
+			# Follow the energy that the direct cabinet voices actually present this frame. The
+			# authoritative wet/direct ratio may interpolate, but it cannot acquire a second absolute
+			# gain envelope and remain indoors after the cabinets have already moved outdoors.
+			var presented_direct_db := _shared_program_direct_level_db(
+				group_id,
+				true
+			)
+			# Drive the reverb from the same presented source energy as the cabinet group, then apply
+			# wet/direct spatial gain after the populated delay network. A pre-effect-only fade cannot
+			# remove old indoor samples already circulating in an eight-second room.
+			player.volume_db = clampf(
+				presented_direct_db,
+				AcousticPathModifier.MIN_VOLUME_DB,
+				AcousticPathModifier.MAX_VOLUME_DB
+			)
+			_shared_program_racks[group_slot].set_presentation_gain_db(
+				_shared_program_presented_wet_to_direct_db[group_slot]
+				+ bloom_gain_db
+			)
 		_shared_program_racks[group_slot].approach_acoustic(
 			target,
-			late_field_weight,
+			late_field_effect_weight,
 			spectral_bloom,
 			false,
 			true
@@ -1226,6 +1322,14 @@ func _ensure_shared_program_bus_pool() -> void:
 	_shared_program_bus_group_ids.fill(-1)
 	_shared_program_target_volumes_db.resize(MAX_RADIO_VOICES)
 	_shared_program_target_volumes_db.fill(AcousticPathModifier.MIN_VOLUME_DB)
+	_shared_program_target_direct_volumes_db.resize(MAX_RADIO_VOICES)
+	_shared_program_target_direct_volumes_db.fill(
+		AcousticPathModifier.MIN_VOLUME_DB
+	)
+	_shared_program_presented_wet_to_direct_db.resize(MAX_RADIO_VOICES)
+	_shared_program_presented_wet_to_direct_db.fill(0.0)
+	_shared_program_ratio_initialized.resize(MAX_RADIO_VOICES)
+	_shared_program_ratio_initialized.fill(0)
 	_shared_program_group_active.resize(MAX_RADIO_VOICES)
 	_shared_program_group_active.fill(0)
 	_shared_program_revisions.resize(MAX_RADIO_VOICES)
@@ -1536,8 +1640,15 @@ func _activate_shared_program_late_field(
 	player.stop()
 	_shared_program_racks[group_slot].prepare_for_input()
 	player.stream = stream
-	player.volume_db = (
-		_shared_program_target_volumes_db[group_slot] - NEW_VOICE_FADE_IN_DB
+	var target_ratio_db := _shared_program_target_ratio_db(group_slot)
+	_shared_program_presented_wet_to_direct_db[group_slot] = target_ratio_db
+	_shared_program_ratio_initialized[group_slot] = 1
+	_shared_program_racks[group_slot].set_presentation_gain_db(target_ratio_db)
+	player.volume_db = clampf(
+		_shared_program_target_direct_volumes_db[group_slot]
+		- NEW_VOICE_FADE_IN_DB,
+		AcousticPathModifier.MIN_VOLUME_DB,
+		AcousticPathModifier.MAX_VOLUME_DB
 	)
 	var target := _shared_program_target_packets[group_slot]
 	if not target.is_empty():

@@ -6,6 +6,7 @@ extends StaticBody3D
 
 var destruction_volume: DestructibleVolume3D
 var chunk_coordinate := Vector3i.ZERO
+var _damage_call_active := false
 
 
 func configure(
@@ -35,4 +36,11 @@ func accepts_current_sdf_hit(world_position: Vector3, world_direction: Vector3) 
 func apply_damage_event(event: DamageEvent) -> Dictionary:
 	if destruction_volume == null:
 		return {"changed": false, "reason": &"missing_volume"}
-	return destruction_volume.apply_authoritative_damage_event(event)
+	_damage_call_active = true
+	var result := destruction_volume.apply_authoritative_damage_event(event)
+	_damage_call_active = false
+	return result
+
+
+func damage_call_is_active() -> bool:
+	return _damage_call_active

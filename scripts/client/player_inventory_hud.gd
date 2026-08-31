@@ -33,6 +33,9 @@ var equipment: Dictionary = {}
 var interaction_hint := ""
 var hold_progress := 0.0
 var weapon_reload_ratio := 0.0
+var plasma_cutter_selected := false
+var plasma_cutter_heat_ratio := 0.0
+var plasma_cutter_overheated := false
 var displayed_inventory_width := SLOT_SIZE.x
 var capacity_pulse := 0.0
 
@@ -60,6 +63,22 @@ func apply_player_state(state: Dictionary, apply_inventory := true) -> void:
 		SafeVariant.finite_float_or(state.get("weapon_reload_ratio", 0.0), 0.0),
 		0.0,
 		1.0
+	)
+	plasma_cutter_selected = SafeVariant.strict_bool_or(
+		state.get("plasma_cutter_available", false),
+		false
+	)
+	plasma_cutter_heat_ratio = clampf(
+		SafeVariant.finite_float_or(
+			state.get("plasma_cutter_heat_ratio", 0.0),
+			0.0
+		),
+		0.0,
+		1.0
+	)
+	plasma_cutter_overheated = SafeVariant.strict_bool_or(
+		state.get("plasma_cutter_overheated", false),
+		false
 	)
 
 	if apply_inventory:
@@ -243,6 +262,25 @@ func _draw_inventory() -> void:
 					)
 				),
 				COLOR_STAMINA
+			)
+		if selected and plasma_cutter_selected:
+			var heat_color := (
+				COLOR_HEALTH
+				if plasma_cutter_overheated
+				else COLOR_STAMINA.lerp(
+					COLOR_HEALTH,
+					plasma_cutter_heat_ratio * plasma_cutter_heat_ratio
+				)
+			)
+			draw_rect(
+				Rect2(
+					slot_rect.position + Vector2(3.0, slot_rect.size.y - 4.0),
+					Vector2(
+						(slot_rect.size.x - 6.0) * plasma_cutter_heat_ratio,
+						2.0
+					)
+				),
+				heat_color
 			)
 
 	_draw_equipment_badges(bar_origin, visual_width)

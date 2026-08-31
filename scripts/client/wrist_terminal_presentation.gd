@@ -7,9 +7,6 @@ const TERMINAL_VIEW := preload(
 const TERMINAL_SHADER := preload(
 	"res://shaders/inspection_terminal_crt.gdshader"
 )
-const HELD_DEVICE_MOTION := preload(
-	"res://scripts/characters/first_person_held_device_motion.gd"
-)
 const LISTENER_ACTIVITY := preload(
 	"res://scripts/audio/listener_acoustic_activity.gd"
 )
@@ -65,10 +62,6 @@ const SCREEN_NEON_GLOW_RADIUS_PIXELS := 1.65
 const SCREEN_NEON_GLOW_STRENGTH := 0.14
 const SCREEN_COLOR_BLEED_STRENGTH := 0.12
 const SHADER_TIME_ROLLOVER_SECONDS := 3600.0
-const OPEN_POSITION := Vector3(-0.055, -0.105, -0.44)
-const CLOSED_POSITION := Vector3(0.46, -0.68, -0.61)
-const OPEN_ROTATION := Vector3(-0.04, 0.015, 0.025)
-const CLOSED_ROTATION := Vector3(0.24, -0.38, -0.52)
 const PRESENTATION_SPEED := 7.5
 const HOVER_SOUND_COOLDOWN_MSEC := 80
 const INPUT_RAY_PARALLEL_EPSILON := 0.000001
@@ -88,22 +81,23 @@ signal device_command_requested(
 signal display_page_changed(page: StringName)
 
 #######################################################
-# Presents the first-person wrist rig and forwards pointer input into its real 3D screen.
+# Drives the equipped Fieldlink's real curved screen and its colocated invisible pointer surface.
 #######################################################
 
-@onready var terminal_screen: MeshInstance3D = (
-	$DeviceMount/CorporateFieldTerminalVisual/TechScreenHousing/
-	screen_etx_1_partial/screen_etx_1_partial_round_screen
+const TERMINAL_SCREEN_PATH := NodePath(
+	"TechScreenHousing/screen_etx_1_partial/"
+	+ "screen_etx_1_partial_round_screen"
 )
+
+var terminal_screen: MeshInstance3D
 @onready var terminal_input_surface: MeshInstance3D = (
-	$DeviceMount/TerminalInputSurface
+	$TerminalInputSurface
 )
-@onready var forearm: MeshInstance3D = $Forearm
-@onready var hand: MeshInstance3D = $Hand
 
 var terminal_viewport: SubViewport
 var terminal_view: WristTerminalView
 var camera: Camera3D
+var equipped_visual: Node3D
 var open_target := false
 var presentation_weight := 0.0
 var session_label := "OFFLINE"
@@ -112,7 +106,6 @@ var last_hover_sound_msec := -HOVER_SOUND_COOLDOWN_MSEC
 var scanner_contacts: Array[Dictionary] = []
 var scanner_range_meters := 36.0
 var scanner_heading_yaw := 0.0
-var held_device_motion := HELD_DEVICE_MOTION.new()
 var acoustic_intensity_provider := Callable()
 var acoustic_intensity_target := 0.0
 var acoustic_intensity := 0.0
@@ -120,14 +113,34 @@ var acoustic_glitch_drive := 0.0
 var terminal_screen_material: ShaderMaterial
 var display_page: StringName = FIELDLINK_DISPLAY_STATE.PAGE_HOME
 var pointer_position := Vector2(SCREEN_VIEWPORT_SIZE) * 0.5
+var wrist_mount: Node3D
 
 
 func _ready() -> void:
 	camera = get_parent() as Camera3D
-	position = CLOSED_POSITION
-	rotation = CLOSED_ROTATION
 	visible = false
 	set_process(false)
+
+
+func bind_camera(next_camera: Camera3D) -> void:
+	camera = next_camera
+
+
+func bind_equipped_visual(visual: Node3D) -> bool:
+	equipped_visual = visual
+	terminal_screen = null
+	if not is_instance_valid(equipped_visual):
+		return false
+	terminal_screen = equipped_visual.get_node_or_null(
+		TERMINAL_SCREEN_PATH
+	) as MeshInstance3D
+	if terminal_screen == null:
+		push_warning("Equipped Fieldlink visual has no authored terminal screen")
+		return false
+	if terminal_screen_material != null:
+		terminal_screen.material_override = terminal_screen_material
+	global_transform = equipped_visual.global_transform
+	return true
 
 
 func set_open(value: bool) -> void:
@@ -228,28 +241,12 @@ func apply_device_control_error(contact_id: StringName, message: String) -> void
 		terminal_view.apply_device_control_error(contact_id, message)
 
 
-func set_wrist_side(use_left_arm: bool) -> void:
-	var side := 1.0 if use_left_arm else -1.0
-	forearm.position.x = -0.215 * side
-	forearm.rotation.z = -0.78 * side
-	hand.position.x = 0.205 * side
-	hand.rotation.z = -1.03 * side
-
-
-func set_motion_input(
-	head_bob_offset: Vector3,
-	movement_weight: float,
-	endurance_spent_ratio: float = 0.0,
-	gait_cycle: float = 0.0,
-	run_weight: float = 0.0
-) -> void:
-	held_device_motion.set_gait_input(
-		head_bob_offset,
-		movement_weight,
-		gait_cycle,
-		run_weight
-	)
-	held_device_motion.set_endurance_spent_ratio(endurance_spent_ratio)
+func bind_wrist_mount(mount: Node3D) -> void:
+	wrist_mount = mount
+	if is_instance_valid(equipped_visual):
+		global_transform = equipped_visual.global_transform
+	elif is_instance_valid(wrist_mount):
+		global_transform = wrist_mount.global_transform
 
 
 func set_acoustic_intensity_provider(provider: Callable) -> void:
@@ -289,21 +286,17 @@ func _process(delta: float) -> void:
 			"acoustic_glitch_drive",
 			acoustic_glitch_drive
 		)
-	held_device_motion.advance(delta)
 	presentation_weight = move_toward(
 		presentation_weight,
 		1.0 if open_target else 0.0,
 		PRESENTATION_SPEED * maxf(delta, 0.0)
 	)
-	var eased_weight := smoothstep(0.0, 1.0, presentation_weight)
-	position = (
-		CLOSED_POSITION.lerp(OPEN_POSITION, eased_weight)
-		+ held_device_motion.position_offset * eased_weight
-	)
-	rotation = (
-		CLOSED_ROTATION.lerp(OPEN_ROTATION, eased_weight)
-		+ held_device_motion.rotation_offset * eased_weight
-	)
+	if is_instance_valid(equipped_visual):
+		# Match the equipped visual itself, including its wearable scale. The visible device remains
+		# the actual item on the skeleton while this node contributes only the input surface.
+		global_transform = equipped_visual.global_transform
+	elif is_instance_valid(wrist_mount):
+		global_transform = wrist_mount.global_transform
 	if not open_target and presentation_weight <= 0.0001:
 		visible = false
 		set_process(false)
@@ -463,7 +456,8 @@ func _ensure_interface() -> void:
 		terminal_viewport.get_texture(),
 		acoustic_intensity
 	)
-	terminal_screen.material_override = terminal_screen_material
+	if terminal_screen != null:
+		terminal_screen.material_override = terminal_screen_material
 
 
 static func create_screen_material(
@@ -599,7 +593,11 @@ static func screen_acoustic_glitch_drive(value: float) -> float:
 
 
 func _restart_refresh_lines() -> void:
-	var material := terminal_screen.material_override as ShaderMaterial
+	var material := (
+		terminal_screen.material_override as ShaderMaterial
+		if terminal_screen != null
+		else null
+	)
 	restart_screen_refresh(material)
 
 

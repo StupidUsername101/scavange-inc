@@ -3,6 +3,7 @@ class_name RadioItemDefinition
 extends ItemDefinition
 
 const MUSIC_ROOT := "res://assets/sounds/music"
+const GAMEPLAY_PROGRAM_ROOT := MUSIC_ROOT + "/gameplay"
 const MUSIC_EXTENSIONS: Array[String] = ["mp3", "ogg", "wav"]
 
 ## Item data shared by the authoritative radio body and each client's local renderer.
@@ -34,7 +35,15 @@ func discover_song_paths() -> Array[String]:
 	var directory := _sanitized_music_directory()
 	if directory.is_empty():
 		return []
-	return ResourcePathDiscovery.collect(directory, MUSIC_EXTENSIONS)
+	var discovered := ResourcePathDiscovery.collect(directory, MUSIC_EXTENSIONS)
+	var result: Array[String] = []
+	for path: String in discovered:
+		# Continuous gameplay programs (enemy instruments, alarms, machinery) use the same hardened
+		# renderer but must never become random user-selectable radio tracks merely because the packet
+		# boundary intentionally restricts all streams to one safe audio root.
+		if not path.begins_with(GAMEPLAY_PROGRAM_ROOT + "/"):
+			result.append(path)
+	return result
 
 
 func get_speaker_world_position(item_transform: Transform3D) -> Vector3:

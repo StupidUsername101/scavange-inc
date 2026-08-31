@@ -66,6 +66,7 @@ var _spectrum_effect_index := -1
 var _persistent_processing := false
 var _early_reflection_ids := PackedInt32Array([-1, -1])
 var _tail_floor_gain_db := 0.0
+var _presentation_gain_db := 0.0
 var _tail_floor_tapering := false
 var _tail_floor_armed := false
 var _tail_floor_undriven_seconds := 0.0
@@ -409,7 +410,7 @@ func prepare_for_input() -> void:
 	_tail_floor_undriven_seconds = 0.0
 	_reverb_topology_initialized = false
 	if bus_index >= 0:
-		AudioServer.set_bus_volume_db(bus_index, 0.0)
+		_apply_output_gain()
 		if tail_lowpass != null:
 			tail_lowpass.cutoff_hz = AcousticPathModifier.MAX_FILTER_HZ
 		AudioServer.set_bus_effect_enabled(
@@ -470,7 +471,7 @@ func update_tail_floor(input_driven: bool, delta: float) -> void:
 		1.0
 	)
 	_apply_tail_lowpass(gain_darken_progress)
-	AudioServer.set_bus_volume_db(bus_index, _tail_floor_gain_db)
+	_apply_output_gain()
 	if _tail_floor_gain_db <= TAIL_FLOOR_SILENT_DB + 0.001:
 		_tail_floor_armed = false
 
@@ -486,14 +487,41 @@ func reset_state() -> void:
 	):
 		AudioServer.remove_bus_effect(bus_index, effect_index)
 	_tail_floor_gain_db = 0.0
+	_presentation_gain_db = 0.0
 	_tail_floor_tapering = false
 	_tail_floor_armed = false
 	_tail_floor_undriven_seconds = 0.0
 	_tail_expected_decay_seconds = 0.25
 	_reverb_topology_initialized = false
-	AudioServer.set_bus_volume_db(bus_index, 0.0)
+	_apply_output_gain()
 	_early_reflection_ids = PackedInt32Array([-1, -1])
 	_ensure_effect_layout(_persistent_processing)
+
+
+func set_presentation_gain_db(gain_db: float) -> void:
+	_presentation_gain_db = clampf(
+		gain_db,
+		AcousticPathModifier.MIN_VOLUME_DB,
+		AcousticPathModifier.MAX_VOLUME_DB
+	)
+	_apply_output_gain()
+
+
+func get_presentation_gain_db() -> float:
+	return _presentation_gain_db
+
+
+func _apply_output_gain() -> void:
+	if bus_index < 0:
+		return
+	AudioServer.set_bus_volume_db(
+		bus_index,
+		clampf(
+			_presentation_gain_db + _tail_floor_gain_db,
+			AcousticPathModifier.MIN_VOLUME_DB,
+			AcousticPathModifier.MAX_VOLUME_DB
+		)
+	)
 
 
 func _apply_tail_lowpass(progress: float) -> void:

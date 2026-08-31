@@ -35,35 +35,23 @@ func _run() -> void:
 
 func _test_shared_layout_contract() -> void:
 	var descriptors := LAYOUT.structural_boxes()
-	var ramp_count := 0
+	var annex_descriptor_count := 0
 	var tunnel_shell_count := LAYOUT.tunnel_structural_boxes().size()
 	for descriptor: Dictionary in descriptors:
 		var name := str(descriptor.get("name", ""))
-		if name.begins_with("BuildingRamp"):
-			ramp_count += 1
+		if name.begins_with("Building"):
+			annex_descriptor_count += 1
 	_expect(
-		LAYOUT.STOREY_COUNT >= 3 and ramp_count == LAYOUT.STOREY_COUNT - 1,
-		"the replacement building has three accessible storeys and two continuous ramps"
+		annex_descriptor_count == 0,
+		"the retired acoustic annex contributes no hidden collision or presentation descriptors"
 	)
-	var tread_descriptors := LAYOUT.stair_tread_boxes()
-	var treads_are_horizontal := true
-	for descriptor: Dictionary in tread_descriptors:
-		treads_are_horizontal = (
-			treads_are_horizontal
-			and (descriptor.get("rotation", Vector3.ZERO) as Vector3)
-			.is_zero_approx()
-		)
 	_expect(
-		tread_descriptors.size()
-		== (LAYOUT.STOREY_COUNT - 1) * LAYOUT.STAIR_TREAD_COUNT
-		and LAYOUT.foot_contact_boxes().size()
+		LAYOUT.foot_contact_boxes().size()
 		== (
 			descriptors.size()
-			+ tread_descriptors.size()
 			+ LAYOUT.parkour_contact_detail_boxes().size()
-		)
-		and treads_are_horizontal,
-		"smooth movement ramps expose generated horizontal presentation treads for procedural feet"
+		),
+		"foot-contact geometry contains only active structures and the dedicated movement course"
 	)
 	_expect(
 		LAYOUT.TUNNEL_LENGTH >= 40.0
@@ -77,10 +65,8 @@ func _test_shared_layout_contract() -> void:
 		"three eight-module bunker runs expose progressively larger clearances"
 	)
 	_expect(
-		LAYOUT.building_floor_probe_positions().size() == LAYOUT.STOREY_COUNT
-		and LAYOUT.building_room_probe_descriptors().size() == 24
-		and LAYOUT.tunnel_probe_positions().size() >= 11,
-		"shared layout exposes a dense room grid and a four-metre tunnel chain"
+		LAYOUT.tunnel_probe_positions().size() >= 11,
+		"shared layout retains the four-metre tunnel probe chain after removing the annex"
 	)
 	var hall_volume := (
 		LAYOUT.LARGE_BUNKER_WIDTH
@@ -172,6 +158,7 @@ func _test_shared_layout_contract() -> void:
 	)
 	var nature_clear := true
 	var parkour_nature_clear := true
+	var warehouse_nature_clear := true
 	for descriptor: Dictionary in NATURE_LAYOUT.visual_descriptors():
 		var nature_position: Vector3 = descriptor.get("position", Vector3.ZERO)
 		var hall_delta := Vector2(nature_position.x, nature_position.z) - hall_world_center
@@ -179,6 +166,17 @@ func _test_shared_layout_contract() -> void:
 		var parkour_delta := (
 			Vector2(nature_position.x, nature_position.z) - parkour_world_center
 		)
+		var warehouse_delta := (
+			Vector2(nature_position.x, nature_position.z)
+			- NATURE_LAYOUT.DEV_WAREHOUSE_CENTER
+		)
+		if (
+			absf(warehouse_delta.x)
+			<= NATURE_LAYOUT.DEV_WAREHOUSE_HALF_EXTENTS.x
+			and absf(warehouse_delta.y)
+			<= NATURE_LAYOUT.DEV_WAREHOUSE_HALF_EXTENTS.y
+		):
+			warehouse_nature_clear = false
 		if (
 			absf(parkour_delta.x)
 			<= LAYOUT.MOVEMENT_PARKOUR_LAYOUT.CLEAR_HALF_EXTENTS.x
@@ -205,6 +203,10 @@ func _test_shared_layout_contract() -> void:
 	_expect(
 		parkour_nature_clear,
 		"procedural nature leaves the complete movement-lab clearance free"
+	)
+	_expect(
+		warehouse_nature_clear,
+		"procedural nature leaves the relocated warehouse shelf and its frontage clear"
 	)
 	var tunnel_acoustic_descriptors := LAYOUT.tunnel_acoustic_probe_descriptors()
 	var acoustic_counts_by_run: Dictionary[StringName, Dictionary] = {}
@@ -269,29 +271,6 @@ func _test_server_and_client_environment() -> void:
 	root.add_child(server_complex)
 	root.add_child(client_complex)
 	await physics_frame
-	var tread_descriptors := LAYOUT.stair_tread_boxes()
-	var first_tread: Dictionary = tread_descriptors.front()
-	var final_tread: Dictionary = tread_descriptors.back()
-	var tread_query := PhysicsRayQueryParameters3D.new()
-	tread_query.collision_mask = CharacterContactLayers.FOOT_CONTACT_DETAIL
-	var tread_contacts_are_discrete := true
-	for tread: Dictionary in [first_tread, final_tread]:
-		var tread_position: Vector3 = tread.get("position", Vector3.ZERO)
-		var tread_size: Vector3 = tread.get("size", Vector3.ZERO)
-		var expected_top := tread_position.y + tread_size.y * 0.5
-		tread_query.from = tread_position + Vector3.UP
-		tread_query.to = tread_position + Vector3.DOWN
-		var hit := root.world_3d.direct_space_state.intersect_ray(tread_query)
-		tread_contacts_are_discrete = (
-			tread_contacts_are_discrete
-			and not hit.is_empty()
-			and absf((hit.get("position", Vector3.ZERO) as Vector3).y - expected_top)
-			< 0.01
-		)
-	_expect(
-		tread_contacts_are_discrete,
-		"the production client world resolves first and final stair contacts on discrete tread tops"
-	)
 	var descriptors := LAYOUT.structural_boxes()
 	var covered_structure_names: Dictionary[StringName, bool] = {}
 	var single_shape_body_count := 0
@@ -402,8 +381,8 @@ func _test_server_and_client_environment() -> void:
 		elif child is AcousticPortal3D:
 			portal_count += 1
 	_expect(
-		probe_count >= LAYOUT.STOREY_COUNT + 30 and portal_count >= 7,
-		"storeys and all six tunnel mouths are represented in the acoustic graph"
+		probe_count >= 30 and portal_count >= 8,
+		"both bunker doors and all six tunnel mouths are represented in the acoustic graph"
 	)
 
 	var acoustic_service := ServerAcousticService.new()
@@ -702,88 +681,12 @@ func _test_server_and_client_environment() -> void:
 		> float(open_result.get("volume_db", 0.0)) + 10.0,
 		"the rebuilt server graph keeps a source clearly audible across the tunnel"
 	)
-	var house_listener: Vector3 = LAYOUT.building_floor_probe_positions()[0]
-	var tunnel_to_house := acoustic_service.calculate_listener_result(
-		502,
-		house_listener,
-		tunnel_positions[tunnel_positions.size() / 2],
-		120.0,
-		null,
-		1.0,
-		false,
-		[],
-		5002
-	)
-	var house_field := acoustic_service._fields_by_listener.get(
-		502
-	) as AcousticPropagationField
-	_expect(
-		bool(tunnel_to_house.get("audible", false))
-		and house_field != null
-		and float(tunnel_to_house.get("source_reverb_spill_send", 0.0)) < 0.02
-		and absf(
-			float(tunnel_to_house.get("reverb_room_size", -1.0))
-			- house_field.environment_room_size
-		) < 0.05
-		and absf(
-			float(tunnel_to_house.get("reverb_spread", -1.0))
-			- house_field.environment_spread
-		) < 0.08
-		and absf(
-			float(tunnel_to_house.get("reverb_decay_seconds", -1.0))
-			- house_field.environment_rt60_seconds
-		) < 0.15,
-		"a tunnel radio heard from inside the building keeps the building's late-reverb signature"
-	)
 	var debug_state := acoustic_service.get_debug_state()
 	_expect(
 		int(debug_state.get("environment_ray_count", 0)) > 0
 		and int(debug_state.get("tunnel_probe_count", 0)) > 0
 		and int(debug_state.get("probe_count", 0)) >= 45,
 		"the server rebuild samples the new environment and recognizes elongated probe regions"
-	)
-	var building_source := LAYOUT.BUILDING_CENTER + Vector3(
-		0.0,
-		LAYOUT.STOREY_HEIGHT * 2.0 + 1.45,
-		0.0
-	)
-	var building_volumes := PackedFloat32Array()
-	for sample_index: int in range(19):
-		var listener_position := LAYOUT.BUILDING_CENTER + Vector3(
-			0.0,
-			1.45,
-			-4.5 + float(sample_index) * 0.5
-		)
-		var sample := acoustic_service.calculate_listener_result(
-			601,
-			listener_position,
-			building_source,
-			80.0,
-			null,
-			1.0,
-			false,
-			[],
-			6001
-		)
-		building_volumes.append(float(sample.get("volume_db", -80.0)))
-	var largest_building_step := 0.0
-	var quietest_building_sample := 0.0
-	if not building_volumes.is_empty():
-		quietest_building_sample = building_volumes[0]
-	for sample_index: int in range(1, building_volumes.size()):
-		largest_building_step = maxf(
-			largest_building_step,
-			absf(building_volumes[sample_index] - building_volumes[sample_index - 1])
-		)
-		quietest_building_sample = minf(
-			quietest_building_sample,
-			building_volumes[sample_index]
-		)
-	_expect(
-		building_volumes.size() == 19
-		and quietest_building_sample > -40.0
-		and largest_building_step < 0.5,
-		"dense room probes keep half-metre indoor movement below a half-decibel loudness step"
 	)
 	var spill_volumes := PackedFloat32Array()
 	for listener_z: float in range(-13, -45, -1):
@@ -993,6 +896,8 @@ func _test_active_world_replacement() -> void:
 	var client_world := (load(CLIENT_WORLD_PATH) as PackedScene).instantiate()
 	var server_environment := server_world.get_node_or_null("IndustrialAcousticComplex") as Node3D
 	var client_environment := client_world.get_node_or_null("IndustrialAcousticComplex") as Node3D
+	var server_warehouse := server_world.get_node_or_null("DevWarehouse") as Node3D
+	var client_warehouse := client_world.get_node_or_null("DevWarehouse") as Node3D
 	_expect(
 		server_world.get_node_or_null("DevZoo") == null
 		and client_world.get_node_or_null("DevZoo") == null,
@@ -1003,6 +908,20 @@ func _test_active_world_replacement() -> void:
 		and client_environment != null
 		and server_environment.transform == client_environment.transform,
 		"server collision and client presentation instantiate the replacement at the same transform"
+	)
+	_expect(
+		server_warehouse != null
+		and client_warehouse != null
+		and server_warehouse.transform == client_warehouse.transform
+		and server_warehouse.position.is_equal_approx(
+			Vector3(
+				NATURE_LAYOUT.DEV_WAREHOUSE_CENTER.x,
+				0.0,
+				NATURE_LAYOUT.DEV_WAREHOUSE_CENTER.y
+			)
+		)
+		and is_equal_approx(absf(server_warehouse.rotation.y), PI),
+		"the complete authoritative/client warehouse is parked at the north edge facing the play area"
 	)
 	server_world.free()
 	client_world.free()

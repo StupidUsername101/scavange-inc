@@ -270,7 +270,7 @@ func _build_interface() -> void:
 		navigation,
 		"HomeNavigation",
 		"01  HOME",
-		Rect2(9.0, 8.0, 142.0, 38.0),
+		Rect2(9.0, 8.0, 116.0, 38.0),
 		COLOR_BORDER,
 		"Open Fieldlink's service overview.",
 		16
@@ -280,10 +280,10 @@ func _build_interface() -> void:
 		navigation,
 		"ScannerNavigation",
 		"02  SCANNER",
-		Rect2(159.0, 8.0, 176.0, 38.0),
+		Rect2(133.0, 8.0, 146.0, 38.0),
 		COLOR_BORDER,
 		"Sweep nearby space for compatible technical devices.",
-		16
+		14
 	)
 	scanner_button.pressed.connect(show_scanner_page)
 	return_button = _add_action_button(
@@ -546,7 +546,10 @@ func _set_page(
 	force := false,
 	notify_observers := true
 ) -> void:
-	if page != PAGE_HOME and page != PAGE_SCANNER:
+	if (
+		page != PAGE_HOME
+		and page != PAGE_SCANNER
+	):
 		return
 	if page == current_page and not force:
 		return

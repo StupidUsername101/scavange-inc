@@ -14,4 +14,6 @@ mass = 4.6
 visual_scene = ExtResource("2_visual")
 collision_shape = SubResource("Shape")
 equipped_visual_scene = ExtResource("2_visual")
+equipped_position = Vector3(0, 0, 0.15)
+equipped_rotation_degrees = Vector3(0, 180, 0)
 inventory_capacity = 9

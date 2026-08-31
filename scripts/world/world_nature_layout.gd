@@ -17,6 +17,10 @@ const ACOUSTIC_PROBE_CELL_SIZE := FOREST_CELL_SIZE * 2.0
 const MIN_ACOUSTIC_TREE_COUNT := 2
 const TEST_CORE := Vector2(8.0, 0.0)
 const GARAGE_CENTER := Vector2(6.0, -48.0)
+const DEV_WAREHOUSE_CENTER := Vector2(0.0, 92.0)
+const DEV_WAREHOUSE_HALF_EXTENTS := Vector2(48.0, 5.0)
+const DEV_WAREHOUSE_ACCESS_CENTER := Vector2(0.0, 73.0)
+const DEV_WAREHOUSE_ACCESS_HALF_EXTENTS := Vector2(4.0, 14.0)
 
 const FOLIAGE_ANCHORS := [
 	Vector3(-24.0, 0.0, -18.0),
@@ -310,11 +314,22 @@ static func _is_excluded(position: Vector2) -> bool:
 		# Garage shell plus a south-facing walkable entrance corridor.
 		or _inside_rect(position, GARAGE_CENTER, Vector2(13.0, 11.0))
 		or _inside_rect(position, Vector2(3.8, -69.0), Vector2(4.0, 14.0))
-		# Multistorey annex and the three long bunker runs.
-		or _inside_rect(position, Vector2(-8.0, 27.0), Vector2(10.0, 10.0))
+		# Three long bunker runs.
 		or _inside_rect(position, Vector2(11.0, 31.0), Vector2(5.0, 29.0))
 		or _inside_rect(position, Vector2(28.0, 31.0), Vector2(6.0, 29.0))
 		or _inside_rect(position, Vector2(47.0, 31.0), Vector2(7.0, 29.0))
+		# The long dev shelf now faces south from the north perimeter, with a narrow approach rather
+		# than bisecting the central test yard.
+		or _inside_rect(
+			position,
+			DEV_WAREHOUSE_CENTER,
+			DEV_WAREHOUSE_HALF_EXTENTS
+		)
+		or _inside_rect(
+			position,
+			DEV_WAREHOUSE_ACCESS_CENTER,
+			DEV_WAREHOUSE_ACCESS_HALF_EXTENTS
+		)
 		# Large comparison bunker plus its east-facing access route to the central yard.
 		or _inside_rect(
 			position,
@@ -371,13 +386,13 @@ static func _curated_collision_descriptors() -> Array[Dictionary]:
 		_tree(&"PineWestSouth", &"pine", Vector3(-25.0, 0.0, -24.0), 18.0, 1.02),
 		_tree(&"PineWestYard", &"pine", Vector3(-29.0, 0.0, -7.0), 103.0, 0.94),
 		_tree(&"PineWestHouse", &"pine", Vector3(-28.0, 0.0, 17.0), 211.0, 1.16),
-		_tree(&"PineWestAnnex", &"pine", Vector3(-29.0, 0.0, 33.0), 286.0, 1.08),
+		_tree(&"PineWestNorthMid", &"pine", Vector3(-29.0, 0.0, 33.0), 286.0, 1.08),
 		_tree(&"PineWestTunnel", &"pine", Vector3(-25.0, 0.0, 53.0), 34.0, 1.22),
 		_tree(&"PineNorthWest", &"pine", Vector3(-18.0, 0.0, 68.0), 147.0, 1.05),
 		_tree(&"PineEastSouth", &"pine", Vector3(28.0, 0.0, -23.0), 321.0, 1.13),
 		_tree(&"PineEastYard", &"pine", Vector3(31.0, 0.0, -4.0), 76.0, 0.98),
 		_tree(&"PineEastHouse", &"pine", Vector3(30.0, 0.0, 15.0), 188.0, 1.19),
-		_tree(&"PineEastAnnex", &"pine", Vector3(31.0, 0.0, 35.0), 252.0, 1.04),
+		_tree(&"PineEastNorthMid", &"pine", Vector3(31.0, 0.0, 35.0), 252.0, 1.04),
 		_tree(&"PineEastTunnel", &"pine", Vector3(28.0, 0.0, 57.0), 12.0, 1.24),
 		_tree(&"PineNorthEast", &"pine", Vector3(18.0, 0.0, 70.0), 132.0, 1.08),
 		_tree(&"BroadleafWestSouth", &"broadleaf", Vector3(-21.0, 0.0, -12.0), 229.0, 1.13),

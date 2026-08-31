@@ -1,10 +1,7 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/server/industrial_acoustic_complex.gd" id="1_complex"]
-[ext_resource type="Script" path="res://scripts/audio/acoustic_probe_3d.gd" id="2_probe"]
-[ext_resource type="Script" path="res://scripts/audio/acoustic_portal_3d.gd" id="3_portal"]
 [ext_resource type="Script" path="res://scripts/audio/acoustic_material.gd" id="4_material"]
-[ext_resource type="Script" path="res://scripts/audio/acoustic_path_modifier.gd" id="5_modifier"]
 [ext_resource type="PackedScene" path="res://scenes/server/large_bunker_speaker_cluster.tscn" id="6_large_array"]
 [ext_resource type="Resource" path="res://resources/world/valve_reference_bunker_array.tres" id="7_valve_array"]
 
@@ -19,16 +16,6 @@ transmission_lowpass_hz = 1850.0
 resonance = 0.14
 reverb_send = 0.3
 
-[sub_resource type="Resource" id="AcousticModifier_opening"]
-script = ExtResource("5_modifier")
-modifier_id = &"industrial_opening"
-reverb_send = 0.16
-
-[sub_resource type="Resource" id="AcousticModifier_stairwell"]
-script = ExtResource("5_modifier")
-modifier_id = &"industrial_stairwell"
-reverb_send = 0.32
-
 [node name="IndustrialAcousticComplex" type="StaticBody3D"]
 script = ExtResource("1_complex")
 acoustic_material = SubResource("AcousticMaterial_industrial_concrete")
@@ -38,85 +25,3 @@ acoustic_material = SubResource("AcousticMaterial_industrial_concrete")
 [node name="ValveReferenceBunkerSpeakerArray" parent="." instance=ExtResource("6_large_array")]
 position = Vector3(0, 0, -48)
 array_definition = ExtResource("7_valve_array")
-
-[node name="BuildingOutsideProbe" type="Marker3D" parent="."]
-position = Vector3(-10.3, 1.45, 0.6)
-script = ExtResource("2_probe")
-probe_id = &"industrial_building_outside"
-auto_connect_radius = 11.0
-sample_reflections = false
-environment_influence_radius = 8.0
-
-[node name="BuildingDoorProbe" type="Marker3D" parent="."]
-position = Vector3(-10.3, 1.45, 2.75)
-script = ExtResource("2_probe")
-probe_id = &"industrial_building_door"
-auto_connect_radius = 7.0
-reflection_sample_distance = 18.0
-environment_influence_radius = 4.5
-
-[node name="BuildingGroundProbe" type="Marker3D" parent="."]
-position = Vector3(-8, 1.45, 8)
-script = ExtResource("2_probe")
-probe_id = &"industrial_building_ground"
-auto_connect_radius = 8.0
-reflection_sample_distance = 18.0
-environment_influence_radius = 6.2
-
-[node name="BuildingFirstProbe" type="Marker3D" parent="."]
-position = Vector3(-8, 4.85, 8)
-script = ExtResource("2_probe")
-probe_id = &"industrial_building_first"
-auto_connect_radius = 8.0
-reflection_sample_distance = 18.0
-environment_influence_radius = 6.2
-
-[node name="BuildingSecondProbe" type="Marker3D" parent="."]
-position = Vector3(-8, 8.25, 8)
-script = ExtResource("2_probe")
-probe_id = &"industrial_building_second"
-auto_connect_radius = 8.0
-reflection_sample_distance = 18.0
-environment_influence_radius = 6.2
-
-[node name="BuildingStairGroundProbe" type="Marker3D" parent="."]
-position = Vector3(-3.85, 1.45, 4.8)
-script = ExtResource("2_probe")
-probe_id = &"industrial_building_stair_ground"
-auto_connect_radius = 5.0
-reflection_sample_distance = 18.0
-environment_influence_radius = 4.5
-
-[node name="BuildingStairFirstProbe" type="Marker3D" parent="."]
-position = Vector3(-3.85, 4.85, 11.2)
-script = ExtResource("2_probe")
-probe_id = &"industrial_building_stair_first"
-auto_connect_radius = 5.0
-reflection_sample_distance = 18.0
-environment_influence_radius = 4.5
-
-[node name="BuildingStairSecondProbe" type="Marker3D" parent="."]
-position = Vector3(-3.85, 8.25, 4.8)
-script = ExtResource("2_probe")
-probe_id = &"industrial_building_stair_second"
-auto_connect_radius = 5.0
-reflection_sample_distance = 18.0
-environment_influence_radius = 4.5
-
-[node name="BuildingDoorPath" type="Node3D" parent="."]
-script = ExtResource("3_portal")
-probe_a_path = NodePath("../BuildingOutsideProbe")
-probe_b_path = NodePath("../BuildingDoorProbe")
-modifier = SubResource("AcousticModifier_opening")
-
-[node name="BuildingStairwell01" type="Node3D" parent="."]
-script = ExtResource("3_portal")
-probe_a_path = NodePath("../BuildingStairGroundProbe")
-probe_b_path = NodePath("../BuildingStairFirstProbe")
-modifier = SubResource("AcousticModifier_stairwell")
-
-[node name="BuildingStairwell12" type="Node3D" parent="."]
-script = ExtResource("3_portal")
-probe_a_path = NodePath("../BuildingStairFirstProbe")
-probe_b_path = NodePath("../BuildingStairSecondProbe")
-modifier = SubResource("AcousticModifier_stairwell")

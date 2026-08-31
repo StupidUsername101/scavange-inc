@@ -12,6 +12,12 @@ const REPLICATION_SCHEDULE := preload(
 const SNAPSHOT_STREAM_TRACKER := preload(
 	"res://scripts/network/network_snapshot_stream_tracker.gd"
 )
+const SESSION_RECONNECT_LEDGER := preload(
+	"res://scripts/network/session_reconnect_ledger.gd"
+)
+const GAME_STATE_SCRIPT := preload(
+	"res://scripts/globals/game_state.gd"
+)
 
 #######################################################
 # Runs headless regression coverage for lobby system behavior and reports contract or
@@ -34,6 +40,7 @@ func _run() -> void:
 	_test_lobby_ui_contract()
 	_test_lobby_browser_behavior()
 	_test_transport_wiring()
+	_test_transient_disconnect_resume()
 	_test_disconnect_rpc_safety()
 	_test_transfer_channel_capacity()
 	_test_replaceable_snapshot_transport()
@@ -80,8 +87,8 @@ func _test_four_player_limit() -> void:
 
 func _test_lobby_compatibility() -> void:
 	_expect(
-		LobbyRules.PROTOCOL_VERSION == "8",
-		"the revisioned inventory lane has its own lobby protocol"
+		LobbyRules.PROTOCOL_VERSION == "10",
+		"presented foot contacts have an explicit multiplayer protocol"
 	)
 	_expect(
 		LobbyRules.is_compatible_lobby(
@@ -410,6 +417,38 @@ func _test_transport_wiring() -> void:
 		and server_source.contains("func _clear_runtime_session("),
 		"returning to the menu tears down both transport and runtime state"
 	)
+	var identity_reset_start := server_source.find(
+		"func _reset_lobby_identity() -> void:"
+	)
+	var transport_retire_start := server_source.find(
+		"func _retire_steam_transport() -> void:"
+	)
+	var lobby_status_start := server_source.find(
+		"\nfunc _emit_lobby_status(",
+		transport_retire_start
+	)
+	var identity_reset_source := server_source.substr(
+		identity_reset_start,
+		transport_retire_start - identity_reset_start
+	)
+	var transport_retire_source := server_source.substr(
+		transport_retire_start,
+		lobby_status_start - transport_retire_start
+	)
+	_expect(
+		SteamMultiplayerPeer.new().has_method("close")
+		and not identity_reset_source.contains("steam_peer = null")
+		and transport_retire_source.find("retiring_peer.close()") >= 0
+		and transport_retire_source.find("retiring_peer.close()")
+		< transport_retire_source.find(
+			"multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()"
+		)
+		and transport_retire_source.find("steam_peer = null")
+		> transport_retire_source.find(
+			"multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()"
+		),
+		"Steam transport teardown synchronously closes the native socket before releasing references"
+	)
 	_expect(
 		main_menu_source.contains("Server.is_lobby_idle()"),
 		"returning from a session restores the main-menu host controls"
@@ -446,7 +485,9 @@ func _test_transport_wiring() -> void:
 	)
 	_expect(
 		server_source.contains("func confirm_client_session_ready(")
-		and server_source.contains("pending_admission_peer_ids[peer_id] = true")
+		and server_source.contains(
+			"pending_admission_peer_ids[peer_id] = next_admission_generation"
+		)
 		and server_source.contains('rpc_id(\n\t\t1,\n\t\t"confirm_client_session_ready"'),
 		"gameplay registration waits for an application-ready RPC from the client"
 	)
@@ -501,23 +542,128 @@ func _test_disconnect_rpc_safety() -> void:
 		"func _on_peer_disconnected(peer_id: int) -> void:"
 	)
 	var next_function := server_source.find(
-		"\nfunc _on_connected_to_server() -> void:",
+		"\nfunc _expire_disconnected_player_leases() -> void:",
 		disconnect_start
 	)
 	var disconnect_source := server_source.substr(
 		disconnect_start,
 		next_function - disconnect_start
 	)
-	var unregister_position := disconnect_source.find(
-		"GameState.unregister_peer(peer_id)"
+	var route_suspend_position := disconnect_source.find(
+		"GameState.suspend_peer(peer_id)"
 	)
-	var spill_position := disconnect_source.find("spill_all_item_entries()")
+	var input_suspend_position := disconnect_source.find(
+		"player.suspend_network_input()"
+	)
 	_expect(
-		unregister_position >= 0
-		and spill_position >= 0
-		and unregister_position < spill_position,
-		"disconnect routing is invalidated before inventory and PBD cleanup can emit RPCs"
+		route_suspend_position >= 0
+		and input_suspend_position >= 0
+		and route_suspend_position < input_suspend_position
+		and not disconnect_source.contains("spill_all_item_entries()"),
+		"disconnect invalidates routing and stale input without spilling leased inventory"
 	)
+	var finalize_start := server_source.find(
+		"func _finalize_disconnected_player(player_id: int, steam_id: int) -> void:"
+	)
+	var finalize_end := server_source.find(
+		"\nfunc _on_connected_to_server() -> void:",
+		finalize_start
+	)
+	var finalize_source := server_source.substr(
+		finalize_start,
+		finalize_end - finalize_start
+	)
+	_expect(
+		finalize_source.find("GameState.unregister_player(player_id)") >= 0
+		and finalize_source.find("spill_all_item_entries()") >= 0
+		and finalize_source.find("GameState.unregister_player(player_id)")
+		< finalize_source.find("spill_all_item_entries()"),
+		"expired leases invalidate routing before final inventory cleanup emits effects"
+	)
+
+
+func _test_transient_disconnect_resume() -> void:
+	var ledger := SESSION_RECONNECT_LEDGER.new(1000)
+	_expect(
+		ledger.suspend(76561198000000001, 7, 31, 5000),
+		"an authenticated Steam player receives a reconnect lease"
+	)
+	var claimed: Dictionary = ledger.claim(76561198000000001, 5999)
+	_expect(
+		int(claimed.get("player_id", -1)) == 7 and ledger.is_empty(),
+		"the same Steam identity can claim its player before expiry"
+	)
+	ledger.suspend(76561198000000002, 8, 32, 7000)
+	_expect(
+		ledger.claim(76561198000000002, 8001).is_empty()
+		and ledger.take_expired(8001).size() == 1,
+		"an expired identity cannot resume and is returned for authoritative cleanup"
+	)
+	_expect(
+		SESSION_RECONNECT_LEDGER.retry_delay_milliseconds(0)
+		< SESSION_RECONNECT_LEDGER.retry_delay_milliseconds(2)
+		and SESSION_RECONNECT_LEDGER.retry_delay_milliseconds(20)
+		<= SESSION_RECONNECT_LEDGER.MAX_RETRY_DELAY_MILLISECONDS
+		and SESSION_RECONNECT_LEDGER.CLIENT_RETRY_WINDOW_MILLISECONDS
+		< SESSION_RECONNECT_LEDGER.DEFAULT_GRACE_MILLISECONDS,
+		"client retries back off quickly without exceeding the outage grace budget"
+	)
+
+	var isolated_game_state := GAME_STATE_SCRIPT.new()
+	var player_id: int = isolated_game_state.try_register_player(
+		41,
+		1234,
+		1,
+		76561198000000003
+	)
+	_expect(player_id > 0, "a fresh authenticated player is registered")
+	isolated_game_state.suspend_peer(41)
+	_expect(
+		isolated_game_state.get_player_id(41) == -1
+		and isolated_game_state.get_player_count() == 1
+		and isolated_game_state.get_player_money(player_id) == 1234,
+		"suspension removes only the RPC route while preserving slot and durable state"
+	)
+	_expect(
+		isolated_game_state.try_register_player(
+			42,
+			0,
+			1,
+			76561198000000004
+		) == -1,
+		"a leased player slot cannot be stolen during the grace window"
+	)
+	_expect(
+		isolated_game_state.rebind_player_peer(player_id, 77)
+		and isolated_game_state.get_player_id(77) == player_id
+		and isolated_game_state.get_player_id_for_steam_id(
+			76561198000000003
+		) == player_id,
+		"resume can bind a different transport peer to the same Steam-owned player"
+	)
+
+	var server_source := FileAccess.get_file_as_string(
+		"res://scripts/server/server.gd"
+	)
+	var disconnected_start := server_source.find(
+		"func _on_server_disconnected() -> void:"
+	)
+	var disconnected_end := server_source.find(
+		"\nfunc _begin_client_reconnect() -> void:",
+		disconnected_start
+	)
+	var disconnected_source := server_source.substr(
+		disconnected_start,
+		disconnected_end - disconnected_start
+	)
+	_expect(
+		disconnected_source.contains("_begin_client_reconnect()")
+		and not disconnected_source.contains("Client.reset_session()")
+		and server_source.contains("func _process_client_reconnect() -> void:")
+		and server_source.contains("PLAYER SESSION RESUMED"),
+		"clients retry in place while hosts restore the original authoritative player"
+	)
+	isolated_game_state.free()
 
 
 func _test_transfer_channel_capacity() -> void:
@@ -612,12 +758,20 @@ func _test_replaceable_snapshot_transport() -> void:
 			'@rpc("authority", "unreliable", "call_local", %d)\nfunc on_grabbed_item_motion_states_received'
 			% MULTIPLAYER_CHANNELS.ITEM_SNAPSHOT_CHANNEL
 		)
-		and replication_source.contains('"on_grabbed_item_motion_states_received"'),
-		"full item lifecycle and high-rate held motion share one dedicated replaceable lane"
+		and client_source.contains(
+			'@rpc("authority", "unreliable", "call_local", %d)\nfunc on_grabbed_destruction_fragment_motion_states_received'
+			% MULTIPLAYER_CHANNELS.ITEM_SNAPSHOT_CHANNEL
+		)
+		and replication_source.contains('"on_grabbed_item_motion_states_received"')
+		and replication_source.contains(
+			'"on_grabbed_destruction_fragment_motion_states_received"'
+		),
+		"items and held salvage motion share one dedicated replaceable interaction lane"
 	)
 	for handler_name: String in [
 		"on_item_states_received",
 		"on_grabbed_item_motion_states_received",
+		"on_grabbed_destruction_fragment_motion_states_received",
 		"on_player_states_received",
 		"on_drone_states_received",
 		"on_projectile_states_received",

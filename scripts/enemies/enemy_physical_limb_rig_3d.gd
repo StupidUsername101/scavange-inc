@@ -134,6 +134,19 @@ func get_limb_state() -> Array[Dictionary]:
 	return result
 
 
+func append_kick_guidance_spots(output: Array[Vector3]) -> void:
+	if anatomy == null or not is_instance_valid(enemy):
+		return
+	for limb_index: int in range(anatomy.limbs.size()):
+		var points := _get_limb_world_points(limb_index)
+		if points.size() != 3:
+			continue
+		# A knee and terminal contact are useful height hints. Segment interiors remain governed by the
+		# physical body and are never promoted into bespoke combat colliders.
+		output.append(points[1])
+		output.append(points[2])
+
+
 func get_physical_bone_count() -> int:
 	return segment_records.size() * SEGMENTS_PER_LIMB
 

@@ -25,6 +25,12 @@ const DRONE_PART_PROXY_SCENE := preload(
 )
 const ROPE_PROXY_SCENE := preload("res://scenes/proxy/rope_proxy.tscn")
 const ENEMY_PROXY_SCENE := preload("res://scenes/proxy/enemy_proxy.tscn")
+const PLAYER_CORPSE_PROXY := preload(
+	"res://scripts/client/player_corpse_proxy.gd"
+)
+const DESTRUCTION_FRAGMENT_PROXY := preload(
+	"res://scripts/client/destruction_fragment_proxy.gd"
+)
 const CLIENT_WORLD_SCENE := preload("res://scenes/proxy/world.tscn")
 const USE_HOLD_SECONDS := 0.5
 const MAX_GRAB_ROTATION_INPUT_TARGET := 1000000.0
@@ -60,6 +66,8 @@ var projectile_proxies_by_id: Dictionary[int, ProjectileProxy] = {}
 var drone_part_proxies_by_id: Dictionary[int, Node3D] = {}
 var rope_proxies_by_rope_id: Dictionary[int, RopeProxy] = {}
 var enemy_proxies_by_enemy_id: Dictionary[int, EnemyProxy] = {}
+var player_corpse_proxies_by_id: Dictionary[int, Node3D] = {}
+var destruction_fragment_proxies_by_id: Dictionary[int, Node3D] = {}
 # Client is an autoload and may parse before a fresh clone has rebuilt global script-class caches.
 # The runtime contract is deliberately structural at this boundary; the scene script still owns the
 # strongly typed SDF internals.
@@ -81,6 +89,7 @@ var spatial_audio_renderer: SpatialAudioRenderer
 var radio_audio_renderer: RadioAudioRenderer
 var last_network_snapshot_sequence_by_stream: Dictionary[StringName, int] = {}
 var local_audio_prediction_runtime := LOCAL_AUDIO_PREDICTION_RUNTIME.new()
+var next_jump_request_id := 0
 
 
 func reset_session() -> void:
@@ -102,6 +111,8 @@ func reset_session() -> void:
 	drone_part_proxies_by_id.clear()
 	rope_proxies_by_rope_id.clear()
 	enemy_proxies_by_enemy_id.clear()
+	player_corpse_proxies_by_id.clear()
+	destruction_fragment_proxies_by_id.clear()
 	destructible_volumes_by_id.clear()
 	pending_destruction_events.clear()
 	pending_destruction_checkpoints.clear()
@@ -116,6 +127,7 @@ func reset_session() -> void:
 	wrist_input_suspended = false
 	last_network_snapshot_sequence_by_stream.clear()
 	local_audio_prediction_runtime.reset()
+	next_jump_request_id = 0
 	if is_instance_valid(spatial_audio_renderer):
 		spatial_audio_renderer.reset_session(true)
 	if is_instance_valid(radio_audio_renderer):
@@ -463,6 +475,7 @@ func _physics_process(delta: float) -> void:
 	if local_proxy != null:
 		yaw = local_proxy.look_yaw
 		pitch = local_proxy.look_pitch
+		local_proxy.advance_local_input_tick()
 
 	var wrist_open := (
 		local_proxy != null
@@ -518,6 +531,9 @@ func _send_movement_input(
 func _process_locomotion_action_input(local_proxy: PlayerProxy) -> void:
 	if Input.is_action_just_pressed("jump"):
 		var prediction_key := 0
+		var flip_intent := 0
+		var flip_run_committed := false
+		var jump_request_id := _allocate_jump_request_id()
 		if local_proxy != null and local_proxy.target_on_floor:
 			prediction_key = predict_local_player_sound(
 				PhysicalSurface.jump_sound_id(
@@ -525,7 +541,21 @@ func _process_locomotion_action_input(local_proxy: PlayerProxy) -> void:
 				),
 				local_proxy.global_position + Vector3.UP * 0.35
 			)
-		Server.rpc_id(HOST_RPC_ID, "receive_jump", prediction_key)
+		if local_proxy != null:
+			flip_run_committed = local_proxy.has_local_flip_run_commitment()
+			flip_intent = local_proxy.consume_buffered_flip_intent()
+			local_proxy.predict_local_flip_takeoff(
+				flip_intent,
+				jump_request_id
+			)
+		Server.rpc_id(
+			HOST_RPC_ID,
+			"receive_jump",
+			prediction_key,
+			flip_intent,
+			jump_request_id,
+			flip_run_committed
+		)
 	if (
 		local_proxy != null
 		and InputMap.has_action(EyelessAcousticPerception.INPUT_ACTION)
@@ -534,6 +564,13 @@ func _process_locomotion_action_input(local_proxy: PlayerProxy) -> void:
 		)
 	):
 		request_echolocation_click(local_proxy)
+
+
+func _allocate_jump_request_id() -> int:
+	# Positive 31-bit IDs stay exactly representable across Variant/RPC boundaries. Wraparound is
+	# harmless because at most one local jump request can be awaiting resolution at a time.
+	next_jump_request_id = next_jump_request_id % 2147483646 + 1
+	return next_jump_request_id
 
 
 func request_echolocation_click(local_proxy: PlayerProxy = null) -> void:
@@ -552,6 +589,22 @@ func request_echolocation_click(local_proxy: PlayerProxy = null) -> void:
 		HOST_RPC_ID,
 		"request_echolocation_click",
 		prediction_key
+	)
+
+
+func request_foot_contact(
+	contact_sequence: int,
+	side: int,
+	local_prediction_key: int
+) -> void:
+	if not _has_connected_multiplayer_peer():
+		return
+	Server.rpc_id(
+		HOST_RPC_ID,
+		"receive_foot_contact",
+		contact_sequence,
+		side,
+		local_prediction_key
 	)
 
 
@@ -680,7 +733,7 @@ func _process_action_input(
 	local_proxy: PlayerProxy
 ) -> void:
 	_process_use_input(delta, yaw, pitch, local_proxy)
-	_process_inventory_input()
+	_process_inventory_input(local_proxy)
 	if Input.is_action_just_pressed("reload_weapon"):
 		Server.rpc_id(HOST_RPC_ID, "reload_selected_weapon")
 
@@ -733,11 +786,23 @@ func _process_grab_input(
 	local_proxy: PlayerProxy
 ) -> void:
 	if Input.is_action_just_pressed("grab"):
+		var preferred_kick_side := (
+			local_proxy.get_suggested_kick_side()
+			if local_proxy != null
+			else -1
+		)
+		var dropkick_tilt_input := (
+			local_proxy.consume_dropkick_tilt_input()
+			if local_proxy != null
+			else 0.0
+		)
 		Server.rpc_id(
 			HOST_RPC_ID,
 			"begin_grab",
 			yaw,
-			pitch
+			pitch,
+			preferred_kick_side,
+			dropkick_tilt_input
 		)
 
 	if Input.is_action_just_released("grab"):
@@ -833,7 +898,8 @@ func _process_use_input(
 		use_hold_action_sent = false
 
 
-func _process_inventory_input() -> void:
+func _process_inventory_input(local_proxy: PlayerProxy) -> void:
+	var selected_with_number_key := false
 	for slot_index: int in range(PlayerInventoryRules.MAX_CAPACITY):
 		if Input.is_action_just_pressed(
 			"inventory_slot_%d" % (slot_index + 1)
@@ -843,7 +909,28 @@ func _process_inventory_input() -> void:
 				"select_inventory_slot",
 				slot_index
 			)
+			selected_with_number_key = true
 			break
+
+	# Wheel navigation is a backpack affordance, not a hidden replacement for the baseline single
+	# pocket. Authority resolves the relative request against its current slot, so packet latency or a
+	# recent inventory update cannot make the client calculate from a stale selected index.
+	if (
+		not selected_with_number_key
+		and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+		and local_proxy != null
+		and local_proxy.has_equipped_backpack()
+	):
+		var slot_step := (
+			int(Input.is_action_just_pressed("inventory_slot_next"))
+			- int(Input.is_action_just_pressed("inventory_slot_previous"))
+		)
+		if slot_step != 0:
+			Server.rpc_id(
+				HOST_RPC_ID,
+				"cycle_inventory_slot",
+				slot_step
+			)
 
 	if Input.is_action_just_pressed("drop_equipped_eyes"):
 		Server.rpc_id(
@@ -924,9 +1011,82 @@ func on_destruction_checkpoint_received(checkpoint_value: Dictionary) -> void:
 	if volume_id.is_empty():
 		return
 	if client_world == null:
-		pending_destruction_checkpoints[volume_id] = checkpoint_value.duplicate(true)
+		_store_pending_destruction_checkpoint(volume_id, checkpoint_value)
 		return
 	_apply_destruction_checkpoint(checkpoint_value)
+
+
+@rpc("authority", "call_local", "reliable", 3)
+func on_destruction_fragment_spawned(packet_value: Dictionary) -> void:
+	var packet := packet_value.duplicate(false)
+	var fragment_id := SafeVariant.integral_int_or(packet.get("fragment_id", -1), -1)
+	if fragment_id < 0:
+		return
+	var existing := destruction_fragment_proxies_by_id.get(fragment_id) as Node3D
+	if existing != null:
+		return
+	var proxy := DESTRUCTION_FRAGMENT_PROXY.new() as Node3D
+	if proxy == null:
+		return
+	add_child(proxy)
+	if not bool(proxy.call("apply_spawn_packet", packet)):
+		proxy.queue_free()
+		return
+	destruction_fragment_proxies_by_id[fragment_id] = proxy
+
+
+@rpc("authority", "call_local", "reliable", 3)
+func on_destruction_fragment_geometry_changed(packet_value: Dictionary) -> void:
+	var packet := packet_value.duplicate(false)
+	var fragment_id := SafeVariant.integral_int_or(packet.get("fragment_id", -1), -1)
+	var proxy := destruction_fragment_proxies_by_id.get(fragment_id) as Node3D
+	if proxy != null and proxy.has_method("apply_geometry_packet"):
+		proxy.call("apply_geometry_packet", packet)
+
+
+@rpc("authority", "call_local", "reliable", 3)
+func on_destruction_fragment_removed(fragment_id: int) -> void:
+	var proxy := destruction_fragment_proxies_by_id.get(fragment_id) as Node3D
+	destruction_fragment_proxies_by_id.erase(fragment_id)
+	if is_instance_valid(proxy):
+		proxy.queue_free()
+
+
+@rpc("authority", "unreliable", "call_local", 4)
+func on_destruction_fragment_states_received(states: Dictionary) -> void:
+	if not _accept_network_snapshot(&"destruction_fragments", states):
+		return
+	for fragment_id_value: Variant in states.keys():
+		var fragment_id := int(fragment_id_value)
+		var proxy := destruction_fragment_proxies_by_id.get(fragment_id) as Node3D
+		if proxy == null:
+			continue
+		var state := _public_state_dictionary(states, fragment_id_value)
+		if not state.is_empty():
+			proxy.call("apply_server_state", state)
+	var existing_ids := destruction_fragment_proxies_by_id.keys()
+	for fragment_id_value: Variant in existing_ids:
+		var fragment_id := int(fragment_id_value)
+		if states.has(fragment_id):
+			continue
+		var proxy := destruction_fragment_proxies_by_id.get(fragment_id) as Node3D
+		destruction_fragment_proxies_by_id.erase(fragment_id)
+		if is_instance_valid(proxy):
+			proxy.queue_free()
+
+
+@rpc("authority", "unreliable", "call_local", 8)
+func on_grabbed_destruction_fragment_motion_states_received(states: Dictionary) -> void:
+	# High-rate held motion is presentation-only. Reliable manifests and bulk snapshots remain the
+	# lifecycle authority, so packet loss cannot create or delete salvage fragments.
+	for fragment_id_value: Variant in states:
+		var fragment_id := int(fragment_id_value)
+		var proxy := destruction_fragment_proxies_by_id.get(fragment_id) as Node3D
+		if proxy == null:
+			continue
+		var state := _public_state_dictionary(states, fragment_id_value)
+		if not state.is_empty():
+			proxy.call("apply_server_motion_state", state)
 
 
 func _apply_destruction_event_packet(packet: Dictionary) -> void:
@@ -942,17 +1102,34 @@ func _apply_destruction_event_packet(packet: Dictionary) -> void:
 	if not event_value is Dictionary:
 		_request_destruction_checkpoint(volume_id)
 		return
+	var field: Variant = volume.get("field")
+	if field == null:
+		_request_destruction_checkpoint(volume_id)
+		return
+	var current_revision := int(field.get("revision"))
+	var from_revision := int(packet.get("from_revision", -1))
+	var to_revision := int(packet.get("to_revision", -1))
+	var expected_checksum := int(packet.get("checksum", -1))
+	# Reliable RPCs can overlap initial checkpoint delivery and reconnect recovery. An event already
+	# covered by the local field is idempotent, while a same-revision checksum disagreement is real
+	# divergence. Never replay an old event and turn an otherwise healthy client into a recovery loop.
+	if to_revision <= current_revision:
+		if to_revision == current_revision and int(field.call("checksum")) != expected_checksum:
+			_request_destruction_checkpoint(volume_id)
+		return
+	if from_revision != current_revision or to_revision != from_revision + 1:
+		_request_destruction_checkpoint(volume_id)
+		return
 	var result: Dictionary = volume.call(
 		"apply_replicated_damage_event",
 		DAMAGE_EVENT_SCRIPT.from_dict(event_value),
-		int(packet.get("from_revision", -1))
+		from_revision
 	)
-	var field: Variant = volume.get("field")
 	if (
 		not bool(result.get("changed", false))
 		or field == null
-		or int(field.get("revision")) != int(packet.get("to_revision", -1))
-		or int(field.call("checksum")) != int(packet.get("checksum", -1))
+		or int(field.get("revision")) != to_revision
+		or int(field.call("checksum")) != expected_checksum
 	):
 		_request_destruction_checkpoint(volume_id)
 
@@ -961,20 +1138,55 @@ func _apply_destruction_checkpoint(checkpoint: Dictionary) -> void:
 	var volume_id := StringName(str(checkpoint.get("volume_id", &"")))
 	var volume := destructible_volumes_by_id.get(volume_id) as Node
 	if volume == null:
-		pending_destruction_checkpoints[volume_id] = checkpoint.duplicate(true)
+		_store_pending_destruction_checkpoint(volume_id, checkpoint)
+		return
+	var field: Variant = volume.get("field")
+	if field == null:
+		_request_destruction_checkpoint(volume_id)
+		return
+	var checkpoint_revision := int(checkpoint.get("revision", -1))
+	var checkpoint_checksum := int(checkpoint.get("checksum", -1))
+	var current_revision := int(field.get("revision"))
+	if checkpoint_revision < current_revision:
+		return
+	if (
+		checkpoint_revision == current_revision
+		and int(field.call("checksum")) == checkpoint_checksum
+	):
 		return
 	var applied := bool(volume.call("apply_checkpoint", checkpoint))
-	var field: Variant = volume.get("field")
 	if (
 		not applied
 		or field == null
-		or int(field.call("checksum")) != int(checkpoint.get("checksum", -1))
+		or int(field.call("checksum")) != checkpoint_checksum
 	):
 		_request_destruction_checkpoint(volume_id)
 
 
+func _store_pending_destruction_checkpoint(
+	volume_id: StringName,
+	checkpoint: Dictionary
+) -> void:
+	var existing: Dictionary = pending_destruction_checkpoints.get(volume_id, {})
+	if (
+		not existing.is_empty()
+		and int(existing.get("revision", -1)) > int(checkpoint.get("revision", -1))
+	):
+		return
+	pending_destruction_checkpoints[volume_id] = checkpoint.duplicate(true)
+
+
 func _request_destruction_checkpoint(volume_id: StringName) -> void:
 	if volume_id.is_empty() or not _has_connected_multiplayer_peer():
+		return
+	# A listen server receives the authoritative destruction event through Client's call_local RPC.
+	# Asking peer 1 for recovery from peer 1 is forbidden for a call_remote server endpoint, and it
+	# is unnecessary: both autoloads already live in this process. Use the exact same checkpoint
+	# payload locally while remote clients retain the ordinary request/response path.
+	if multiplayer.is_server():
+		var checkpoint: Dictionary = Server.get_destruction_checkpoint(volume_id)
+		if not checkpoint.is_empty():
+			on_destruction_checkpoint_received(checkpoint)
 		return
 	Server.rpc_id(HOST_RPC_ID, "request_destruction_checkpoint", volume_id)
 
@@ -988,6 +1200,22 @@ func on_local_audio_prediction_context_received(context_value: Dictionary) -> vo
 func on_local_audio_prediction_rejected(prediction_key: int) -> void:
 	if is_instance_valid(spatial_audio_renderer):
 		spatial_audio_renderer.reject_prediction(prediction_key)
+
+
+@rpc("authority", "call_local", "reliable", 3)
+func on_jump_request_resolved(
+	request_id: int,
+	jump_accepted: bool,
+	accepted_flip_direction: int
+) -> void:
+	var local_proxy := get_local_player_proxy()
+	if local_proxy == null:
+		return
+	local_proxy.resolve_local_jump_request(
+		request_id,
+		jump_accepted,
+		accepted_flip_direction
+	)
 
 
 @rpc("authority", "unreliable_ordered", "call_local", 6)
@@ -1135,6 +1363,52 @@ func on_player_states_received(states: Dictionary) -> void:
 		player_proxys_by_player_id.erase(player_id)
 		pending_player_inventory_by_player_id.erase(player_id)
 		proxy.queue_free()
+
+
+@rpc("authority", "call_local", "reliable", 3)
+func on_player_corpse_spawned(state: Dictionary) -> void:
+	_apply_player_corpse_state(state)
+
+
+@rpc("authority", "unreliable", "call_local", 4)
+func on_player_corpse_states_received(states: Dictionary) -> void:
+	if not _accept_network_snapshot(&"player_corpses", states):
+		return
+	for corpse_id_value: Variant in states.keys():
+		var state: Dictionary = _public_state_dictionary(states, corpse_id_value)
+		if not state.is_empty():
+			_apply_player_corpse_state(state)
+	var existing_ids := player_corpse_proxies_by_id.keys()
+	for corpse_id: int in existing_ids:
+		if states.has(corpse_id):
+			continue
+		var proxy := player_corpse_proxies_by_id.get(corpse_id) as Node3D
+		player_corpse_proxies_by_id.erase(corpse_id)
+		if is_instance_valid(proxy):
+			proxy.queue_free()
+
+
+func _apply_player_corpse_state(state: Dictionary) -> void:
+	var corpse_id := SafeVariant.integral_int_or(state.get("corpse_id"), -1)
+	if corpse_id < 0:
+		return
+	var proxy := player_corpse_proxies_by_id.get(corpse_id) as Node3D
+	if proxy == null:
+		proxy = PLAYER_CORPSE_PROXY.new()
+		proxy.name = "PlayerCorpse%d" % corpse_id
+		add_child(proxy)
+		player_corpse_proxies_by_id[corpse_id] = proxy
+		var source_player_id := SafeVariant.integral_int_or(
+			state.get("source_player_id"),
+			-1
+		)
+		proxy.call(
+			"initialize_from_player",
+			player_proxys_by_player_id.get(source_player_id) as PlayerProxy,
+			state
+		)
+		return
+	proxy.call("apply_server_state", state)
 
 
 @rpc("authority", "reliable", "call_local", 1)

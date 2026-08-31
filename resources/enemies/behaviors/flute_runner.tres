@@ -1,0 +1,32 @@
+[gd_resource type="Resource" script_class="FluteRunnerDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/flute_runner_definition.gd" id="1_runner"]
+
+[resource]
+script = ExtResource("1_runner")
+sight_range = 38.0
+hearing_range = 21.0
+sense_interval_seconds = 0.12
+visible_memory_seconds = 3.8
+heard_memory_seconds = 2.0
+search_seconds = 6.0
+curious_speed = 3.2
+pursuit_speed = 6.8
+chase_speed = 10.6
+acceleration = 21.0
+braking_acceleration = 12.0
+turn_speed_radians = 8.2
+chase_distance = 11.5
+preferred_distance = 1.0
+roam_radius = 34.0
+stuck_seconds = 0.7
+fumble_seconds = 0.64
+tackle_damage = 18.0
+tackle_minimum_speed = 6.4
+tackle_minimum_facing_dot = 0.58
+tackle_cooldown_seconds = 1.4
+tackle_impulse = 8.2
+flute_song_path = "res://assets/sounds/music/gameplay/flute_runner_loop.wav"
+flute_output_level_db = -15.0
+flute_hearing_distance = 74.0
+flute_priority = 0.64

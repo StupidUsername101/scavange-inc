@@ -3,6 +3,9 @@ extends SceneTree
 const WRIST_DEVICE_PATH := (
 	"res://resources/items/wrist_devices/corporate_field_terminal.tres"
 )
+const PLASMA_CUTTER_PATH := (
+	"res://resources/items/tools/plasma_cutter_standard.tres"
+)
 const WRIST_PRESENTATION_SCENE := preload(
 	"res://scenes/proxy/wrist_terminal_presentation.tscn"
 )
@@ -40,10 +43,11 @@ func _init() -> void:
 func _run() -> void:
 	_test_physical_item_contract()
 	_test_terminal_interface()
+	_test_handheld_tool_separation_contract()
 	_test_selectable_device_controls()
 	_test_device_contact_contract()
 	_test_held_device_motion()
-	_test_first_person_presentation()
+	_test_equipped_wrist_presentation()
 	_test_local_body_arm_isolation()
 	_test_client_input_contract()
 
@@ -66,6 +70,10 @@ func _test_physical_item_contract() -> void:
 	_expect(
 		definition.equipment_slot == PlayerInventoryRules.WRIST_DEVICE_SLOT,
 		"Fieldlink equips through the generic wrist slot"
+	)
+	_expect(
+		not definition.has_method("get_plasma_cutter"),
+		"Fieldlink stays an interface instead of embedding a weapon module"
 	)
 	var world_visual := definition.instantiate_visual()
 	var equipped_visual := definition.instantiate_equipped_visual()
@@ -101,6 +109,10 @@ func _test_physical_item_contract() -> void:
 		_expect(
 			not contains_quad,
 			"the physical Fieldlink visual contains no synthetic display plane"
+		)
+		_expect(
+			world_visual.find_child("PlasmaEmitter", true, false) == null,
+			"the physical Fieldlink no longer carries the handheld cutter's emitter"
 		)
 		world_visual.free()
 	if equipped_visual != null:
@@ -283,6 +295,98 @@ func _test_terminal_interface() -> void:
 		"the visible Fieldlink hint teaches its look clutch and nearby toggle key"
 	)
 	view.free()
+
+
+func _test_handheld_tool_separation_contract() -> void:
+	var cutter := load(PLASMA_CUTTER_PATH) as PlasmaCutterDefinition
+	var generic_cutter: Resource = cutter
+	var stats: Dictionary = cutter.display_stats()
+	_expect(
+		cutter != null
+		and generic_cutter is ItemDefinition
+		and not generic_cutter is EquippableItemDefinition
+		and float(stats.get("range_meters", 0.0)) > 0.0
+		and float(stats.get("kerf_millimeters", 0.0)) > 0.0
+		and float(stats.get("continuous_duty_seconds", 0.0)) > 2.0,
+		"the cutter is a standalone item with a finite authored operating envelope"
+	)
+
+	var view := WRIST_VIEW.new() as WristTerminalView
+	root.add_child(view)
+	var cutter_button := view.find_child(
+		"PlasmaCutterNavigation",
+		true,
+		false
+	) as Button
+	_expect(
+		cutter_button == null,
+		"Fieldlink no longer exposes a hidden cutter page or weapon control"
+	)
+	_expect(
+		FIELDLINK_DISPLAY_STATE.sanitize_page(&"plasma_cutter")
+		== FIELDLINK_DISPLAY_STATE.PAGE_HOME,
+		"legacy cutter page packets fail safely back to Fieldlink home"
+	)
+	view.free()
+
+	var server_player_scene := load(
+		"res://scenes/server/server_player.tscn"
+	) as PackedScene
+	var player := server_player_scene.instantiate() as ServerPlayer
+	root.add_child(player)
+	player.inventory_entries.append(PlayerInventoryRules.make_entry(cutter))
+	player.call("_mark_inventory_changed")
+	player.set_plasma_cutter_triggered(true)
+	player.set_primary_action_held(true)
+	_expect(
+		player.plasma_cutter_active
+		and player.consume_plasma_cutter_pulse(),
+		"ordinary held primary action energizes the selected cutter immediately"
+	)
+	for _thermal_tick: int in range(34):
+		player.call("_update_plasma_cutter_thermal", 0.1)
+	_expect(
+		player.plasma_cutter_overheated
+		and not player.plasma_cutter_active
+		and not player.plasma_cutter_trigger_held,
+		"overheat atomically stops the beam and requires a fresh press"
+	)
+	for _cool_tick: int in range(30):
+		player.call("_update_plasma_cutter_thermal", 0.1)
+	_expect(
+		not player.plasma_cutter_overheated
+		and player.plasma_cutter_heat_ratio < 0.3,
+		"thermal lockout releases only after the authored recovery threshold"
+	)
+	var replicated_state := player.to_state_dict(false)
+	_expect(
+		replicated_state.get("plasma_cutter_available") == true
+		and replicated_state.has("plasma_cutter_hit_position")
+		and float(replicated_state.get("plasma_cutter_range_meters", 0.0)) > 0.0,
+		"heat and beam endpoint remain replicated for host/client visual parity"
+	)
+	player.set_wrist_interface_open(true)
+	_expect(
+		not player.plasma_cutter_active
+		and not player.set_plasma_cutter_triggered(true),
+		"using Fieldlink cannot leave the separate handheld cutter energized"
+	)
+	player.free()
+
+	var server_source := FileAccess.get_file_as_string(
+		"res://scripts/server/server.gd"
+	)
+	var proxy_source := FileAccess.get_file_as_string(
+		"res://scripts/client/player_proxy.gd"
+	)
+	_expect(
+		server_source.contains("func _process_player_plasma_cutter(")
+		and server_source.contains("DAMAGE_EVENT_SCRIPT.BRUSH_CAPSULE")
+		and server_source.contains('"source_kind": &"plasma_cutter"')
+		and proxy_source.contains('"PlasmaEmitter"')
+		and not server_source.contains("func set_plasma_cutter_triggered(value: bool) -> void:"),
+		"selected-tool input reaches canonical server destruction without a wrist RPC"
+	)
 
 
 func _test_device_contact_contract() -> void:
@@ -505,21 +609,32 @@ func _test_selectable_device_controls() -> void:
 	view.free()
 
 
-func _test_first_person_presentation() -> void:
+func _test_equipped_wrist_presentation() -> void:
 	var camera := Camera3D.new()
 	root.add_child(camera)
+	var wrist_mount := Node3D.new()
+	wrist_mount.position = Vector3(-0.055, -0.105, -0.44)
+	camera.add_child(wrist_mount)
+	var definition := load(WRIST_DEVICE_PATH) as EquippableItemDefinition
+	var equipped_visual := definition.instantiate_equipped_visual()
+	equipped_visual.scale = Vector3.ONE * PlayerProxy.EQUIPPED_WRIST_DEVICE_SCALE
+	wrist_mount.add_child(equipped_visual)
 	var presentation := (
 		WRIST_PRESENTATION_SCENE.instantiate()
 		as WristTerminalPresentation
 	)
 	camera.add_child(presentation)
+	presentation.bind_camera(camera)
+	presentation.bind_equipped_visual(equipped_visual)
+	presentation.bind_wrist_mount(wrist_mount)
+	presentation.call("_process", 0.0)
+	var equipped_screen := equipped_visual.get_node(
+		"TechScreenHousing/screen_etx_1_partial/"
+		+ "screen_etx_1_partial_round_screen"
+	) as MeshInstance3D
 	_expect(
-		presentation.has_node(
-			"DeviceMount/CorporateFieldTerminalVisual/TechScreenHousing/"
-			+ "screen_etx_1_partial/"
-			+ "screen_etx_1_partial_round_screen"
-		),
-		"first-person presentation targets the asset's actual curved screen"
+		presentation.terminal_screen == equipped_screen,
+		"the interactive controller targets the actually equipped curved screen"
 	)
 	_expect(
 		presentation.terminal_screen.mesh is ArrayMesh
@@ -553,26 +668,10 @@ func _test_first_person_presentation() -> void:
 		"Fieldlink owns no local player that can bypass shared spatial audio"
 	)
 	presentation.set_session_info("CREW  /  2 OF 4", true)
-	presentation.set_wrist_side(false)
 	_expect(
-		presentation.forearm.position.x > 0.0
-		and presentation.hand.position.x < 0.0,
-		"the presentation mirrors its arm geometry when only the right arm survives"
-	)
-	var backplate := presentation.get_node(
-		"DeviceMount/CorporateFieldTerminalVisual/Backplate"
-	) as MeshInstance3D
-	var device_rear_z := _minimum_relative_z(backplate, presentation)
-	_expect(
-		_maximum_relative_z(presentation.forearm, presentation)
-		< device_rear_z
-		and _maximum_relative_z(presentation.hand, presentation)
-		< device_rear_z,
-		"forearm and hand remain behind the Fieldlink mounting plate"
-	)
-	_expect(
-		not presentation.has_node("Cuff"),
-		"the first-person rig contains no cuff box that can cover the display"
+		presentation.find_children("*", "MeshInstance3D", true, false).size() == 1
+		and presentation.terminal_input_surface != equipped_screen,
+		"the controller contains only its invisible hit surface, never a duplicate arm or PBD"
 	)
 	var device_sound_ids: Array[StringName] = []
 	presentation.device_sound_requested.connect(
@@ -629,26 +728,27 @@ func _test_first_person_presentation() -> void:
 		input_mapping_is_exact,
 		"ray-picked plane coordinates align the rotated physical screen with exact UI texels"
 	)
-	var idle_position_a := presentation.position
+	var idle_transform := wrist_mount.global_transform
 	for _frame_index: int in range(60):
 		presentation.call("_process", 1.0 / 60.0)
-	var idle_position_b := presentation.position
 	_expect(
-		idle_position_a.distance_to(WristTerminalPresentation.OPEN_POSITION) > 0.0001
-		and idle_position_b.distance_to(WristTerminalPresentation.OPEN_POSITION) > 0.0001
-		and idle_position_a.distance_to(idle_position_b) > 0.0001
-		and idle_position_b.distance_to(WristTerminalPresentation.OPEN_POSITION) < 0.006,
-		"an open Fieldlink retains restrained heavy-arm hold motion while the player stands still"
+		presentation.global_transform.is_equal_approx(
+			equipped_visual.global_transform
+		)
+		and equipped_visual.global_position.is_equal_approx(idle_transform.origin),
+		"the display and its hit controller remain on one real wrist transform while idle"
 	)
-	presentation.set_motion_input(Vector3(0.02, -0.04, 0.0), 1.0)
+	wrist_mount.position += Vector3(0.012, -0.018, 0.006)
 	for _frame_index: int in range(60):
 		presentation.call("_process", 1.0 / 60.0)
-	var walking_position := presentation.position
 	_expect(
-		walking_position.x > WristTerminalPresentation.OPEN_POSITION.x + 0.003
-		and walking_position.y < WristTerminalPresentation.OPEN_POSITION.y - 0.007
-		and walking_position.distance_to(WristTerminalPresentation.OPEN_POSITION) < 0.018,
-		"Fieldlink inherits a visible but bounded fraction of the shared gait bob"
+		presentation.global_transform.is_equal_approx(
+			equipped_visual.global_transform
+		)
+		and equipped_visual.global_position.is_equal_approx(
+			wrist_mount.global_position
+		),
+		"character movement carries the real arm, equipped PBD, and hit surface together"
 	)
 	var moving_input_mapping_is_exact := true
 	for sample_index: int in range(local_input_samples.size()):
@@ -831,10 +931,6 @@ func _test_first_person_presentation() -> void:
 		and phosphor_floor < 1.0,
 		"colored pixels use exponential decay with a readable persistence floor"
 	)
-	_expect(
-		WristTerminalPresentation.OPEN_POSITION.z > -0.5,
-		"the open Fieldlink sits closely enough to read without clipping the camera"
-	)
 	var grit_strength := float(
 		screen_material.get_shader_parameter("grit_strength")
 	)
@@ -963,6 +1059,43 @@ func _test_held_device_motion() -> void:
 		).is_zero_approx(),
 		"running drives a bounded phase-locked shoulder wave and fatigue adds a lagged load response"
 	)
+	var right_lateral_rotation := HELD_DEVICE_MOTION.lateral_rotation_response(
+		1.0,
+		0.0
+	)
+	var left_lateral_rotation := HELD_DEVICE_MOTION.lateral_rotation_response(
+		-1.0,
+		0.0
+	)
+	var right_acceleration_position := HELD_DEVICE_MOTION.lateral_position_response(
+		0.0,
+		1.0
+	)
+	_expect(
+		right_lateral_rotation.z < -0.05
+		and left_lateral_rotation.z > 0.05
+		and absf(right_lateral_rotation.z + left_lateral_rotation.z) < 0.0001
+		and right_acceleration_position.x < -0.009
+		and right_acceleration_position.y < 0.0,
+		"sideways speed creates a mirrored directional roll while lateral acceleration briefly lags the heavy device"
+	)
+	var lateral_motion := HELD_DEVICE_MOTION.new()
+	var lateral_reference := HELD_DEVICE_MOTION.new()
+	lateral_motion.set_lateral_motion_ratio(0.0)
+	lateral_reference.set_lateral_motion_ratio(0.0)
+	for _frame_index: int in range(60):
+		lateral_motion.advance(1.0 / 60.0)
+		lateral_reference.advance(1.0 / 60.0)
+	lateral_motion.set_lateral_motion_ratio(1.0)
+	lateral_motion.advance(1.0 / 60.0)
+	lateral_reference.advance(1.0 / 60.0)
+	_expect(
+		lateral_motion.position_offset.x
+		< lateral_reference.position_offset.x - 0.0002
+		and lateral_motion.rotation_offset.z
+		< lateral_reference.rotation_offset.z - 0.004,
+		"the reusable spring turns a new side acceleration into a small immediate inertial lag without snapping"
+	)
 	var motion := HELD_DEVICE_MOTION.new()
 	motion.set_gait_input(Vector3(0.02, -0.04, 0.0), 1.0, 0.5, 1.0)
 	for _frame_index: int in range(120):
@@ -1016,6 +1149,9 @@ func _test_client_input_contract() -> void:
 	var server_player_source := FileAccess.get_file_as_string(
 		"res://scripts/server/server_player.gd"
 	)
+	var plasma_beam_source := FileAccess.get_file_as_string(
+		"res://scripts/client/plasma_cutter_beam_3d.gd"
+	)
 	var wrist_packet := FIELDLINK_DISPLAY_STATE.make_replication_packet(
 		7,
 		true,
@@ -1059,8 +1195,17 @@ func _test_client_input_contract() -> void:
 	_expect(
 		proxy_source.contains("MOUSE_BUTTON_RIGHT")
 		and proxy_source.contains("_set_wrist_mouse_look_active(")
-		and proxy_source.contains("_apply_mouse_look(event.relative)"),
-		"the open Fieldlink reserves RMB as a press-and-hold mouse-look clutch"
+		and proxy_source.contains("_apply_mouse_look(")
+		and proxy_source.contains("event.screen_relative")
+		and not proxy_source.contains("is_plasma_cutter_page_active"),
+		"the open Fieldlink reserves physical RMB only as press-and-hold mouse-look"
+	)
+	_expect(
+		proxy_source.contains("var origin := camera.global_position")
+		and proxy_source.contains("target_plasma_cutter_active")
+		and proxy_source.contains("endpoint = target_plasma_cutter_hit_position")
+		and plasma_beam_source.contains("snap_endpoint := false"),
+		"the wrist beam predicts along the camera/grabber ray then snaps to authority's exact cut point"
 	)
 	_expect(
 		client_source.contains("_suspend_gameplay_input(")
@@ -1095,9 +1240,21 @@ func _test_client_input_contract() -> void:
 	var replicated_wrist_state := movement_player.to_state_dict()
 	_expect(
 		replicated_wrist_state.get("wrist_interface_open") == true
-		and replicated_wrist_state.get("wrist_display_page") == &"scanner",
-		"late-join player snapshots retain the visible Fieldlink pose and page"
+		and replicated_wrist_state.get("wrist_display_page") == &"scanner"
+		and is_equal_approx(
+			float(replicated_wrist_state.get("look_pitch", 0.0)),
+			-0.2
+		),
+		"late-join player snapshots retain the visible Fieldlink pose, page, and arm-facing look pitch"
 	)
+	movement_player.set_wrist_interface_open(false)
+	movement_player.flip_active = true
+	_expect(
+		not movement_player.set_wrist_interface_open(true)
+		and not movement_player.wrist_interface_open,
+		"the server cannot raise Fieldlink through a flip already in progress"
+	)
+	movement_player.flip_active = false
 	movement_player.free()
 	_expect(
 		proxy_source.contains("device_sound_requested.connect(")
@@ -1116,13 +1273,63 @@ func _test_local_body_arm_isolation() -> void:
 		not proxy.open_wrist_interface(),
 		"technical interfaces cannot summon a Fieldlink the player has lost"
 	)
-	proxy.equipment_definition_paths[
-		PlayerInventoryRules.WRIST_DEVICE_SLOT
-	] = WRIST_DEVICE_PATH
+	proxy.call("_apply_equipment_state", {
+		PlayerInventoryRules.WRIST_DEVICE_SLOT: {
+			"definition_path": WRIST_DEVICE_PATH,
+		},
+	})
+	proxy.look_pitch = 0.0
+	proxy.call("_apply_mouse_look", Vector2(0.0, 100000.0))
+	_expect(
+		is_equal_approx(proxy.look_pitch, PlayerProxy.MIN_WORLD_LOOK_PITCH),
+		"ordinary downward look stops before the local camera can expose the inside of the neck mesh"
+	)
+	proxy.look_pitch = 0.0
 	_expect(
 		proxy.open_wrist_interface(),
 		"technical interfaces can open the equipped Fieldlink through its public API"
 	)
+	proxy.wrist_pose_weight = 0.35
+	proxy.look_pitch = deg_to_rad(35.0)
+	proxy.camera_pivot.rotation.x = deg_to_rad(35.0)
+	proxy.call("_set_wrist_mouse_look_active", true)
+	_expect(
+		proxy.wrist_mouse_look_active
+		and proxy.wrist_mouse_look_owns_pitch
+		and proxy.look_pitch <= PlayerProxy.WRIST_LOOK_PITCH
+		and float(proxy.call("_resolved_camera_pitch"))
+		<= PlayerProxy.WRIST_LOOK_PITCH,
+		"RMB acquires the PBD operating pitch instead of turning a rendered camera offset into upward look"
+	)
+	proxy.call("_set_wrist_mouse_look_active", false)
+	for _recenter_frame: int in range(12):
+		proxy.call("_update_wrist_pose", 1.0 / 60.0)
+	_expect(
+		not proxy.wrist_mouse_look_active
+		and not proxy.wrist_mouse_look_owns_pitch
+		and is_zero_approx(proxy.wrist_mouse_look_blend)
+		and is_equal_approx(
+			float(proxy.call("_resolved_camera_pitch")),
+			PlayerProxy.WRIST_LOOK_PITCH
+		),
+		"releasing RMB smoothly returns to the usable PBD view without closing the device"
+	)
+	proxy.wrist_pose_weight = 1.0
+	proxy.camera_pivot.rotation.x = PlayerProxy.WRIST_LOOK_PITCH
+	proxy.captured_mouse_motion_discard_remaining = 0
+	proxy.call("_set_wrist_mouse_look_active", true)
+	proxy.call("_apply_mouse_look", Vector2(0.0, 100000.0))
+	_expect(
+		is_equal_approx(proxy.look_pitch, PlayerProxy.MIN_WRIST_LOOK_PITCH)
+		and is_equal_approx(
+			float(proxy.call("_resolved_camera_pitch")),
+			PlayerProxy.MIN_WRIST_LOOK_PITCH
+		),
+		"Fieldlink's RMB look clutch retains its independent vertical range"
+	)
+	proxy.call("_set_wrist_mouse_look_active", false)
+	for _downward_release_frame: int in range(12):
+		proxy.call("_update_wrist_pose", 1.0 / 60.0)
 	proxy.wrist_pose_weight = 1.0
 	proxy.camera_pivot.rotation.x = PlayerProxy.WRIST_LOOK_PITCH
 	var look_before := Vector2(proxy.look_yaw, proxy.look_pitch)
@@ -1147,23 +1354,380 @@ func _test_local_body_arm_isolation() -> void:
 		"holding RMB exposes vertical Fieldlink mouse look without a capture transition"
 	)
 	proxy.call("_set_wrist_mouse_look_active", false)
+	for _release_frame: int in range(12):
+		proxy.call("_update_wrist_pose", 1.0 / 60.0)
 	_expect(
 		not proxy.wrist_mouse_look_active
+		and not proxy.wrist_mouse_look_owns_pitch
 		and is_equal_approx(
 			float(proxy.call("_resolved_camera_pitch")),
-			looked_up_pitch
+			PlayerProxy.WRIST_LOOK_PITCH
 		),
-		"releasing RMB returns pointer interaction without hiding its camera pitch"
+		"releasing RMB recenters a deliberately moved view while returning pointer interaction"
 	)
 	proxy.wrist_pose_weight = 0.0
 	proxy.call("_update_wrist_pose", 1.0)
 	_expect(
-		is_zero_approx(proxy.left_arm_visual.rotation.x)
-		and is_zero_approx(proxy.left_arm_visual.rotation.z)
-		and is_zero_approx(proxy.right_arm_visual.rotation.x)
-		and is_zero_approx(proxy.right_arm_visual.rotation.z),
-		"the owner's replicated body arms cannot pierce the camera-mounted screen"
+		not proxy.left_arm_visual.visible
+		and not proxy.right_arm_visual.visible
+		and proxy.character_skin.visible
+		and proxy.character_skin.is_usable(),
+		"an authored owner never renders either legacy grey arm"
 	)
+	proxy.target_on_floor = true
+	proxy.local_move_input = Vector2.RIGHT
+	proxy.local_predicted_horizontal_speed = ServerPlayer.RUN_SPEED
+	proxy.local_predicted_horizontal_velocity = Vector2(
+		ServerPlayer.RUN_SPEED,
+		0.0
+	)
+	proxy.local_locomotion_prediction_initialized = true
+	proxy.call("_update_character_pose", 1.0 / 60.0)
+	for _frame_index: int in range(120):
+		proxy.wrist_presentation.call("_process", 1.0 / 60.0)
+	var local_authored_wrist := proxy.character_skin.get_wrist_mount(true)
+	var local_equipped_pbd := proxy.equipment_visuals.get(
+		PlayerInventoryRules.WRIST_DEVICE_SLOT
+	) as Node3D
+	var local_screen_in_camera := proxy.camera.to_local(
+		proxy.wrist_presentation.terminal_screen.global_position
+	)
+	var local_pbd_up := (
+		proxy.camera.global_basis.inverse()
+		* local_equipped_pbd.global_basis.y.normalized()
+	).normalized()
+	var local_pbd_facing := local_equipped_pbd.global_basis.z.normalized().dot(
+		(proxy.camera.global_position - local_equipped_pbd.global_position).normalized()
+	)
+	var projected_pbd_up := Vector2(local_pbd_up.x, local_pbd_up.y).normalized()
+	var local_shoulder := proxy.to_local(proxy.character_skin.call(
+		"_bone_world_origin", &"mixamorig_LeftArm"
+	)) as Vector3
+	var local_elbow := proxy.to_local(proxy.character_skin.call(
+		"_bone_world_origin", &"mixamorig_LeftForeArm"
+	)) as Vector3
+	var local_hand := proxy.to_local(proxy.character_skin.call(
+		"_bone_world_origin", &"mixamorig_LeftHand"
+	)) as Vector3
+	var local_hand_index := proxy.character_skin.skeleton.find_bone(
+		PlayerCharacterSkin.LEFT_HAND
+	)
+	var local_hand_basis_in_camera := (
+		proxy.camera.global_basis.inverse()
+		* proxy.character_skin.skeleton.global_basis
+		* proxy.character_skin.skeleton.get_bone_global_pose(
+			local_hand_index
+		).basis
+	).orthonormalized()
+	var forearm_axis := (
+		proxy.character_skin.call(
+			"_bone_world_origin", &"mixamorig_LeftHand"
+		) as Vector3
+		- proxy.character_skin.call(
+			"_bone_world_origin", &"mixamorig_LeftForeArm"
+		) as Vector3
+	).normalized()
+	var attachment_axis_alignment := absf(
+		local_equipped_pbd.global_basis.x.normalized().dot(forearm_axis)
+	)
+	var wrist_attachment := local_authored_wrist.get_parent() as BoneAttachment3D
+	var attachment_axis_alignment_raw := (
+		absf(wrist_attachment.global_basis.y.normalized().dot(forearm_axis))
+		if wrist_attachment != null
+		else -1.0
+	)
+	var expected_mount_basis := Basis.from_euler(Vector3(
+		0.0,
+		0.0,
+		PlayerCharacterSkin.FIELDLINK_MOUNT_ROLL
+	))
+	_expect(
+		proxy.wrist_presentation.wrist_mount == local_authored_wrist
+		and proxy.wrist_presentation.global_transform.is_equal_approx(
+			local_equipped_pbd.global_transform
+		),
+		"the owner's interactive display follows the same authored wrist used by the equipped item"
+	)
+	_expect(
+		wrist_attachment != null
+		and wrist_attachment.bone_idx == proxy.character_skin.skeleton.find_bone(
+			PlayerCharacterSkin.LEFT_FOREARM
+		)
+		and local_authored_wrist.basis.is_equal_approx(expected_mount_basis)
+		and is_equal_approx(
+			local_authored_wrist.position.y,
+			proxy.character_skin._left_lower_arm_length
+			* PlayerCharacterSkin.FIELDLINK_FOREARM_LENGTH_RATIO
+		)
+		and is_equal_approx(
+			local_authored_wrist.position.z,
+			PlayerCharacterSkin.FIELDLINK_FOREARM_SURFACE_OFFSET
+		),
+		"the wearable uses one immutable authored quarter-turn beneath a real forearm BoneAttachment3D"
+	)
+	_expect(
+		absf(local_screen_in_camera.x) < 0.08
+		and local_screen_in_camera.y > -0.06
+		and local_screen_in_camera.y < 0.08
+		and local_screen_in_camera.z < -0.14
+		and local_screen_in_camera.z > -0.45
+		and local_pbd_facing > 0.98
+		and projected_pbd_up.y > 0.99
+		and attachment_axis_alignment > 0.999
+		and local_elbow.y > local_shoulder.y + 0.02
+		and local_elbow.x < local_shoulder.x
+		and local_hand.x > local_elbow.x + 0.12
+		and local_hand_basis_in_camera.z.y < -0.35
+		and local_equipped_pbd.scale.is_equal_approx(
+			Vector3.ONE * PlayerProxy.EQUIPPED_WRIST_DEVICE_SCALE
+		),
+		(
+			"the raised upper arm folds its forearm inward while the corrected wearable mount presents a readable display (screen=%s, facing=%.3f, up=%s, attach=%.3f/raw=%.3f, mount_local=%s, attachment=%s, shoulder=%s, elbow=%s, hand=%s)"
+			% [
+				local_screen_in_camera,
+				local_pbd_facing,
+				projected_pbd_up,
+				attachment_axis_alignment,
+				attachment_axis_alignment_raw,
+				local_authored_wrist.transform,
+				wrist_attachment.global_transform if wrist_attachment != null else Transform3D.IDENTITY,
+				local_shoulder,
+				local_elbow,
+				local_hand,
+			]
+		)
+	)
+	proxy.local_move_input = Vector2.ZERO
+	proxy.local_predicted_horizontal_speed = 0.0
+	proxy.local_predicted_horizontal_velocity = Vector2.ZERO
+	proxy.target_velocity = Vector3.ZERO
+	proxy.target_gait_active = false
+	proxy.headbob_weight = 0.0
+	proxy.headbob_run_weight = 0.0
+	proxy.target_stamina_ratio = 1.0
+	for _rest_settle_frame: int in range(120):
+		proxy.call("_update_character_pose", 1.0 / 60.0)
+	var rested_hold_reference := local_equipped_pbd.global_transform
+	var rested_hold_position_excursion := 0.0
+	var rested_hold_rotation_excursion := 0.0
+	var hit_surface_follows_arm := true
+	for _hold_frame: int in range(240):
+		proxy.call("_update_character_pose", 1.0 / 60.0)
+		proxy.wrist_presentation.call("_process", 1.0 / 60.0)
+		var current_hold := local_equipped_pbd.global_transform
+		rested_hold_position_excursion = maxf(
+			rested_hold_position_excursion,
+			current_hold.origin.distance_to(rested_hold_reference.origin)
+		)
+		rested_hold_rotation_excursion = maxf(
+			rested_hold_rotation_excursion,
+			current_hold.basis.get_rotation_quaternion().angle_to(
+				rested_hold_reference.basis.get_rotation_quaternion()
+			)
+		)
+		hit_surface_follows_arm = (
+			hit_surface_follows_arm
+			and proxy.wrist_presentation.global_transform.is_equal_approx(
+				current_hold
+			)
+		)
+	proxy.target_stamina_ratio = 0.05
+	for _fatigue_settle_frame: int in range(120):
+		proxy.call("_update_character_pose", 1.0 / 60.0)
+	var fatigued_hold_reference := local_equipped_pbd.global_transform
+	var fatigued_hold_position_excursion := 0.0
+	var fatigued_hold_rotation_excursion := 0.0
+	for _fatigue_frame: int in range(240):
+		proxy.call("_update_character_pose", 1.0 / 60.0)
+		proxy.wrist_presentation.call("_process", 1.0 / 60.0)
+		var current_hold := local_equipped_pbd.global_transform
+		fatigued_hold_position_excursion = maxf(
+			fatigued_hold_position_excursion,
+			current_hold.origin.distance_to(fatigued_hold_reference.origin)
+		)
+		fatigued_hold_rotation_excursion = maxf(
+			fatigued_hold_rotation_excursion,
+			current_hold.basis.get_rotation_quaternion().angle_to(
+				fatigued_hold_reference.basis.get_rotation_quaternion()
+			)
+		)
+	_expect(
+		hit_surface_follows_arm
+		and rested_hold_position_excursion > 0.0005
+		and rested_hold_position_excursion < 0.025
+		and rested_hold_rotation_excursion > deg_to_rad(0.03)
+		and fatigued_hold_position_excursion > 0.0005
+		and fatigued_hold_position_excursion < 0.025
+		and fatigued_hold_rotation_excursion > deg_to_rad(0.03)
+		and proxy.fieldlink_hold_motion.fatigue_weight > 0.9,
+		(
+			"the real skeletal arm inherits bounded heavy-device sway, its END-sensitive correction remains live, and the hit surface follows it exactly (rest %.4fm/%.2fdeg, tired %.4fm/%.2fdeg)"
+			% [
+				rested_hold_position_excursion,
+				rad_to_deg(rested_hold_rotation_excursion),
+				fatigued_hold_position_excursion,
+				rad_to_deg(fatigued_hold_rotation_excursion),
+			]
+		)
+	)
+	proxy.target_stamina_ratio = 1.0
+	for _recovery_frame: int in range(120):
+		proxy.call("_update_character_pose", 1.0 / 60.0)
+	proxy.local_move_input = Vector2.RIGHT
+	proxy.local_predicted_horizontal_speed = ServerPlayer.RUN_SPEED
+	proxy.local_predicted_horizontal_velocity = Vector2(
+		ServerPlayer.RUN_SPEED,
+		0.0
+	)
+	var entry_results: Array[Transform3D] = []
+	var entry_bends: Array[Vector3] = []
+	var entry_hand_down_axes: Array[float] = []
+	var every_open_reset_bend_history := true
+	var fixed_wrist_transform := local_authored_wrist.transform
+	for fast_mouse_swing: Vector2 in [
+		Vector2(0.0, -100000.0),
+		Vector2(0.0, 100000.0),
+	]:
+		proxy.close_wrist_interface()
+		proxy.wrist_pose_weight = 0.0
+		proxy.look_pitch = 0.0
+		proxy.call("_apply_mouse_look", fast_mouse_swing)
+		proxy.camera_pivot.rotation.x = proxy.look_pitch
+		proxy.character_skin._left_previous_arm_bend = Vector3.DOWN
+		proxy.open_wrist_interface()
+		every_open_reset_bend_history = (
+			every_open_reset_bend_history
+			and proxy.character_skin._left_previous_arm_bend.is_zero_approx()
+		)
+		for _settle_frame: int in range(30):
+			proxy.call("_update_wrist_pose", 1.0 / 60.0)
+			proxy.camera_pivot.rotation.x = float(
+				proxy.call("_resolved_camera_pitch")
+			)
+			proxy.call("_update_character_pose", 1.0 / 60.0)
+		entry_results.append(
+			proxy.camera.global_transform.affine_inverse()
+			* local_equipped_pbd.global_transform
+		)
+		entry_bends.append(proxy.character_skin._left_previous_arm_bend.normalized())
+		entry_hand_down_axes.append((
+			proxy.camera.global_basis.inverse()
+			* proxy.character_skin.skeleton.global_basis
+			* proxy.character_skin.skeleton.get_bone_global_pose(
+				local_hand_index
+			).basis
+		).orthonormalized().z.y)
+	var entry_position_difference := entry_results[0].origin.distance_to(
+		entry_results[1].origin
+	)
+	var entry_rotation_difference := (
+		entry_results[0].basis.orthonormalized().get_rotation_quaternion()
+		.angle_to(
+			entry_results[1].basis.orthonormalized().get_rotation_quaternion()
+		)
+	)
+	_expect(
+		entry_results.size() == 2
+		and every_open_reset_bend_history
+		and entry_bends.size() == 2
+		and entry_bends[0].dot(entry_bends[1]) > 0.98
+		and entry_hand_down_axes.size() == 2
+		and entry_hand_down_axes[0] < -0.35
+		and entry_hand_down_axes[1] < -0.35
+		and entry_position_difference < 0.01
+		and entry_rotation_difference < deg_to_rad(1.75)
+		and local_authored_wrist.transform.is_equal_approx(
+			fixed_wrist_transform
+		)
+		and is_equal_approx(
+			proxy.camera_pivot.rotation.x,
+			PlayerProxy.WRIST_LOOK_PITCH
+		),
+		(
+			"opposite pre-open camera swings converge on one eye-relative arm pose apart from bounded live hold sway, without rotating the physical mount (position_delta=%.4f, angle_delta=%.2fdeg)"
+			% [entry_position_difference, rad_to_deg(entry_rotation_difference)]
+		)
+	)
+	var safety_positions: Array[Vector3] = []
+	var safety_clearances: Array[float] = []
+	var safety_pose_pitches: Array[float] = []
+	proxy.wrist_mouse_look_active = true
+	proxy.wrist_mouse_look_owns_pitch = true
+	proxy.wrist_mouse_look_blend = 1.0
+	for safety_pitch: float in [deg_to_rad(30.0), deg_to_rad(85.0)]:
+		proxy.look_pitch = safety_pitch
+		proxy.camera_pivot.rotation.x = safety_pitch
+		for _safety_frame: int in range(120):
+			proxy.call("_update_character_pose", 1.0 / 60.0)
+		safety_positions.append(local_equipped_pbd.global_position)
+		safety_clearances.append(_nearest_mesh_distance_to_point(
+			local_equipped_pbd,
+			proxy.camera.global_position
+		))
+		safety_pose_pitches.append(proxy.fieldlink_pose_pitch)
+	_expect(
+		is_equal_approx(
+			safety_pose_pitches[1],
+			PlayerProxy.FIELDLINK_UPWARD_FOCUS_PITCH
+		)
+		and safety_pose_pitches[0] < deg_to_rad(-21.0)
+		and safety_pose_pitches[0] > PlayerProxy.WRIST_LOOK_PITCH
+		and safety_pose_pitches[1] < deg_to_rad(-19.5)
+		and proxy.camera_pivot.rotation.x > deg_to_rad(84.0)
+		and safety_positions[0].distance_to(safety_positions[1]) < 0.05
+		and minf(safety_clearances[0], safety_clearances[1])
+		> proxy.camera.near + 0.05,
+		(
+			"upward RMB head look leaves the arm near its lower operating pose while the camera remains free (poses=%.1f/%.1fdeg, clearance=%.3fm)"
+			% [
+				rad_to_deg(safety_pose_pitches[0]),
+				rad_to_deg(safety_pose_pitches[1]),
+				minf(safety_clearances[0], safety_clearances[1]),
+			]
+		)
+	)
+	proxy.look_pitch = PlayerProxy.MIN_WRIST_LOOK_PITCH
+	proxy.camera_pivot.rotation.x = PlayerProxy.MIN_WRIST_LOOK_PITCH
+	for _downward_safety_frame: int in range(120):
+		proxy.call("_update_character_pose", 1.0 / 60.0)
+		proxy.wrist_presentation.call("_process", 1.0 / 60.0)
+	var downward_screen_in_camera := proxy.camera.to_local(
+		proxy.wrist_presentation.terminal_screen.global_position
+	)
+	var downward_clearance := _nearest_mesh_distance_to_point(
+		local_equipped_pbd,
+		proxy.camera.global_position
+	)
+	_expect(
+		is_equal_approx(
+			proxy.fieldlink_pose_pitch,
+			PlayerProxy.FIELDLINK_POSE_MIN_PITCH
+		)
+		and absf(downward_screen_in_camera.x) < 0.15
+		and absf(downward_screen_in_camera.y) < 0.20
+		and downward_screen_in_camera.z < -0.12
+		and downward_screen_in_camera.z > -0.55
+		and downward_clearance > proxy.camera.near + 0.07,
+		(
+			"maximum downward Fieldlink look stays inside the physical arm's readable, camera-safe arc (screen=%s, clearance=%.3fm)"
+			% [downward_screen_in_camera, downward_clearance]
+		)
+	)
+	proxy.local_move_input = Vector2.LEFT
+	proxy.update_headbob(1.0 / 60.0)
+	_expect(
+		proxy.local_predicted_horizontal_velocity.x > 0.0
+		and proxy.local_predicted_horizontal_velocity.x < ServerPlayer.RUN_SPEED,
+		"opposite local input brakes the predicted velocity through zero instead of assigning the old speed to the new direction"
+	)
+	proxy.local_move_input = Vector2.ZERO
+	proxy.local_predicted_horizontal_speed = 0.0
+	proxy.local_predicted_horizontal_velocity = Vector2.ZERO
+	proxy.look_pitch = looked_up_pitch
+	proxy.camera_pivot.rotation.x = looked_up_pitch
+	proxy.wrist_mouse_look_active = true
+	proxy.wrist_mouse_look_owns_pitch = true
+	proxy.wrist_mouse_look_blend = 1.0
 	var look_before_close := Vector2(proxy.look_yaw, proxy.look_pitch)
 	proxy.close_wrist_interface()
 	_expect(
@@ -1176,6 +1740,20 @@ func _test_local_body_arm_isolation() -> void:
 			looked_up_pitch
 		),
 		"closing Fieldlink needs no recapture and reveals no hidden pitch"
+	)
+	proxy.open_wrist_interface()
+	proxy.wrist_mouse_look_owns_pitch = true
+	proxy.wrist_mouse_look_blend = 1.0
+	# Simulate an old/replicated device-only pitch outside the new physical comfort arc.
+	proxy.look_pitch = deg_to_rad(-85.0)
+	proxy.close_wrist_interface()
+	_expect(
+		is_equal_approx(proxy.look_pitch, PlayerProxy.MIN_WORLD_LOOK_PITCH)
+		and is_equal_approx(
+			float(proxy.call("_resolved_camera_pitch")),
+			PlayerProxy.MIN_WORLD_LOOK_PITCH
+		),
+		"closing Fieldlink clamps only its device-exclusive downward angle before ordinary view resumes"
 	)
 	proxy.set_local_player(false)
 	# The local-use portion above installs only the capability marker; force the
@@ -1218,9 +1796,12 @@ func _test_local_body_arm_isolation() -> void:
 	_expect(
 		proxy.left_arm_visual.rotation.x > 0.0
 		and not is_zero_approx(proxy.left_arm_visual.rotation.z)
-		and torso_space_screen.z < -0.2
-		and remote_device_rear_z < -0.2,
-		"the remote arm raises its equipped Fieldlink forward of the torso"
+		and torso_space_screen.z < -0.08
+		and remote_device_rear_z < -0.08,
+		(
+			"the remote arm raises its equipped Fieldlink forward of the torso (screen_z=%.3f, rear_z=%.3f)"
+			% [torso_space_screen.z, remote_device_rear_z]
+		)
 	)
 	_expect(
 		remote_display != null
@@ -1253,12 +1834,53 @@ func _test_local_body_arm_isolation() -> void:
 		remote_backplate,
 		body_visual
 	)
+	var expected_right_wrist_mount := (
+		proxy.character_skin.get_wrist_mount(false)
+		if proxy.character_skin != null and proxy.character_skin.is_usable()
+		else proxy.right_wrist_mount
+	)
+	var right_attachment := (
+		expected_right_wrist_mount.get_parent() as BoneAttachment3D
+		if expected_right_wrist_mount != null
+		else null
+	)
+	var expected_right_mount_basis := Basis.from_euler(Vector3(
+		0.0,
+		0.0,
+		-PlayerCharacterSkin.FIELDLINK_MOUNT_ROLL
+	))
+	var right_hand_index := proxy.character_skin.skeleton.find_bone(
+		PlayerCharacterSkin.RIGHT_HAND
+	)
+	var right_hand_basis_in_player := (
+		proxy.global_basis.inverse()
+		* proxy.character_skin.skeleton.global_basis
+		* proxy.character_skin.skeleton.get_bone_global_pose(
+			right_hand_index
+		).basis
+	).orthonormalized()
 	_expect(
-		wrist_visual.get_parent() == proxy.right_wrist_mount
+		wrist_visual.get_parent() == expected_right_wrist_mount
+		and right_attachment != null
+		and right_attachment.bone_idx == proxy.character_skin.skeleton.find_bone(
+			PlayerCharacterSkin.RIGHT_FOREARM
+		)
+		and expected_right_wrist_mount.basis.is_equal_approx(
+			expected_right_mount_basis
+		)
 		and proxy.right_arm_visual.rotation.x > 0.0
 		and not is_zero_approx(proxy.right_arm_visual.rotation.z)
-		and right_arm_device_rear_z < -0.2,
-		"the same forward shoulder pose works when the Fieldlink moves to the surviving right arm"
+		and right_hand_basis_in_player.z.y < -0.35
+		and right_arm_device_rear_z < -0.08,
+		(
+			"the same forward shoulder pose works when the Fieldlink moves to the surviving right arm (parent=%s, pitch=%.3f, roll=%.3f, rear_z=%.3f)"
+			% [
+				wrist_visual.get_parent() == expected_right_wrist_mount,
+				proxy.right_arm_visual.rotation.x,
+				proxy.right_arm_visual.rotation.z,
+				right_arm_device_rear_z,
+			]
+		)
 	)
 	proxy.apply_replicated_wrist_state(false, &"scanner")
 	_expect(
@@ -1293,6 +1915,32 @@ func _minimum_relative_z(mesh_node: MeshInstance3D, root_node: Node3D) -> float:
 
 func _maximum_relative_z(mesh_node: MeshInstance3D, root_node: Node3D) -> float:
 	return _relative_z_extents(mesh_node, root_node).y
+
+
+func _nearest_mesh_distance_to_point(
+	visual_root: Node3D,
+	world_point: Vector3
+) -> float:
+	var nearest_distance := INF
+	for node: Node in visual_root.find_children(
+		"*",
+		"MeshInstance3D",
+		true,
+		false
+	):
+		var mesh_instance := node as MeshInstance3D
+		var bounds := mesh_instance.get_aabb()
+		var local_point := mesh_instance.to_local(world_point)
+		var nearest_local := Vector3(
+			clampf(local_point.x, bounds.position.x, bounds.end.x),
+			clampf(local_point.y, bounds.position.y, bounds.end.y),
+			clampf(local_point.z, bounds.position.z, bounds.end.z)
+		)
+		nearest_distance = minf(
+			nearest_distance,
+			world_point.distance_to(mesh_instance.to_global(nearest_local))
+		)
+	return nearest_distance
 
 
 func _relative_z_extents(

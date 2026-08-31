@@ -73,6 +73,14 @@ const SECTION_SPECS: Array[Dictionary] = [
 		"color": Color(0.9, 0.28, 0.16, 1.0),
 	},
 	{
+		"title": "FIELD TOOLS",
+		"directory": "res://resources/items/tools",
+		"columns": 2,
+		"copies": 1,
+		"slot_rotation": Vector3.ZERO,
+		"color": Color(0.12, 0.82, 0.62, 1.0),
+	},
+	{
 		"title": "GUN COMPONENTS",
 		"directory": "res://resources/guns/parts",
 		"columns": 4,

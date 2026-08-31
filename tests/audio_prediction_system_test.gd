@@ -261,6 +261,9 @@ func _test_network_architecture_contract() -> void:
 	)
 	_expect(
 		client_source.contains("set_local_locomotion_input(move, wants_run)")
+		and client_source.contains("request_foot_contact(")
+		and server_source.contains("func receive_foot_contact(")
+		and player_source.contains("accept_presented_foot_contact(")
 		and FileAccess.get_file_as_string(
 			"res://scripts/client/player_proxy.gd"
 		).contains("var predicts_from_local_intent := is_local_player")

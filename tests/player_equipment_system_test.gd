@@ -152,6 +152,11 @@ func _test_inventory_and_equipment_transactions() -> void:
 		player.get_inventory_capacity() == 1 and initial_revision > 0,
 		"a player without a backpack has one inventory slot"
 	)
+	_expect(
+		not player.cycle_inventory_slot(1)
+		and player.selected_inventory_slot == 0,
+		"mouse-wheel slot cycling is unavailable without an equipped backpack"
+	)
 	_expect(player.has_equipped_eyes(), "players begin with factory eyes")
 	_expect(
 		player.has_equipped_wrist_device(),
@@ -227,6 +232,20 @@ func _test_inventory_and_equipment_transactions() -> void:
 		player.get_inventory_capacity() == 6,
 		"a rejected backpack swap leaves equipment unchanged"
 	)
+	player.select_inventory_slot(5)
+	var selection_revision := player.inventory_revision
+	_expect(
+		player.cycle_inventory_slot(1)
+		and player.selected_inventory_slot == 0
+		and player.inventory_revision > selection_revision,
+		"backpack slot cycling advances and wraps through authoritative capacity"
+	)
+	_expect(
+		player.cycle_inventory_slot(-1)
+		and player.selected_inventory_slot == 5
+		and not player.cycle_inventory_slot(0),
+		"backpack slot cycling moves backward, wraps, and rejects a zero direction"
+	)
 
 	var salvaged_eyes := load(EYE_PATHS[1]) as EyeDefinition
 	var eye_result := player.try_equip_world_entry(
@@ -267,6 +286,44 @@ func _test_inventory_and_equipment_transactions() -> void:
 		and int(lean_snapshot.get("inventory_revision", -1)) == player.inventory_revision
 		and not lean_snapshot.has("inventory"),
 		"authoritative snapshots carry the revision for their cached public inventory"
+	)
+	var quiet_probability := ServerPlayer.ragdoll_backpack_release_probability(
+		1.5,
+		2.0,
+		2.0,
+		1.0
+	)
+	var hard_probability := ServerPlayer.ragdoll_backpack_release_probability(
+		10.0,
+		18.0,
+		8.0,
+		8.0
+	)
+	var extreme_probability := ServerPlayer.ragdoll_backpack_release_probability(
+		100.0,
+		100.0,
+		100.0,
+		100.0
+	)
+	_expect(
+		is_zero_approx(quiet_probability)
+		and hard_probability > 0.08
+		and hard_probability < extreme_probability
+		and extreme_probability
+		<= ServerPlayer.RAGDOLL_BACKPACK_MAX_RELEASE_PROBABILITY,
+		"backpack loss ignores ordinary motion, rises nonlinearly with violent ragdoll load, and remains capped"
+	)
+	var ragdoll_release := player.release_backpack_for_ragdoll()
+	var released_backpack: Dictionary = ragdoll_release.get("backpack", {})
+	var spilled_entries: Array = ragdoll_release.get("spilled", [])
+	_expect(
+		str(released_backpack.get("definition_path", ""))
+		== BACKPACK_PATHS[1]
+		and spilled_entries.size() == 4
+		and player.inventory_entries.size() == PlayerInventoryRules.BASE_CAPACITY
+		and player.get_inventory_capacity() == PlayerInventoryRules.BASE_CAPACITY
+		and not player.equipment_entries.has(PlayerInventoryRules.BACKPACK_SLOT),
+		"ragdoll backpack release preserves one baseline-pocket item and spills every backpack-only entry"
 	)
 
 	player.free()
@@ -485,6 +542,34 @@ func _test_server_wiring() -> void:
 		client_source.contains("USE_HOLD_SECONDS")
 		and client_source.contains("\"equip_item\""),
 		"holding F sends an equip intent"
+	)
+	var has_wheel_previous := false
+	for event: InputEvent in InputMap.action_get_events(
+		"inventory_slot_previous"
+	):
+		has_wheel_previous = (
+			has_wheel_previous
+			or (
+				event is InputEventMouseButton
+				and (event as InputEventMouseButton).button_index
+				== MOUSE_BUTTON_WHEEL_UP
+			)
+		)
+	var has_wheel_next := false
+	for event: InputEvent in InputMap.action_get_events("inventory_slot_next"):
+		has_wheel_next = (
+			has_wheel_next
+			or (
+				event is InputEventMouseButton
+				and (event as InputEventMouseButton).button_index
+				== MOUSE_BUTTON_WHEEL_DOWN
+			)
+		)
+	_expect(
+		has_wheel_previous
+		and has_wheel_next
+		and client_source.contains("\"cycle_inventory_slot\""),
+		"mouse wheel up/down routes backpack slot changes through the authoritative relative-selection RPC"
 	)
 
 

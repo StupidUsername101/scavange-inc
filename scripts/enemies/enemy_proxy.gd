@@ -2,6 +2,9 @@ class_name EnemyProxy
 extends Node3D
 
 const INTERPOLATION_SPEED := 12.0
+const HUMANOID_PRESENTATION := preload(
+	"res://scripts/enemies/enemy_humanoid_presentation_3d.gd"
+)
 
 #######################################################
 # Mirrors authoritative enemy state on clients and updates its local visual presentation.
@@ -11,6 +14,7 @@ var enemy_id := -1
 var definition_path := ""
 var definition: EnemyDefinition
 var visual: Node3D
+var humanoid_visual: Node3D
 var status_label: Label3D
 var target_position := Vector3.ZERO
 var target_rotation := Quaternion.IDENTITY
@@ -40,6 +44,8 @@ func apply_server_state(state: Dictionary) -> void:
 	var alive := bool(state.get("alive", true))
 	last_limb_states = state.get("limbs", [])
 	_apply_limb_visual_state(last_limb_states)
+	if humanoid_visual != null:
+		humanoid_visual.apply_server_state(state)
 	var display_name: String = (
 		definition.display_name if definition != null else "Enemy"
 	)
@@ -59,6 +65,7 @@ func apply_server_state(state: Dictionary) -> void:
 		else Color(1.0, 0.38, 0.2, 1.0) if active
 		else Color(0.62, 0.68, 0.72, 1.0)
 	)
+	status_label.visible = definition == null or definition.show_status_label
 
 
 func _process(delta: float) -> void:
@@ -72,6 +79,9 @@ func _process(delta: float) -> void:
 		if is_instance_valid(server_enemy):
 			global_transform = server_enemy.global_transform
 			_apply_limb_visual_state(server_enemy.get_limb_state())
+			if humanoid_visual != null:
+				humanoid_visual.apply_authoritative_enemy(server_enemy)
+				humanoid_visual.update_presentation(delta)
 			return
 	var weight := clampf(
 		1.0 - exp(-INTERPOLATION_SPEED * delta),
@@ -81,6 +91,8 @@ func _process(delta: float) -> void:
 	global_position = global_position.lerp(target_position, weight)
 	var current_rotation := global_basis.get_rotation_quaternion()
 	global_basis = Basis(current_rotation.slerp(target_rotation, weight))
+	if humanoid_visual != null:
+		humanoid_visual.update_presentation(delta)
 
 
 func _apply_definition(path: String) -> void:
@@ -94,9 +106,20 @@ func _apply_definition(path: String) -> void:
 	definition = loaded
 	if visual != null:
 		visual.queue_free()
-	visual = definition.instantiate_visual()
+	humanoid_visual = null
+	if definition.presentation_type == EnemyDefinition.PresentationType.HUMANOID:
+		humanoid_visual = HUMANOID_PRESENTATION.new()
+		humanoid_visual.name = "HumanoidPresentation"
+		humanoid_visual.configure(
+			40000 + maxi(enemy_id, 0),
+			definition.destructible_anatomy
+		)
+		visual = humanoid_visual
+	else:
+		visual = definition.instantiate_visual()
 	add_child(visual)
 	status_label.position = Vector3.UP * (definition.get_visual_height() + 0.55)
+	status_label.visible = definition.show_status_label
 	_apply_limb_visual_state(last_limb_states)
 
 

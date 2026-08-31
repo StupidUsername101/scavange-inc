@@ -4,10 +4,15 @@ extends SceneTree
 ## canonicalization, chunk mesh/collision replacement, replay, checkpoint recovery, spatial bounds,
 ## and the real projectile adapter. The mathematical field has its own faster unit test.
 
+const MeshAudit := preload("res://tests/helpers/destruction_mesh_audit.gd")
+
 var assertion_count := 0
 var failure_count := 0
 var test_root: Node3D
 var committed_event: DamageEvent
+var live_committed_event: DamageEvent
+var live_committed_result: Dictionary = {}
+var locked_body_rebuild_volume: DestructibleVolume3D
 
 
 func _init() -> void:
@@ -21,6 +26,9 @@ func _run() -> void:
 	await process_frame
 	await _test_volume_replay_and_collision_swap()
 	await _test_repeated_impact_seams()
+	await _test_analytic_shell_chunk_seam_symmetry()
+	await _test_analytic_shell_feature_preservation()
+	await _test_collision_body_self_retirement()
 	_test_spatial_bounds_registration()
 	_test_local_acoustic_invalidation()
 	await _test_projectile_routing()
@@ -34,6 +42,10 @@ func _test_volume_replay_and_collision_swap() -> void:
 	var client_volume := _make_volume(&"runtime_replay_wall", Vector3(-2.0, 1.5, -4.0), false, false)
 	server_volume.damage_committed.connect(_capture_committed_event)
 	await physics_frame
+	_expect(
+		_generated_surface_warmup_matches_runtime_layout(server_volume),
+		"world loading registers the generated color-stream pipeline before the first impact"
+	)
 	_expect(
 		int(server_volume.debug_state().get("generated_bodies", -1)) == 0
 		and server_volume.get_child_count() > 0,
@@ -70,8 +82,13 @@ func _test_volume_replay_and_collision_swap() -> void:
 	)
 	_expect(
 		not remesh_chunks.is_empty()
-		and remesh_chunks.size() < conservative_ring.size(),
-		"exact changed-sample bounds prune unrelated chunks from the contour rebuild ring"
+		and remesh_chunks.size() == (
+			server_volume.field.brick_counts.x
+			* server_volume.field.brick_counts.y
+			* server_volume.field.brick_counts.z
+		)
+		and remesh_chunks.size() >= conservative_ring.size(),
+		"a volume's first edit stages one complete global-lattice surface instead of a mixed box seam"
 	)
 	_expect(
 		committed_event.world_position == DamageEvent.from_dict(
@@ -115,26 +132,32 @@ func _test_volume_replay_and_collision_swap() -> void:
 	_expect(
 		int(runtime_state.get("rebuild_count", 0)) == remesh_chunks.size()
 		and int(runtime_state.get("generated_visuals", 0))
-		<= int(runtime_state.get("rebuild_count", 0))
+		== int(runtime_state.get("rebuild_count", 0))
 		and int(runtime_state.get("generated_bodies", 0))
-		== int(runtime_state.get("generated_visuals", 0)),
-		"only required seam chunks rebuild and unchanged results retain compact base geometry"
+		== int(runtime_state.get("generated_visuals", 0))
+		and bool(runtime_state.get("generated_surface_active", false))
+		and not bool(runtime_state.get("full_surface_transition_pending", true)),
+		"the staged surface commits atomically with matching generated render and collision chunks"
 	)
 	_expect(
 		_generated_surface_preserves_authored_material(server_volume),
 		"generated concrete keeps the base material's sRGB, roughness, and metallic contract"
 	)
 	_expect(
-		_generated_shell_joins_retained_base(server_volume),
-		"generated shell edges terminate exactly on adjacent retained base chunks"
+		_generated_surface_is_atomic_and_complete(server_volume),
+		"the committed edited volume has no remaining generated/BoxMesh presentation seam"
 	)
 	_expect(
 		_generated_meshes_have_no_unreferenced_halo(server_volume),
 		"temporary contour halo vertices are removed before render and collision upload"
 	)
 	_expect(
+		_generated_meshes_have_stable_triangles(server_volume),
+		"presented SDF patches contain no detached slivers or inside-out impact triangles"
+	)
+	_expect(
 		_seam_rays_hit_intact_wall(server_volume),
-		"dense rays on both sides of generated/base seams find continuous wall collision"
+		"dense rays on both sides of generated/generated chunk seams find continuous collision"
 	)
 	_expect(
 		int(runtime_state.get("committed_events", 0)) == 1
@@ -167,8 +190,9 @@ func _test_volume_replay_and_collision_swap() -> void:
 	client_volume.flush_pending_rebuilds()
 	_expect(
 		bool(replay_result.get("changed", false))
-		and client_volume.field.checksum() == server_volume.field.checksum(),
-		"client replay produces the authoritative sparse-field checksum"
+		and client_volume.field.checksum() == server_volume.field.checksum()
+		and int(client_volume.debug_state().get("generated_visuals", 0)) > 0,
+		"client replay produces and renders the authoritative sparse-field topology"
 	)
 	var duplicate_result := client_volume.apply_replicated_damage_event(committed_event, 0)
 	_expect(
@@ -186,6 +210,46 @@ func _test_volume_replay_and_collision_swap() -> void:
 		checkpoint_volume.apply_checkpoint(server_volume.checkpoint())
 		and checkpoint_volume.field.checksum() == server_volume.field.checksum(),
 		"a late client can restore the volume from a changed-brick checkpoint"
+	)
+	checkpoint_volume.flush_pending_rebuilds()
+	_expect(
+		int(checkpoint_volume.debug_state().get("generated_visuals", 0)) > 0,
+		"a late checkpoint rebuilds visible client topology instead of only restoring field bytes"
+	)
+	var recovery_volume := _make_volume(
+		&"runtime_replay_wall",
+		Vector3(-2.0, 1.5, -4.0),
+		false,
+		false
+	)
+	recovery_volume.apply_replicated_damage_event(committed_event, 0)
+	recovery_volume.flush_pending_rebuilds()
+	var divergent_packet := committed_event.to_dict(false)
+	divergent_packet["event_id"] = 1003
+	divergent_packet["sequence"] = 13
+	divergent_packet["world_position"] = committed_event.world_position + Vector3(0.3, 0.0, 0.0)
+	var divergent_event := DamageEvent.from_dict(divergent_packet)
+	var divergent_result := recovery_volume.apply_replicated_damage_event(divergent_event, 1)
+	await process_frame
+	var divergent_state := recovery_volume.debug_state()
+	_expect(
+		bool(divergent_result.get("changed", false))
+		and (
+			int(divergent_state.get("active_chunk_jobs", 0))
+			+ int(divergent_state.get("queued_chunks", 0))
+		) > 0,
+		"the recovery regression stages divergent client topology work"
+	)
+	_expect(
+		recovery_volume.apply_checkpoint(server_volume.checkpoint()),
+		"checkpoint recovery accepts authority while divergent client topology work is active"
+	)
+	recovery_volume.flush_pending_rebuilds()
+	_expect(
+		recovery_volume.field.revision == server_volume.field.revision
+		and recovery_volume.field.checksum() == server_volume.field.checksum()
+		and int(recovery_volume.debug_state().get("generated_visuals", 0)) > 0,
+		"checkpoint recovery discards stale workers and replaces divergent generated presentation"
 	)
 	var incompatible_volume := DestructibleVolume3D.new()
 	incompatible_volume.volume_id = &"runtime_replay_wall"
@@ -272,7 +336,7 @@ func _test_repeated_impact_seams() -> void:
 		)
 		volume.flush_pending_rebuilds()
 		await physics_frame
-	var joins_base := _generated_shell_joins_retained_base(volume)
+	var joins_base := _generated_surface_is_atomic_and_complete(volume)
 	var compact_meshes := _generated_meshes_have_no_unreferenced_halo(volume)
 	var collision_seams := _seam_rays_hit_intact_wall(volume)
 	_expect(
@@ -281,6 +345,185 @@ func _test_repeated_impact_seams() -> void:
 	)
 	volume.queue_free()
 	await process_frame
+
+
+func _test_analytic_shell_feature_preservation() -> void:
+	var volume := _make_volume(
+		&"sharp_shell_wall",
+		Vector3(26.0, 2.0, -4.0),
+		true,
+		false
+	)
+	await physics_frame
+	var event := DamageEvent.from_dict({
+		"event_id": 4199,
+		"sequence": 4199,
+		"source_kind": &"sharp_shell_test",
+		"source_id": 4,
+		"world_position": volume.to_global(Vector3(-0.76, 0.76, 0.2)),
+		"normal": Vector3.BACK,
+		"direction": Vector3.FORWARD,
+		"brush_kind": DamageEvent.BRUSH_CAPSULE,
+		"radius": 0.05,
+		"length": 0.75,
+		"energy": 16.0,
+		"impulse": 3.0,
+		"penetration": 0.75,
+		"damage_tags": PackedStringArray(["ballistic"]),
+		"seed": 4199,
+	})
+	var result := volume.apply_authoritative_damage_event(event)
+	volume.flush_pending_rebuilds()
+	_expect(
+		bool(result.get("changed", false))
+		and _generated_box_shell_is_exact_and_hard(volume),
+		"a remeshed outer wall corner retains exact planes and per-face hard normals"
+	)
+	volume.queue_free()
+	await process_frame
+
+
+func _test_analytic_shell_chunk_seam_symmetry() -> void:
+	var volume := _make_volume(
+		&"symmetric_shell_seam_wall",
+		Vector3(24.0, 2.0, -4.0),
+		true,
+		false
+	)
+	await physics_frame
+	var event := DamageEvent.from_dict({
+		"event_id": 4188,
+		"sequence": 4188,
+		"source_kind": &"global_chunk_ownership_test",
+		"source_id": 4,
+		"world_position": volume.to_global(Vector3(0.0, 0.0, 0.2)),
+		"normal": Vector3.BACK,
+		"direction": Vector3.FORWARD,
+		"brush_kind": DamageEvent.BRUSH_CAPSULE,
+		"radius": 0.05,
+		"length": 0.75,
+		"energy": 16.0,
+		"impulse": 0.0,
+		"penetration": 0.75,
+		"damage_tags": PackedStringArray(["ballistic"]),
+		"seed": 4188,
+	})
+	volume.apply_authoritative_damage_event(event)
+	volume.flush_pending_rebuilds()
+	var final_results := _generated_mesh_results(volume)
+	var audit := MeshAudit.audit_results(
+		final_results,
+		volume.field,
+		volume.voxel_size * 0.0001,
+		false
+	)
+	_expect(
+		MeshAudit.is_closed_valid(audit)
+		and _generated_surface_is_atomic_and_complete(volume),
+		"global chunk ownership remains closed without any post-extraction seam mutation: %s"
+		% audit
+	)
+	volume.queue_free()
+	await process_frame
+
+
+func _test_collision_body_self_retirement() -> void:
+	var volume := _make_volume(
+		&"locked_body_retirement_wall",
+		Vector3(30.0, 2.0, -4.0),
+		true,
+		true
+	)
+	await physics_frame
+	var first_event := DamageEvent.from_dict({
+		"event_id": 4250,
+		"sequence": 4250,
+		"source_kind": &"locked_body_setup",
+		"source_id": 4,
+		"world_position": volume.to_global(Vector3(0.0, 0.0, 0.2)),
+		"normal": Vector3.BACK,
+		"direction": Vector3.FORWARD,
+		"brush_kind": DamageEvent.BRUSH_CAPSULE,
+		"radius": 0.06,
+		"length": 0.75,
+		"energy": 16.0,
+		"impulse": 3.0,
+		"penetration": 0.75,
+		"damage_tags": PackedStringArray(["ballistic"]),
+		"seed": 4250,
+	})
+	volume.apply_replicated_damage_event(first_event, volume.field.revision)
+	volume.flush_pending_rebuilds()
+	var generated_bodies: Dictionary = volume.get("_generated_bodies")
+	var hit_body: DestructibleCollisionBody3D
+	if not generated_bodies.is_empty():
+		hit_body = generated_bodies.values()[0] as DestructibleCollisionBody3D
+	if hit_body == null:
+		_expect(false, "the lock-reentry fixture creates a generated collision adapter")
+		volume.queue_free()
+		await process_frame
+		return
+	var coordinate := hit_body.chunk_coordinate
+	var local_hit := volume.field.brick_origin(coordinate) + Vector3(
+		volume.field.brick_extent * 0.2,
+		volume.field.brick_extent * 0.2,
+		volume.field.half_extents.z
+	)
+	var second_event := DamageEvent.from_dict({
+		"event_id": 4251,
+		"sequence": 4251,
+		"source_kind": &"locked_body_reentry",
+		"source_id": 4,
+		"world_position": volume.to_global(local_hit),
+		"normal": Vector3.BACK,
+		"direction": Vector3.FORWARD,
+		"brush_kind": DamageEvent.BRUSH_CAPSULE,
+		"radius": 0.06,
+		"length": 0.75,
+		"energy": 16.0,
+		"impulse": 3.0,
+		"penetration": 0.75,
+		"damage_tags": PackedStringArray(["ballistic"]),
+		"seed": 4251,
+	})
+	locked_body_rebuild_volume = volume
+	volume.damage_committed.connect(
+		_flush_locked_body_rebuild,
+		CONNECT_ONE_SHOT
+	)
+	# Object.call() deliberately reproduces the projectile adapter's call lock. The synchronous
+	# flush inside damage_committed must retire this exact body without Object.free() re-entrancy.
+	var reentry_result: Dictionary = hit_body.call(&"apply_damage_event", second_event) as Dictionary
+	generated_bodies = volume.get("_generated_bodies")
+	var replacement := generated_bodies.get(coordinate) as DestructibleCollisionBody3D
+	if (
+		not bool(reentry_result.get("changed", false))
+		or not hit_body.is_queued_for_deletion()
+		or replacement == hit_body
+	):
+		print(
+			"LOCKED BODY RETIREMENT DIAGNOSTIC changed=",
+			bool(reentry_result.get("changed", false)),
+			" reason=", reentry_result.get("reason", &""),
+			" queued=", hit_body.is_queued_for_deletion(),
+			" coordinate=", coordinate,
+			" replacement_same=", replacement == hit_body,
+			" remesh=", reentry_result.get("remesh_chunks", [])
+		)
+	_expect(
+		bool(reentry_result.get("changed", false))
+		and hit_body.is_queued_for_deletion()
+		and replacement != hit_body,
+		"a hit collision body can rebuild and retire itself safely while call-locked"
+	)
+	locked_body_rebuild_volume = null
+	volume.queue_free()
+	await process_frame
+
+
+func _flush_locked_body_rebuild(_event: DamageEvent, _result: Dictionary) -> void:
+	if locked_body_rebuild_volume != null:
+		locked_body_rebuild_volume.flush_pending_rebuilds()
 
 
 func _test_spatial_bounds_registration() -> void:
@@ -423,6 +666,29 @@ func _test_live_server_world_pistol_routing() -> void:
 	var client_concrete_wall := client_volumes.get(
 		&"destruction_test_concrete"
 	) as DestructibleVolume3D
+	var pristine_checkpoint := concrete_wall.checkpoint() if concrete_wall != null else {}
+	var client_runtime_script := load("res://scripts/client/client.gd") as GDScript
+	var event_replica_client: Node = client_runtime_script.new()
+	event_replica_client.name = "RemoteDestructionEventClient"
+	test_root.add_child(event_replica_client)
+	var event_replica_world := load(
+		"res://scenes/proxy/destruction_field_test.tscn"
+	).instantiate() as Node3D
+	if concrete_wall != null:
+		event_replica_world.global_transform = concrete_wall.get_parent_node_3d().global_transform
+	event_replica_client.add_child(event_replica_world)
+	event_replica_client.set("client_world", event_replica_world)
+	event_replica_client.call("_index_client_destructible_volumes")
+	var event_replica_volumes: Dictionary = event_replica_client.get(
+		"destructible_volumes_by_id"
+	)
+	var event_replica_wall := event_replica_volumes.get(
+		&"destruction_test_concrete"
+	) as DestructibleVolume3D
+	live_committed_event = null
+	live_committed_result.clear()
+	if concrete_wall != null:
+		concrete_wall.damage_committed.connect(_capture_live_committed_event)
 	var profiles := _service_pistol_profiles()
 	var projectile: ServerProjectile
 	if concrete_wall != null and not profiles.is_empty():
@@ -443,6 +709,46 @@ func _test_live_server_world_pistol_routing() -> void:
 		projectile.server_physics_tick(0.1)
 		projectile_resolved = projectile.resolved
 	await process_frame
+	var event_packet: Dictionary = {}
+	if concrete_wall != null and live_committed_event != null:
+		event_packet = {
+			"volume_id": concrete_wall.volume_id,
+			"bake_hash": concrete_wall.bake_hash(),
+			"from_revision": int(live_committed_result.get("from_revision", 0)),
+			"to_revision": concrete_wall.field.revision,
+			"checksum": concrete_wall.field.checksum(),
+			"event": live_committed_event.to_dict(true),
+		}
+		event_packet = bytes_to_var(var_to_bytes(event_packet)) as Dictionary
+		event_replica_client.call("on_destruction_event_received", event_packet)
+	# A joining peer can receive the reliable checkpoint before its world RPC on another channel.
+	# Exercise that real pending-state path with a separate client runtime.
+	var late_replica_client: Node = client_runtime_script.new()
+	late_replica_client.name = "LateDestructionCheckpointClient"
+	test_root.add_child(late_replica_client)
+	if concrete_wall != null:
+		var serialized_checkpoint := bytes_to_var(
+			var_to_bytes(concrete_wall.checkpoint())
+		) as Dictionary
+		late_replica_client.call(
+			"on_destruction_checkpoint_received",
+			serialized_checkpoint
+		)
+	var late_replica_world := load(
+		"res://scenes/proxy/destruction_field_test.tscn"
+	).instantiate() as Node3D
+	if concrete_wall != null:
+		late_replica_world.global_transform = concrete_wall.get_parent_node_3d().global_transform
+	late_replica_client.add_child(late_replica_world)
+	late_replica_client.set("client_world", late_replica_world)
+	late_replica_client.call("_index_client_destructible_volumes")
+	late_replica_client.call("_apply_pending_destruction_state")
+	var late_replica_volumes: Dictionary = late_replica_client.get(
+		"destructible_volumes_by_id"
+	)
+	var late_replica_wall := late_replica_volumes.get(
+		&"destruction_test_concrete"
+	) as DestructibleVolume3D
 	_expect(
 		concrete_wall != null
 		and projectile_resolved
@@ -455,13 +761,62 @@ func _test_live_server_world_pistol_routing() -> void:
 		and client_concrete_wall.field.checksum() == concrete_wall.field.checksum(),
 		"the listen-host presentation replays the pistol edit instead of leaving an opaque proxy wall"
 	)
+	# Initial checkpoints and event traffic share a reliable destruction channel, and host rendering
+	# uses call_local. Lock that RPC contract so a harmless-looking annotation edit cannot silently
+	# make destruction host-only.
+	var client_script := client.get_script() as Script
+	var rpc_config: Dictionary = client_script.get_rpc_config()
+	var event_rpc: Dictionary = rpc_config.get("on_destruction_event_received", {})
+	var checkpoint_rpc: Dictionary = rpc_config.get("on_destruction_checkpoint_received", {})
+	_expect(
+		bool(event_rpc.get("call_local", false))
+		and int(event_rpc.get("channel", -1)) == 3
+		and int(event_rpc.get("transfer_mode", -1))
+		== MultiplayerPeer.TRANSFER_MODE_RELIABLE
+		and int(event_rpc.get("rpc_mode", -1)) == MultiplayerAPI.RPC_MODE_AUTHORITY
+		and bool(checkpoint_rpc.get("call_local", false))
+		and int(checkpoint_rpc.get("channel", -1)) == 3
+		and int(checkpoint_rpc.get("transfer_mode", -1))
+		== MultiplayerPeer.TRANSFER_MODE_RELIABLE,
+		"destruction events and recovery checkpoints are reliable for remote peers and local hosts"
+	)
+	# A delayed initial checkpoint must never roll a live client backward after it has replayed newer
+	# events. This was capable of restoring field bytes while leaving a stale generated mesh visible.
+	if not pristine_checkpoint.is_empty():
+		client.call("on_destruction_checkpoint_received", pristine_checkpoint)
 	if concrete_wall != null:
 		concrete_wall.flush_pending_rebuilds()
 	if client_concrete_wall != null:
 		client_concrete_wall.flush_pending_rebuilds()
+	if event_replica_wall != null:
+		event_replica_wall.flush_pending_rebuilds()
+	if late_replica_wall != null:
+		late_replica_wall.flush_pending_rebuilds()
+	var authority_checksum := concrete_wall.field.checksum() if concrete_wall != null else -1
+	print("Destruction replication metrics: ", {
+		"authority_checksum": authority_checksum,
+		"host": _replica_summary(client_concrete_wall),
+		"event_client": _replica_summary(event_replica_wall),
+		"late_client": _replica_summary(late_replica_wall),
+	})
+	_expect(
+		not event_packet.is_empty()
+		and client_concrete_wall != null
+		and event_replica_wall != null
+		and late_replica_wall != null
+		and client_concrete_wall.field.checksum() == authority_checksum
+		and event_replica_wall.field.checksum() == authority_checksum
+		and late_replica_wall.field.checksum() == authority_checksum
+		and int(client_concrete_wall.debug_state().get("generated_visuals", 0)) > 0
+		and int(event_replica_wall.debug_state().get("generated_visuals", 0)) > 0
+		and int(late_replica_wall.debug_state().get("generated_visuals", 0)) > 0,
+		"host, event-driven clients, and late-join clients render the same SDF revision"
+	)
 	client.set("client_world", null)
 	client.set("destructible_volumes_by_id", {})
 	client_world.queue_free()
+	event_replica_client.queue_free()
+	late_replica_client.queue_free()
 	server.call("_clear_runtime_session")
 	for _cleanup_frame: int in range(3):
 		await process_frame
@@ -491,13 +846,21 @@ func _generated_surface_preserves_authored_material(volume: DestructibleVolume3D
 		or not is_equal_approx(base_material.roughness, profile.roughness)
 		or not is_equal_approx(base_material.metallic, profile.metallic)
 		or not generated_material.vertex_color_use_as_albedo
-		or not generated_material.vertex_color_is_srgb
+		or generated_material.vertex_color_is_srgb
+		or not _colors_match_packed(generated_material.albedo_color, profile.exterior_color)
 		or not is_equal_approx(generated_material.roughness, profile.roughness)
 		or not is_equal_approx(generated_material.metallic, profile.metallic)
 	):
 		return false
 	var found_generated_surface := false
 	var found_exterior_color := false
+	var exterior := profile.exterior_color
+	var interior_modulation := Color(
+		profile.interior_color.r / maxf(exterior.r, 0.000001),
+		profile.interior_color.g / maxf(exterior.g, 0.000001),
+		profile.interior_color.b / maxf(exterior.b, 0.000001),
+		profile.interior_color.a / maxf(exterior.a, 0.000001)
+	)
 	for child: Node in volume.get_children():
 		var visual := child as MeshInstance3D
 		if visual == null or not visual.name.begins_with("GeneratedVisual_"):
@@ -509,15 +872,159 @@ func _generated_surface_preserves_authored_material(volume: DestructibleVolume3D
 			var arrays := mesh.surface_get_arrays(surface_index)
 			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 			var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+			var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
 			if colors.size() != vertices.size():
 				return false
 			found_generated_surface = true
 			for color: Color in colors:
-				if _colors_match_packed(color, profile.exterior_color):
+				if _colors_match_packed(color, Color.WHITE):
 					found_exterior_color = true
-				elif not _colors_match_packed(color, profile.interior_color):
+				elif not _colors_match_packed(color, interior_modulation):
+					return false
+			# Exterior and fracture vertices may occupy the same position, but never the same
+			# polygon. Otherwise GPU interpolation recreates the dark wedges this test guards.
+			for triangle_offset: int in range(0, indices.size(), 3):
+				var exterior_corner_count := 0
+				for corner_offset: int in range(3):
+					if _colors_match_packed(
+						colors[indices[triangle_offset + corner_offset]], Color.WHITE
+					):
+						exterior_corner_count += 1
+				if exterior_corner_count != 0 and exterior_corner_count != 3:
 					return false
 	return found_generated_surface and found_exterior_color
+
+
+func _generated_surface_warmup_matches_runtime_layout(volume: DestructibleVolume3D) -> bool:
+	if volume == null:
+		return false
+	var warmup := volume.get_node_or_null(
+		NodePath(str(DestructibleVolume3D.RUNTIME_WARMUP_NAME))
+	) as MeshInstance3D
+	if warmup == null or warmup.visible or warmup.mesh == null:
+		return false
+	var mesh := warmup.mesh as ArrayMesh
+	if mesh == null or mesh.get_surface_count() != 1:
+		return false
+	var arrays := mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	return (
+		vertices.size() == 3
+		and normals.size() == vertices.size()
+		and colors.size() == vertices.size()
+		and indices == PackedInt32Array([0, 1, 2])
+		and warmup.material_override
+		== (volume.get("_generated_surface_material") as StandardMaterial3D)
+	)
+
+
+func _generated_meshes_have_stable_triangles(volume: DestructibleVolume3D) -> bool:
+	if volume == null:
+		return false
+	for child: Node in volume.get_children():
+		var visual := child as MeshInstance3D
+		if visual == null or not visual.name.begins_with("GeneratedVisual_"):
+			continue
+		var mesh := visual.mesh as ArrayMesh
+		if mesh == null:
+			return false
+		for surface_index: int in range(mesh.get_surface_count()):
+			var arrays := mesh.surface_get_arrays(surface_index)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+			var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+			if normals.size() != vertices.size() or indices.size() % 3 != 0:
+				return false
+			for offset: int in range(0, indices.size(), 3):
+				var first := indices[offset]
+				var second := indices[offset + 1]
+				var third := indices[offset + 2]
+				if (
+					first < 0 or first >= vertices.size()
+					or second < 0 or second >= vertices.size()
+					or third < 0 or third >= vertices.size()
+					or first == second or second == third or third == first
+				):
+					return false
+				var first_edge := vertices[second] - vertices[first]
+				var second_edge := vertices[third] - vertices[second]
+				var third_edge := vertices[first] - vertices[third]
+				var face := first_edge.cross(-third_edge)
+				var edge_sum := (
+					first_edge.length_squared()
+					+ second_edge.length_squared()
+					+ third_edge.length_squared()
+				)
+				if edge_sum <= 0.000000001:
+					return false
+				var quality := 2.0 * sqrt(3.0) * face.length() / edge_sum
+				var authored := normals[first] + normals[second] + normals[third]
+				if (
+					quality < SdfDualContouringMesher.MIN_PRESENTED_TRIANGLE_QUALITY * 0.99
+					or face.dot(authored) >= 0.0
+				):
+					return false
+	return true
+
+
+func _generated_box_shell_is_exact_and_hard(volume: DestructibleVolume3D) -> bool:
+	if volume == null:
+		return false
+	var tolerance := maxf(volume.voxel_size * 0.005, 0.00001)
+	var half := volume.field.half_extents
+	var found_shell_triangles := 0
+	var found_hard_corner := false
+	var planes: Array[Dictionary] = [
+		{"axis": 0, "coordinate": -half.x, "normal": Vector3.LEFT},
+		{"axis": 0, "coordinate": half.x, "normal": Vector3.RIGHT},
+		{"axis": 1, "coordinate": -half.y, "normal": Vector3.DOWN},
+		{"axis": 1, "coordinate": half.y, "normal": Vector3.UP},
+		{"axis": 2, "coordinate": -half.z, "normal": Vector3.FORWARD},
+		{"axis": 2, "coordinate": half.z, "normal": Vector3.BACK},
+	]
+	for child: Node in volume.get_children():
+		var visual := child as MeshInstance3D
+		if visual == null or not visual.name.begins_with("GeneratedVisual_"):
+			continue
+		var mesh := visual.mesh as ArrayMesh
+		if mesh == null:
+			return false
+		for surface_index: int in range(mesh.get_surface_count()):
+			var arrays := mesh.surface_get_arrays(surface_index)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+			var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+			for vertex: Vector3 in vertices:
+				found_hard_corner = found_hard_corner or (
+					absf(vertex.x + half.x) <= tolerance
+					and absf(vertex.y - half.y) <= tolerance
+				)
+			for offset: int in range(0, indices.size(), 3):
+				var first := indices[offset]
+				var second := indices[offset + 1]
+				var third := indices[offset + 2]
+				for plane: Dictionary in planes:
+					var axis := int(plane["axis"])
+					var coordinate := float(plane["coordinate"])
+					if (
+						absf(vertices[first][axis] - coordinate) > tolerance
+						or absf(vertices[second][axis] - coordinate) > tolerance
+						or absf(vertices[third][axis] - coordinate) > tolerance
+					):
+						continue
+					var expected: Vector3 = plane["normal"]
+					if (
+						normals[first].dot(expected) < 0.9999
+						or normals[second].dot(expected) < 0.9999
+						or normals[third].dot(expected) < 0.9999
+					):
+						return false
+					found_shell_triangles += 1
+					break
+	return found_hard_corner and found_shell_triangles >= 4
 
 
 func _colors_match_packed(left: Color, right: Color) -> bool:
@@ -532,58 +1039,52 @@ func _colors_match_packed(left: Color, right: Color) -> bool:
 	)
 
 
-func _generated_shell_joins_retained_base(volume: DestructibleVolume3D) -> bool:
+func _generated_surface_is_atomic_and_complete(volume: DestructibleVolume3D) -> bool:
 	if volume == null:
 		return false
 	var generated_visuals: Dictionary = volume.get("_generated_visuals")
 	var base_visuals: Dictionary = volume.get("_base_visuals")
-	var tolerance := maxf(volume.voxel_size * 0.01, 0.00001)
-	var checked_boundary_count := 0
-	var directions: Array[Vector3i] = [
-		Vector3i.LEFT,
-		Vector3i.RIGHT,
-		Vector3i.DOWN,
-		Vector3i.UP,
-		Vector3i(0, 0, -1),
-		Vector3i(0, 0, 1),
-	]
-	for raw_coordinate: Variant in generated_visuals.keys():
-		var coordinate := raw_coordinate as Vector3i
+	var expected_count := (
+		volume.field.brick_counts.x
+		* volume.field.brick_counts.y
+		* volume.field.brick_counts.z
+	)
+	if generated_visuals.size() != expected_count or base_visuals.size() != expected_count:
+		return false
+	for visual_value: Variant in generated_visuals.values():
+		var visual := visual_value as MeshInstance3D
+		if visual == null or visual.mesh == null or not visual.visible:
+			return false
+	for visual_value: Variant in base_visuals.values():
+		var visual := visual_value as MeshInstance3D
+		if visual == null or visual.visible:
+			return false
+	return true
+
+
+func _generated_mesh_results(volume: DestructibleVolume3D) -> Array:
+	var results: Array = []
+	var generated_visuals: Dictionary = volume.get("_generated_visuals")
+	var coordinates: Array = generated_visuals.keys()
+	coordinates.sort_custom(func(left: Vector3i, right: Vector3i) -> bool:
+		return (
+			left.z < right.z
+			or (left.z == right.z and left.y < right.y)
+			or (left.z == right.z and left.y == right.y and left.x < right.x)
+		)
+	)
+	for coordinate: Vector3i in coordinates:
 		var visual := generated_visuals.get(coordinate) as MeshInstance3D
 		if visual == null or visual.mesh == null:
-			return false
-		var minimum := volume.field.brick_origin(coordinate)
-		var maximum := Vector3(
-			minf(minimum.x + volume.field.brick_extent, volume.field.half_extents.x),
-			minf(minimum.y + volume.field.brick_extent, volume.field.half_extents.y),
-			minf(minimum.z + volume.field.brick_extent, volume.field.half_extents.z)
-		)
-		var vertices := _mesh_vertices(visual.mesh)
-		for vertex: Vector3 in vertices:
-			if absf(volume.field.base_distance(vertex)) <= tolerance:
-				if not AABB(minimum, maximum - minimum).grow(tolerance).has_point(vertex):
-					return false
-		for direction: Vector3i in directions:
-			var neighbor := coordinate + direction
-			if not volume.field.brick_is_valid(neighbor):
-				continue
-			var neighbor_base := base_visuals.get(neighbor) as MeshInstance3D
-			if neighbor_base == null or not neighbor_base.visible:
-				continue
-			var axis := 0 if direction.x != 0 else (1 if direction.y != 0 else 2)
-			var boundary := minimum[axis] if direction[axis] < 0 else maximum[axis]
-			var reaches_boundary := false
-			for vertex: Vector3 in vertices:
-				if (
-					absf(volume.field.base_distance(vertex)) <= tolerance
-					and absf(vertex[axis] - boundary) <= tolerance
-				):
-					reaches_boundary = true
-					break
-			if not reaches_boundary:
-				return false
-			checked_boundary_count += 1
-	return checked_boundary_count > 0
+			continue
+		for surface_index: int in range(visual.mesh.get_surface_count()):
+			var arrays := visual.mesh.surface_get_arrays(surface_index)
+			results.append({
+				"vertices": arrays[Mesh.ARRAY_VERTEX],
+				"normals": arrays[Mesh.ARRAY_NORMAL],
+				"indices": arrays[Mesh.ARRAY_INDEX],
+			})
+	return results
 
 
 func _mesh_vertices(mesh: Mesh) -> PackedVector3Array:
@@ -623,13 +1124,10 @@ func _seam_rays_hit_intact_wall(volume: DestructibleVolume3D) -> bool:
 	if volume == null or volume.get_world_3d() == null:
 		return false
 	var generated_visuals: Dictionary = volume.get("_generated_visuals")
-	var base_visuals: Dictionary = volume.get("_base_visuals")
 	var seam_probe_offset := volume.voxel_size * 0.08
 	var probe_count := 0
 	var directions: Array[Vector3i] = [
-		Vector3i.LEFT,
 		Vector3i.RIGHT,
-		Vector3i.DOWN,
 		Vector3i.UP,
 	]
 	for raw_coordinate: Variant in generated_visuals.keys():
@@ -644,8 +1142,8 @@ func _seam_rays_hit_intact_wall(volume: DestructibleVolume3D) -> bool:
 			var neighbor := coordinate + direction
 			if not volume.field.brick_is_valid(neighbor):
 				continue
-			var neighbor_base := base_visuals.get(neighbor) as MeshInstance3D
-			if neighbor_base == null or not neighbor_base.visible:
+			var neighbor_generated := generated_visuals.get(neighbor) as MeshInstance3D
+			if neighbor_generated == null or not neighbor_generated.visible:
 				continue
 			var seam_axis := 0 if direction.x != 0 else 1
 			var tangent_axis := 1 if seam_axis == 0 else 0
@@ -751,6 +1249,22 @@ func _make_volume(
 
 func _capture_committed_event(event: DamageEvent, _result: Dictionary) -> void:
 	committed_event = event
+
+
+func _capture_live_committed_event(event: DamageEvent, result: Dictionary) -> void:
+	live_committed_event = event
+	live_committed_result = result.duplicate(false)
+
+
+func _replica_summary(volume: DestructibleVolume3D) -> Dictionary:
+	if volume == null:
+		return {}
+	var state := volume.debug_state()
+	return {
+		"revision": volume.field.revision,
+		"checksum": volume.field.checksum(),
+		"generated_visuals": int(state.get("generated_visuals", 0)),
+	}
 
 
 func _expect(condition: bool, label: String) -> void:

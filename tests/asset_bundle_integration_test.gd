@@ -22,7 +22,9 @@ class RecordingServerPlayer:
 		sound_id: StringName,
 		_max_distance: float,
 		_priority: float,
-		_local_prediction_key := 0
+		_local_prediction_key := 0,
+		_source_position := Vector3(INF, INF, INF),
+		_base_volume_db := 0.0
 	) -> void:
 		emitted_sound_ids.append(sound_id)
 
@@ -313,8 +315,8 @@ func _test_curated_prop_contract() -> void:
 			valid_descriptors = false
 		unique_names[prop_name] = true
 	_expect(
-		valid_descriptors and known_assets.size() == 8 and descriptors.size() >= 10,
-		"shared layout places a valid collision proxy for every selected industrial model"
+		valid_descriptors and known_assets.size() == 7 and descriptors.size() >= 10,
+		"shared layout places a valid collision proxy for every active industrial model"
 	)
 
 	var client_complex := CLIENT_COMPLEX_SCENE.instantiate() as Node3D

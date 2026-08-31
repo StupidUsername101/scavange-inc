@@ -30,25 +30,6 @@ const MOVEMENT_PARKOUR_LAYOUT := preload(
 	"res://scripts/world/movement_parkour_layout.gd"
 )
 
-const BUILDING_CENTER := Vector3(-8.0, 0.0, 8.0)
-const BUILDING_WIDTH := 13.0
-const BUILDING_DEPTH := 12.0
-const STOREY_HEIGHT := 3.4
-const STOREY_COUNT := 3
-const BUILDING_HEIGHT := STOREY_HEIGHT * STOREY_COUNT
-const WALL_THICKNESS := 0.24
-const FLOOR_THICKNESS := 0.18
-const GROUND_SLAB_THICKNESS := 0.12
-const DOOR_CENTER_X := -2.3
-const DOOR_WIDTH := 2.4
-const DOOR_HEIGHT := 2.5
-const STAIRWELL_CENTER_X := 4.15
-const STAIRWELL_WIDTH := 2.5
-const STAIRWELL_RUN := 6.4
-const RAMP_THICKNESS := 0.18
-const STAIR_TREAD_COUNT := 20
-const STAIR_TREAD_OVERLAP := 0.012
-
 const TUNNEL_CENTER := Vector3(11.0, 0.0, 12.0)
 const WIDE_TUNNEL_CENTER := Vector3(28.0, 0.0, 12.0)
 const HANGAR_TUNNEL_CENTER := Vector3(47.0, 0.0, 12.0)
@@ -60,8 +41,7 @@ const TUNNEL_EXTERIOR_PROBE_CONNECT_RADIUS := 12.0
 const TUNNEL_RUN_COUNT := 3
 
 # A deliberately large, mostly open comparison room. Its east-facing entrance connects back to
-# the test yard while the shell remains far enough west to preserve the existing building/tunnel
-# tests. Unlike the garage PA bunker, this room keeps ordinary geometry-sampled room response.
+# the test yard. Unlike the garage PA bunker, this room keeps ordinary geometry-sampled response.
 const WORLD_POSITION := Vector3(0.0, 0.0, 19.0)
 const LARGE_BUNKER_CENTER := Vector3(-55.0, 0.0, -10.0)
 const VALVE_BUNKER_CENTER := Vector3(-55.0, 0.0, -58.0)
@@ -127,7 +107,6 @@ static var TUNNEL_RUNS: Array[Dictionary] = [
 
 static func structural_boxes() -> Array[Dictionary]:
 	var boxes: Array[Dictionary] = []
-	_append_building(boxes)
 	_append_tunnel(boxes)
 	_append_large_bunker(boxes)
 	_append_bunker_shell(
@@ -141,61 +120,15 @@ static func structural_boxes() -> Array[Dictionary]:
 	return boxes
 
 
-## Presentation contact uses the authoritative shells plus discrete stair treads. CharacterBody3D
-## continues to move over the smooth ramps in `structural_boxes`; only visible feet see these
-## generated treads, so stair climbing remains stable while the pose reads as actual steps.
+## Presentation contact uses the authoritative shells plus the dedicated movement-course detail.
 static func foot_contact_boxes() -> Array[Dictionary]:
 	var boxes := structural_boxes()
-	boxes.append_array(stair_tread_boxes())
 	boxes.append_array(MOVEMENT_PARKOUR_LAYOUT.contact_detail_boxes())
 	return boxes
 
 
 static func parkour_contact_detail_boxes() -> Array[Dictionary]:
 	return MOVEMENT_PARKOUR_LAYOUT.contact_detail_boxes()
-
-
-static func stair_tread_boxes() -> Array[Dictionary]:
-	var boxes: Array[Dictionary] = []
-	var tread_run := STAIRWELL_RUN / float(STAIR_TREAD_COUNT)
-	var tread_rise := STOREY_HEIGHT / float(STAIR_TREAD_COUNT)
-	var ramp_angle := atan2(STOREY_HEIGHT, STAIRWELL_RUN)
-	var ramp_surface_offset := cos(ramp_angle) * RAMP_THICKNESS * 0.5
-	for ramp_index: int in range(STOREY_COUNT - 1):
-		var travel_z := 1.0 if posmod(ramp_index, 2) == 0 else -1.0
-		var low_end_z := (
-			BUILDING_CENTER.z
-			- travel_z * STAIRWELL_RUN * 0.5
-		)
-		var base_y := STOREY_HEIGHT * float(ramp_index)
-		for tread_index: int in range(STAIR_TREAD_COUNT):
-			var top_y := (
-				base_y
-				+ ramp_surface_offset
-				+ float(tread_index + 1) * tread_rise
-			)
-			var tread_height := tread_rise + STAIR_TREAD_OVERLAP
-			_add_box(
-				boxes,
-				StringName(
-					"BuildingRamp%dTread%02d"
-					% [ramp_index + 1, tread_index + 1]
-				),
-				Vector3(
-					BUILDING_CENTER.x + STAIRWELL_CENTER_X,
-					top_y - tread_height * 0.5,
-					low_end_z
-					+ travel_z * (float(tread_index) + 0.5) * tread_run
-				),
-				Vector3(
-					STAIRWELL_WIDTH - 0.22,
-					tread_height,
-					tread_run + STAIR_TREAD_OVERLAP
-				),
-				Vector3.ZERO,
-				&"ramp"
-			)
-	return boxes
 
 
 static func tunnel_runs() -> Array[Dictionary]:
@@ -234,15 +167,8 @@ static func tunnel_run_structural_boxes(run_index: int) -> Array[Dictionary]:
 static func prop_descriptors() -> Array[Dictionary]:
 	# These transforms are shared by the visual and authoritative worlds. Collision uses a cheap
 	# authored box per prop instead of generating trimeshes from imported art at runtime.
-	var floor_y := GROUND_SLAB_THICKNESS
 	var tunnel_floor_y := TUNNEL_FLOOR_Y
 	var result: Array[Dictionary] = [
-		_prop(&"GeneratorGround", &"generator", Vector3(-10.4, floor_y, 12.75), Vector3.ZERO, Vector3(3.4, 1.8, 1.0), Vector3(0.0, 0.9, 0.0)),
-		_prop(&"MachineryGround", &"machinery", Vector3(-12.85, floor_y, 10.55), Vector3(0.0, deg_to_rad(18.0), 0.0), Vector3(1.14, 0.64, 0.68), Vector3(0.0, 0.32, 0.0)),
-		_prop(&"TerminalGround", &"computer_terminal", Vector3(-13.75, floor_y, 5.35), Vector3(0.0, deg_to_rad(-90.0), 0.0), Vector3(0.918, 0.684, 0.468), Vector3(0.0, 0.342, 0.0)),
-		_prop(&"TerminalFirst", &"computer_terminal", Vector3(-13.75, STOREY_HEIGHT + floor_y, 9.75), Vector3(0.0, deg_to_rad(-90.0), 0.0), Vector3(0.918, 0.684, 0.468), Vector3(0.0, 0.342, 0.0)),
-		_prop(&"ControlPanelSecond", &"control_panel", Vector3(-13.75, STOREY_HEIGHT * 2.0 + floor_y, 7.0), Vector3(0.0, deg_to_rad(-90.0), 0.0), Vector3(0.711, 1.188, 0.448), Vector3(0.0, 0.594, 0.0)),
-		_prop(&"FuseBoxSecond", &"fuse_box", Vector3(-7.4, STOREY_HEIGHT * 2.0 + 1.65, 13.72), Vector3.ZERO, Vector3(0.55, 0.95, 0.3), Vector3(0.0, -0.03, 0.15)),
 		_prop(&"TunnelCrateSouth", &"metal_crate", Vector3(9.75, tunnel_floor_y, -5.0), Vector3(0.0, deg_to_rad(12.0), 0.0), Vector3(1.12, 1.12, 1.12), Vector3(0.0, 0.56, 0.0)),
 		_prop(&"TunnelPallet", &"wood_pallet", Vector3(12.0, tunnel_floor_y, 1.5), Vector3(0.0, deg_to_rad(-8.0), 0.0), Vector3(1.44, 0.2, 1.31), Vector3(0.0, 0.1, 0.0)),
 		_prop(&"TunnelBarrelOnPallet", &"water_barrel", Vector3(12.0, tunnel_floor_y + 0.2, 1.5), Vector3.ZERO, Vector3(0.73, 1.13, 0.73), Vector3(0.0, 0.565, 0.0)),
@@ -284,39 +210,6 @@ static func prop_descriptors() -> Array[Dictionary]:
 		copy["name"] = StringName("Valve%s" % str(copy.get("name", "BunkerProp")))
 		copy["position"] = (copy.get("position", Vector3.ZERO) as Vector3) + valve_offset
 		result.append(copy)
-	return result
-
-
-static func building_floor_probe_positions() -> PackedVector3Array:
-	return PackedVector3Array([
-		BUILDING_CENTER + Vector3(0.0, 1.45, 0.0),
-		BUILDING_CENTER + Vector3(0.0, STOREY_HEIGHT + 1.45, 0.0),
-		BUILDING_CENTER + Vector3(0.0, STOREY_HEIGHT * 2.0 + 1.45, 0.0),
-	])
-
-
-static func building_room_probe_descriptors() -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	var floor_names: Array[String] = ["ground", "first", "second"]
-	for floor_index: int in range(STOREY_COUNT):
-		for x_offset: float in [-4.0, 0.0, 2.2]:
-			for z_offset: float in [-4.0, 0.0, 4.0]:
-				# The three authored center probes are retained as stable portal-era IDs.
-				if is_zero_approx(x_offset) and is_zero_approx(z_offset):
-					continue
-				var suffix := "%s_%s" % [
-					str(snappedf(x_offset, 0.1)).replace("-", "m").replace(".", "p"),
-					str(snappedf(z_offset, 0.1)).replace("-", "m").replace(".", "p"),
-				]
-				result.append({
-					"name": "BuildingRoomProbe_%d_%s" % [floor_index, suffix],
-					"probe_id": "industrial_building_%s_%s" % [floor_names[floor_index], suffix],
-					"position": BUILDING_CENTER + Vector3(
-						x_offset,
-						STOREY_HEIGHT * float(floor_index) + 1.45,
-						z_offset
-					),
-				})
 	return result
 
 
@@ -641,158 +534,6 @@ static func additional_tunnel_probe_descriptors() -> Array[Dictionary]:
 static func _tunnel_run(run_index: int) -> Dictionary:
 	var runs := tunnel_runs()
 	return runs[run_index] if run_index >= 0 and run_index < runs.size() else {}
-
-
-static func _append_building(boxes: Array[Dictionary]) -> void:
-	var half_width := BUILDING_WIDTH * 0.5
-	var half_depth := BUILDING_DEPTH * 0.5
-	_add_box(
-		boxes,
-		&"BuildingGroundFloor",
-		BUILDING_CENTER + Vector3(0.0, GROUND_SLAB_THICKNESS * 0.5, 0.0),
-		Vector3(BUILDING_WIDTH + 0.5, GROUND_SLAB_THICKNESS, BUILDING_DEPTH + 0.5),
-		Vector3.ZERO,
-		&"floor"
-	)
-	_add_box(
-		boxes,
-		&"BuildingRoof",
-		BUILDING_CENTER + Vector3(0.0, BUILDING_HEIGHT + FLOOR_THICKNESS * 0.5, 0.0),
-		Vector3(BUILDING_WIDTH + WALL_THICKNESS, FLOOR_THICKNESS, BUILDING_DEPTH + WALL_THICKNESS),
-		Vector3.ZERO,
-		&"roof"
-	)
-	_add_box(
-		boxes,
-		&"BuildingBackWall",
-		BUILDING_CENTER + Vector3(0.0, BUILDING_HEIGHT * 0.5, half_depth),
-		Vector3(BUILDING_WIDTH, BUILDING_HEIGHT, WALL_THICKNESS),
-		Vector3.ZERO,
-		&"concrete"
-	)
-	_add_box(
-		boxes,
-		&"BuildingLeftWall",
-		BUILDING_CENTER + Vector3(-half_width, BUILDING_HEIGHT * 0.5, 0.0),
-		Vector3(WALL_THICKNESS, BUILDING_HEIGHT, BUILDING_DEPTH),
-		Vector3.ZERO,
-		&"concrete"
-	)
-	_add_box(
-		boxes,
-		&"BuildingRightWall",
-		BUILDING_CENTER + Vector3(half_width, BUILDING_HEIGHT * 0.5, 0.0),
-		Vector3(WALL_THICKNESS, BUILDING_HEIGHT, BUILDING_DEPTH),
-		Vector3.ZERO,
-		&"concrete"
-	)
-
-	var door_center_world_x := BUILDING_CENTER.x + DOOR_CENTER_X
-	var left_edge := BUILDING_CENTER.x - half_width
-	var right_edge := BUILDING_CENTER.x + half_width
-	var door_left := door_center_world_x - DOOR_WIDTH * 0.5
-	var door_right := door_center_world_x + DOOR_WIDTH * 0.5
-	_add_box(
-		boxes,
-		&"BuildingFrontLeft",
-		Vector3((left_edge + door_left) * 0.5, DOOR_HEIGHT * 0.5, BUILDING_CENTER.z - half_depth),
-		Vector3(door_left - left_edge, DOOR_HEIGHT, WALL_THICKNESS),
-		Vector3.ZERO,
-		&"concrete"
-	)
-	_add_box(
-		boxes,
-		&"BuildingFrontRight",
-		Vector3((door_right + right_edge) * 0.5, DOOR_HEIGHT * 0.5, BUILDING_CENTER.z - half_depth),
-		Vector3(right_edge - door_right, DOOR_HEIGHT, WALL_THICKNESS),
-		Vector3.ZERO,
-		&"concrete"
-	)
-	_add_box(
-		boxes,
-		&"BuildingFrontUpper",
-		Vector3(BUILDING_CENTER.x, DOOR_HEIGHT + (BUILDING_HEIGHT - DOOR_HEIGHT) * 0.5, BUILDING_CENTER.z - half_depth),
-		Vector3(BUILDING_WIDTH, BUILDING_HEIGHT - DOOR_HEIGHT, WALL_THICKNESS),
-		Vector3.ZERO,
-		&"concrete"
-	)
-
-	# Upper slabs leave one continuous stairwell void. North and south landings reconnect the
-	# switchback ramps to each storey without requiring character-controller step climbing.
-	var hole_left := BUILDING_CENTER.x + STAIRWELL_CENTER_X - STAIRWELL_WIDTH * 0.5
-	var hole_right := BUILDING_CENTER.x + STAIRWELL_CENTER_X + STAIRWELL_WIDTH * 0.5
-	var stair_z_min := BUILDING_CENTER.z - STAIRWELL_RUN * 0.5
-	var stair_z_max := BUILDING_CENTER.z + STAIRWELL_RUN * 0.5
-	for floor_index: int in [1, 2]:
-		var floor_y := STOREY_HEIGHT * float(floor_index)
-		_add_box(
-			boxes,
-			StringName("BuildingFloor%dMain" % floor_index),
-			Vector3((left_edge + hole_left) * 0.5, floor_y, BUILDING_CENTER.z),
-			Vector3(hole_left - left_edge, FLOOR_THICKNESS, BUILDING_DEPTH),
-			Vector3.ZERO,
-			&"floor"
-		)
-		_add_box(
-			boxes,
-			StringName("BuildingFloor%dOuterStrip" % floor_index),
-			Vector3((hole_right + right_edge) * 0.5, floor_y, BUILDING_CENTER.z),
-			Vector3(right_edge - hole_right, FLOOR_THICKNESS, BUILDING_DEPTH),
-			Vector3.ZERO,
-			&"floor"
-		)
-		for landing_side: float in [-1.0, 1.0]:
-			var landing_min_z := (
-				BUILDING_CENTER.z - half_depth
-				if landing_side < 0.0
-				else stair_z_max
-			)
-			var landing_max_z := (
-				stair_z_min
-				if landing_side < 0.0
-				else BUILDING_CENTER.z + half_depth
-			)
-			_add_box(
-				boxes,
-				StringName("BuildingFloor%dLanding%s" % [floor_index, "S" if landing_side < 0.0 else "N"]),
-				Vector3((hole_left + hole_right) * 0.5, floor_y, (landing_min_z + landing_max_z) * 0.5),
-				Vector3(hole_right - hole_left, FLOOR_THICKNESS, landing_max_z - landing_min_z),
-				Vector3.ZERO,
-				&"floor"
-			)
-
-	var ramp_length := sqrt(STAIRWELL_RUN * STAIRWELL_RUN + STOREY_HEIGHT * STOREY_HEIGHT)
-	var ramp_angle := atan2(STOREY_HEIGHT, STAIRWELL_RUN)
-	for ramp_index: int in [0, 1]:
-		var direction := -1.0 if ramp_index == 0 else 1.0
-		_add_box(
-			boxes,
-			StringName("BuildingRamp%d" % (ramp_index + 1)),
-			BUILDING_CENTER + Vector3(
-				STAIRWELL_CENTER_X,
-				STOREY_HEIGHT * (float(ramp_index) + 0.5),
-				0.0
-			),
-			Vector3(STAIRWELL_WIDTH - 0.22, RAMP_THICKNESS, ramp_length),
-			Vector3(direction * ramp_angle, 0.0, 0.0),
-			&"ramp"
-		)
-
-	# Sparse guard rails protect the floor openings while leaving both ramp landings clear.
-	for floor_index: int in [1, 2]:
-		for rail_side: float in [-1.0, 1.0]:
-			_add_box(
-				boxes,
-				StringName("BuildingFloor%dRail%s" % [floor_index, "L" if rail_side < 0.0 else "R"]),
-				Vector3(
-					BUILDING_CENTER.x + STAIRWELL_CENTER_X + rail_side * STAIRWELL_WIDTH * 0.5,
-					STOREY_HEIGHT * float(floor_index) + 0.46,
-					BUILDING_CENTER.z
-				),
-				Vector3(0.09, 0.92, STAIRWELL_RUN),
-				Vector3.ZERO,
-				&"rail"
-			)
 
 
 static func _append_tunnel(boxes: Array[Dictionary]) -> void:
