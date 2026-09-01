@@ -210,9 +210,11 @@ func update_presentation(delta: float) -> void:
 	)
 	pose_root.rotation = character_pose.body_rotation
 	character_skin.sync_from_procedural_pose(leg_rig, character_pose)
+	# The two-handed flute solve is the final animated-arm pass. Wounds must sample and follow the
+	# resulting skin, not the one-frame-old forearm pose that existed before the grips were applied.
+	_sync_face_and_flute(gait_cycle, movement_weight, action_weight)
 	if wound_presentation != null:
 		wound_presentation.update_presentation()
-	_sync_face_and_flute(gait_cycle, movement_weight, action_weight)
 
 
 func _configure_identity(next_identity: int) -> void:

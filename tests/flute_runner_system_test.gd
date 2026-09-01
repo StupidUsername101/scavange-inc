@@ -38,6 +38,7 @@ func _run() -> void:
 	await _test_hidden_player_requires_real_acoustic_stimulus()
 	await _test_authoritative_chase_integration()
 	await _test_humanoid_presentation_contract()
+	await _test_animated_thigh_wound_surface_alignment()
 	await _test_incremental_wound_presentation_budget()
 	if failure_count == 0:
 		print("Flute runner tests passed: %d assertions" % assertion_count)
@@ -1089,6 +1090,117 @@ func _test_humanoid_presentation_contract() -> void:
 		and ragdoll_skin.skeleton.get_bone_pose_scale(ragdoll_left_arm_index).length() < 0.01
 		and not presentation.pose_root.visible,
 		"enemy death carries wounds and missing limbs into the weighted authored-body ragdoll instead of healing or becoming grey goo"
+	)
+	presentation.queue_free()
+	await process_frame
+
+
+func _test_animated_thigh_wound_surface_alignment() -> void:
+	# This exercises the exact failure visible in the field report: the analytic right-leg volume is
+	# straight, while the rendered thigh is bent and more than ten centimetres behind that box face.
+	# A test that only counts red SDF triangles passes even when those triangles float beside intact
+	# trousers, so verify the animated shell aperture and shared-SDF cavity in the same world frame.
+	var definition := load(
+		"res://resources/enemies/flute_runner.tres"
+	) as EnemyDefinition
+	var presentation := EnemyHumanoidPresentation3D.new()
+	presentation.configure(40117, definition.destructible_anatomy)
+	root.add_child(presentation)
+	await process_frame
+	presentation.apply_server_state({
+		"velocity": Vector3(0.0, 0.0, -7.0),
+		"on_floor": true,
+		"gait_cycle": 1.7,
+		"gait_active": true,
+		"gait_stride_distance": 2.2,
+		"expression_clock": 1.0,
+		"alive": true,
+		"active": true,
+		"flute_pose_weight": 1.0,
+	})
+	presentation.update_presentation(STEP)
+	var authority := EnemyDestructibleAnatomy.new().configure(
+		40117,
+		definition.destructible_anatomy
+	)
+	var damage := _make_anatomy_damage_event(
+		4117,
+		Vector3(0.15, 0.55, -0.36)
+	)
+	var result := authority.apply_damage_event(damage, Transform3D.IDENTITY)
+	presentation.apply_server_state({"anatomy_destruction": authority.state_dict()})
+	presentation.update_presentation(STEP)
+	for _surface_frame: int in range(240):
+		if not presentation.wound_presentation.has_pending_surface_rebuilds():
+			break
+		await process_frame
+		presentation.update_presentation(STEP)
+	presentation.update_presentation(STEP)
+	var material := (
+		presentation.character_skin.skin_meshes.front().get_surface_override_material(0)
+		as ShaderMaterial
+	)
+	var entries := (
+		material.get_shader_parameter(&"wound_entries") as PackedVector4Array
+		if material != null
+		else PackedVector4Array()
+	)
+	var axes := (
+		material.get_shader_parameter(&"wound_axes") as PackedVector4Array
+		if material != null
+		else PackedVector4Array()
+	)
+	var wound := (
+		presentation.wound_presentation._presented_wounds[0] as Dictionary
+		if not presentation.wound_presentation._presented_wounds.is_empty()
+		else {}
+	)
+	var frame := presentation.wound_presentation._resolve_wound_world_frame(wound)
+	var alignment := presentation.wound_presentation.debug_surface_alignment()
+	var entry := Vector3(entries[0].x, entries[0].y, entries[0].z) if not entries.is_empty() else Vector3.INF
+	var axis := Vector3(axes[0].x, axes[0].y, axes[0].z) if not axes.is_empty() else Vector3.ZERO
+	var resolved_entry: Vector3 = frame.get("position", Vector3.ZERO)
+	var resolved_direction: Vector3 = frame.get("direction", Vector3.ZERO)
+	var radius := float(wound.get("radius", 0.0))
+	var aperture_radius := entries[0].w if not entries.is_empty() else 0.0
+	_expect(
+		bool(result.get("geometry_changed", false))
+		and StringName(str(result.get("part_id", &""))) == EnemyDestructibleAnatomy.PART_RIGHT_LEG
+		and int(alignment.get("attached_wounds", 0)) == 1
+		and float(alignment.get("maximum_legacy_offset", 0.0)) > 0.08
+		and float(alignment.get("maximum_chunk_anchor_error", INF)) < 0.0001
+		and float(alignment.get("minimum_tissue_distance", INF)) <= aperture_radius
+		and aperture_radius >= float(alignment.get("maximum_mouth_radius", INF)) + 0.002
+		and aperture_radius <= radius + 0.011
+		and entry.distance_to(resolved_entry) < 0.0001
+		and axis.normalized().dot(resolved_direction.normalized()) > 0.999,
+		(
+			"a thigh bullet attaches the animated aperture and shared-SDF cavity to the same skinned triangle instead of leaving intact trousers beside red tissue (legacy_offset=%.3f anchor_error=%.6f tissue_distance=%.4f mouth=%.4f radius=%.4f aperture=%.4f)"
+			% [
+				float(alignment.get("maximum_legacy_offset", -1.0)),
+				float(alignment.get("maximum_chunk_anchor_error", -1.0)),
+				float(alignment.get("minimum_tissue_distance", -1.0)),
+				float(alignment.get("maximum_mouth_radius", -1.0)),
+				radius,
+				aperture_radius,
+			]
+		)
+	)
+	var initial_local_entry := presentation.to_local(resolved_entry)
+	for _motion_frame: int in range(18):
+		presentation.position += Vector3(0.0, 0.0, -7.0) * STEP
+		presentation.update_presentation(STEP)
+	var moving_material := (
+		presentation.character_skin.skin_meshes.front().get_surface_override_material(0)
+		as ShaderMaterial
+	)
+	var moving_entries := moving_material.get_shader_parameter(&"wound_entries") as PackedVector4Array
+	var moving_entry := Vector3(moving_entries[0].x, moving_entries[0].y, moving_entries[0].z)
+	var moving_alignment := presentation.wound_presentation.debug_surface_alignment()
+	_expect(
+		presentation.to_local(moving_entry).distance_to(initial_local_entry) > 0.002
+		and float(moving_alignment.get("maximum_chunk_anchor_error", INF)) < 0.0001,
+		"the wound remains attached to the deformed thigh through procedural gait instead of lagging behind the animated skin"
 	)
 	presentation.queue_free()
 	await process_frame

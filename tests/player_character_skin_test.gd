@@ -6,6 +6,9 @@ const RIG_SCENE := preload(
 const CORPSE_PROXY := preload(
 	"res://scripts/client/player_corpse_proxy.gd"
 )
+const SKINNED_SURFACE_SAMPLER := preload(
+	"res://scripts/characters/skinned_mesh_surface_sampler.gd"
+)
 const STEP := 1.0 / 60.0
 const POSITION_EPSILON := 0.015
 
@@ -182,6 +185,14 @@ func _test_all_variants_backpack_mount_contract() -> void:
 		var spine_origin := _bone_world_origin(skin, PlayerCharacterSkin.UPPER_SPINE)
 		var back := skin.global_basis.z.normalized()
 		var up := skin.global_basis.y.normalized()
+		var sampler = SKINNED_SURFACE_SAMPLER.new().configure(skin)
+		var surface_attachment: Dictionary = sampler.capture_first_surface(
+			skin.global_transform * Vector3(0.0, 1.2, -1.0),
+			skin.global_basis * Vector3.BACK,
+			skin.global_basis,
+			2.0
+		)
+		var resolved_surface: Dictionary = sampler.resolve_attachment(surface_attachment)
 		_expect(
 			loaded
 			and attachment != null
@@ -197,6 +208,16 @@ func _test_all_variants_backpack_mount_contract() -> void:
 				+ PlayerCharacterSkin.BACKPACK_MOUNT_DROP
 			) < POSITION_EPSILON,
 			"male variant %d binds its backpack mount to the real upper-spine bone and back surface"
+			% player_id
+		)
+		_expect(
+			sampler.is_usable()
+			and not surface_attachment.is_empty()
+			and not resolved_surface.is_empty()
+			and (resolved_surface.get("position", Vector3.INF) as Vector3).distance_to(
+				surface_attachment.get("capture_position", Vector3.ZERO)
+			) < 0.0001,
+			"male variant %d exposes an exact skinned-triangle attachment for animated wound presentation"
 			% player_id
 		)
 		for backpack_path: String in backpack_paths:

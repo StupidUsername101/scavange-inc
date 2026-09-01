@@ -7,6 +7,9 @@ const ANATOMY := preload("res://scripts/enemies/enemy_destructible_anatomy.gd")
 const SDF_INTERIOR_SURFACE_BUILDER := preload(
 	"res://scripts/destruction/sdf_interior_surface_builder.gd"
 )
+const SKINNED_SURFACE_SAMPLER := preload(
+	"res://scripts/characters/skinned_mesh_surface_sampler.gd"
+)
 const MAX_WOUNDS := 24
 const MAX_PARALLEL_SURFACE_JOBS := 3
 const MAX_SURFACE_COMMITS_PER_FRAME := 2
@@ -46,6 +49,10 @@ var _surface_rebuild_count := 0
 var _surface_worker_usec := 0
 var _surface_commit_usec := 0
 var _full_replay_count := 0
+var _surface_sampler = SKINNED_SURFACE_SAMPLER.new()
+var _surface_attachments: Dictionary[String, Dictionary] = {}
+var _resolved_attachment_frames: Dictionary[String, Dictionary] = {}
+var _visual_aperture_radii: Dictionary[String, float] = {}
 
 
 func _process(_delta: float) -> void:
@@ -71,6 +78,10 @@ func configure(
 	anatomy_definition = profile
 	_configured_variant_path = skin.get_variant_path() if skin != null else ""
 	_install_skin_materials()
+	_surface_sampler.configure(skin)
+	_surface_attachments.clear()
+	_resolved_attachment_frames.clear()
+	_visual_aperture_radii.clear()
 	_configure_part_surfaces()
 
 
@@ -129,6 +140,7 @@ func update_presentation() -> void:
 		bool(target_part_presence[ANATOMY.PART_RIGHT_LEG])
 	)
 	character_skin.set_head_presence(bool(target_part_presence[ANATOMY.PART_HEAD]))
+	_prepare_attachment_frames()
 	var entries := PackedVector4Array()
 	var axes := PackedVector4Array()
 	entries.resize(MAX_WOUNDS)
@@ -145,7 +157,10 @@ func update_presentation() -> void:
 		if direction.length_squared() <= 0.000001:
 			direction = character_skin.global_basis.z
 		direction = direction.normalized()
-		var radius := float(wound.get("radius", 0.03))
+		var radius := float(_visual_aperture_radii.get(
+			_wound_attachment_key(wound),
+			float(wound.get("radius", 0.03))
+		))
 		var depth := float(wound.get("depth", radius * 1.4))
 		entries[visible_count] = Vector4(entry.x, entry.y, entry.z, radius)
 		axes[visible_count] = Vector4(direction.x, direction.y, direction.z, depth)
@@ -208,6 +223,76 @@ func debug_surface_metrics() -> Dictionary:
 	}
 
 
+func debug_surface_alignment() -> Dictionary:
+	_prepare_attachment_frames()
+	var attached_wounds := 0
+	var maximum_chunk_anchor_error := 0.0
+	var minimum_tissue_distance := INF
+	var maximum_mouth_radius := 0.0
+	var maximum_legacy_offset := 0.0
+	for wound: Dictionary in _presented_wounds:
+		if bool(wound.get("stump", false)):
+			continue
+		var key := _wound_attachment_key(wound)
+		var frame := _resolved_attachment_frames.get(key, {}) as Dictionary
+		if frame.is_empty():
+			continue
+		attached_wounds += 1
+		var entry: Vector3 = frame.get("position", Vector3.ZERO)
+		var direction: Vector3 = frame.get("direction", Vector3.FORWARD)
+		var part_id := StringName(str(wound.get("part", &"")))
+		var part := anatomy_definition.get_part(part_id) if anatomy_definition != null else null
+		if part != null:
+			var legacy := _profile_wound_world_frame(
+				wound.get("local_position", part.local_center),
+				wound.get("local_direction", Vector3.FORWARD),
+				part
+			)
+			maximum_legacy_offset = maxf(
+				maximum_legacy_offset,
+				entry.distance_to(legacy.get("position", entry))
+			)
+		var field := part_surface_fields.get(part_id) as SparseSdfVolumeData
+		var chunks_value: Variant = part_chunk_surface_nodes.get(part_id, {})
+		if part == null or field == null or not chunks_value is Dictionary:
+			continue
+		var field_hit: Vector3 = wound.get("local_position", part.local_center) - part.local_center
+		for coordinate_value: Variant in (chunks_value as Dictionary).keys():
+			var coordinate: Vector3i = coordinate_value
+			var nearest := _nearest_attached_wound(part, field, coordinate)
+			if nearest.is_empty() or _wound_attachment_key(nearest) != key:
+				continue
+			var chunk := (chunks_value as Dictionary).get(coordinate) as MeshInstance3D
+			if chunk == null or chunk.mesh == null:
+				continue
+			maximum_chunk_anchor_error = maxf(
+				maximum_chunk_anchor_error,
+				(chunk.global_transform * field_hit).distance_to(entry)
+			)
+			for surface_index: int in range(chunk.mesh.get_surface_count()):
+				var arrays := chunk.mesh.surface_get_arrays(surface_index)
+				var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+				for local_vertex: Vector3 in vertices:
+					var from_entry := chunk.global_transform * local_vertex - entry
+					minimum_tissue_distance = minf(
+						minimum_tissue_distance,
+						from_entry.length()
+					)
+					var axial := from_entry.dot(direction)
+					if axial >= -0.02 and axial <= 0.04:
+						maximum_mouth_radius = maxf(
+							maximum_mouth_radius,
+							(from_entry - direction * axial).length()
+						)
+	return {
+		"attached_wounds": attached_wounds,
+		"maximum_chunk_anchor_error": maximum_chunk_anchor_error,
+		"minimum_tissue_distance": minimum_tissue_distance,
+		"maximum_mouth_radius": maximum_mouth_radius,
+		"maximum_legacy_offset": maximum_legacy_offset,
+	}
+
+
 func part_is_present(part_id: StringName) -> bool:
 	return _part_is_present(part_id)
 
@@ -244,6 +329,7 @@ func _configure_part_surfaces() -> void:
 	part_chunk_surface_nodes.clear()
 	_applied_deformation_keys.clear()
 	_presented_wounds.clear()
+	_visual_aperture_radii.clear()
 	_pending_visual_commit = false
 	if anatomy_definition == null:
 		return
@@ -382,6 +468,7 @@ func _reset_surface_fields() -> void:
 	_discard_surface_jobs()
 	_applied_deformation_keys.clear()
 	_presented_wounds.clear()
+	_visual_aperture_radii.clear()
 	for part: EnemyAnatomyPartDefinition in anatomy_definition.parts:
 		if part == null:
 			continue
@@ -590,7 +677,9 @@ func _commit_target_wounds() -> void:
 			state.get("mesh") as ArrayMesh
 		)
 	_pending_chunk_meshes.clear()
+	_refresh_surface_attachments()
 	_presented_wounds.assign(target_wounds)
+	_refresh_visual_aperture_radii()
 	_pending_visual_commit = false
 
 
@@ -655,8 +744,75 @@ func _update_part_surface_transforms() -> void:
 		var surface := part_surface_nodes.get(part.part_id) as Node3D
 		if surface == null:
 			continue
-		surface.global_transform = _profile_part_world_transform(part)
+		var fallback_transform := _profile_part_world_transform(part)
+		surface.global_transform = fallback_transform
 		surface.visible = _part_surface_should_be_visible(part.part_id)
+		var chunks_value: Variant = part_chunk_surface_nodes.get(part.part_id, {})
+		if not chunks_value is Dictionary:
+			continue
+		var field := part_surface_fields.get(part.part_id) as SparseSdfVolumeData
+		for coordinate_value: Variant in (chunks_value as Dictionary).keys():
+			var coordinate: Vector3i = coordinate_value
+			var chunk := (chunks_value as Dictionary).get(coordinate) as MeshInstance3D
+			if chunk == null or field == null:
+				continue
+			chunk.global_transform = _chunk_world_transform(
+				part,
+				field,
+				coordinate,
+				fallback_transform
+			)
+
+
+func _chunk_world_transform(
+	part: EnemyAnatomyPartDefinition,
+	field: SparseSdfVolumeData,
+	coordinate: Vector3i,
+	fallback: Transform3D
+) -> Transform3D:
+	if not _surface_sampler.is_usable():
+		return fallback
+	var nearest_wound := _nearest_attached_wound(part, field, coordinate)
+	if nearest_wound.is_empty():
+		return fallback
+	var resolved := _resolve_wound_world_frame(nearest_wound)
+	if resolved.is_empty():
+		return fallback
+	var field_hit: Vector3 = (
+		nearest_wound.get("local_position", part.local_center)
+		- part.local_center
+	)
+	var resolved_basis: Basis = resolved.get("basis", fallback.basis)
+	return Transform3D(
+		resolved_basis,
+		resolved.get("position", fallback * field_hit) - resolved_basis * field_hit
+	)
+
+
+func _nearest_attached_wound(
+	part: EnemyAnatomyPartDefinition,
+	field: SparseSdfVolumeData,
+	coordinate: Vector3i
+) -> Dictionary:
+	var chunk_center := (
+		field.brick_origin(coordinate)
+		+ Vector3.ONE * field.brick_extent * 0.5
+	)
+	var nearest_wound: Dictionary = {}
+	var nearest_distance_squared := INF
+	for wound: Dictionary in _presented_wounds:
+		if (
+			bool(wound.get("stump", false))
+			or StringName(str(wound.get("part", &""))) != part.part_id
+			or not _surface_attachments.has(_wound_attachment_key(wound))
+		):
+			continue
+		var field_hit: Vector3 = wound.get("local_position", part.local_center) - part.local_center
+		var distance_squared := chunk_center.distance_squared_to(field_hit)
+		if distance_squared < nearest_distance_squared:
+			nearest_distance_squared = distance_squared
+			nearest_wound = wound
+	return nearest_wound
 
 
 func _profile_part_world_transform(part: EnemyAnatomyPartDefinition) -> Transform3D:
@@ -770,7 +926,141 @@ func _append_missing_limb_stumps() -> void:
 		})
 
 
+func _refresh_surface_attachments() -> void:
+	if not _surface_sampler.is_usable():
+		_surface_attachments.clear()
+		return
+	var retained: Dictionary[String, Dictionary] = {}
+	for wound: Dictionary in target_wounds:
+		if bool(wound.get("stump", false)):
+			continue
+		var key := _wound_attachment_key(wound)
+		var attachment := _surface_attachments.get(key, {}) as Dictionary
+		if attachment.is_empty():
+			attachment = _capture_surface_attachment(wound)
+		if not attachment.is_empty():
+			retained[key] = attachment
+	_surface_attachments = retained
+	_resolved_attachment_frames.clear()
+
+
+func _refresh_visual_aperture_radii() -> void:
+	_visual_aperture_radii.clear()
+	if anatomy_definition == null:
+		return
+	for wound: Dictionary in _presented_wounds:
+		var key := _wound_attachment_key(wound)
+		var base_radius := float(wound.get("radius", 0.03))
+		if bool(wound.get("stump", false)):
+			_visual_aperture_radii[key] = base_radius
+			continue
+		var part_id := StringName(str(wound.get("part", &"")))
+		var part := anatomy_definition.get_part(part_id)
+		var field := part_surface_fields.get(part_id) as SparseSdfVolumeData
+		var chunks_value: Variant = part_chunk_surface_nodes.get(part_id, {})
+		if part == null or field == null or not chunks_value is Dictionary:
+			_visual_aperture_radii[key] = base_radius
+			continue
+		var field_hit: Vector3 = wound.get("local_position", part.local_center) - part.local_center
+		var direction: Vector3 = wound.get("local_direction", Vector3.FORWARD)
+		direction = direction.normalized() if direction.length_squared() > 0.000001 else Vector3.FORWARD
+		var measured_radius := base_radius
+		var mouth_depth := maxf(field.voxel_size * 4.0, base_radius * 2.5)
+		var candidate_limit := base_radius + field.voxel_size * 3.0
+		for node_value: Variant in (chunks_value as Dictionary).values():
+			var chunk := node_value as MeshInstance3D
+			if chunk == null or chunk.mesh == null:
+				continue
+			for surface_index: int in range(chunk.mesh.get_surface_count()):
+				var arrays := chunk.mesh.surface_get_arrays(surface_index)
+				var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+				for vertex: Vector3 in vertices:
+					var from_hit := vertex - field_hit
+					var axial := from_hit.dot(direction)
+					if axial < -field.voxel_size * 1.5 or axial > mouth_depth:
+						continue
+					var radial := (from_hit - direction * axial).length()
+					if radial <= candidate_limit:
+						measured_radius = maxf(measured_radius, radial)
+		# Dual contouring may place the last cavity vertex just outside the analytic brush. Let the
+		# imported shell overlap the actual SDF mouth by a fraction of a voxel, while bounding that
+		# allowance so a neighboring wound can never recreate a tank-sized aperture.
+		_visual_aperture_radii[key] = minf(
+			measured_radius + field.voxel_size * 0.35,
+			base_radius + field.voxel_size
+		)
+
+
+func _capture_surface_attachment(wound: Dictionary) -> Dictionary:
+	var local_position: Vector3 = wound.get("local_position", Vector3.ZERO)
+	var local_direction: Vector3 = wound.get("local_direction", Vector3.FORWARD)
+	if local_direction.length_squared() <= 0.000001:
+		return {}
+	var world_direction := (global_basis * local_direction).normalized()
+	var part_id := StringName(str(wound.get("part", &"")))
+	var part := anatomy_definition.get_part(part_id) if anatomy_definition != null else null
+	var reference_basis := (
+		_profile_part_world_transform(part).basis
+		if part != null
+		else global_basis.orthonormalized()
+	)
+	var ray_span := maxf(
+		part.sanitized_size().length() * 1.25 if part != null else 1.0,
+		0.8
+	)
+	var estimated_world_position := global_transform * local_position
+	return _surface_sampler.capture_first_surface(
+		estimated_world_position - world_direction * ray_span,
+		world_direction,
+		reference_basis,
+		ray_span * 2.0
+	)
+
+
+func _wound_attachment_key(wound: Dictionary) -> String:
+	var position: Vector3 = wound.get("local_position", Vector3.ZERO)
+	var direction: Vector3 = wound.get("local_direction", Vector3.FORWARD)
+	return "%s:%d:%d:%d:%d:%d:%d:%d" % [
+		str(wound.get("part", &"")),
+		int(wound.get("event_id", 0)),
+		roundi(position.x * 10000.0),
+		roundi(position.y * 10000.0),
+		roundi(position.z * 10000.0),
+		roundi(direction.x * 1000.0),
+		roundi(direction.y * 1000.0),
+		roundi(direction.z * 1000.0),
+	]
+
+
+func _prepare_attachment_frames() -> void:
+	_resolved_attachment_frames.clear()
+	if not _surface_sampler.is_usable():
+		return
+	_surface_sampler.prepare_pose()
+	for wound: Dictionary in _presented_wounds:
+		var key := _wound_attachment_key(wound)
+		var attachment := _surface_attachments.get(key, {}) as Dictionary
+		if attachment.is_empty():
+			continue
+		var resolved: Dictionary = _surface_sampler.resolve_attachment(
+			attachment,
+			false
+		)
+		if not resolved.is_empty():
+			_resolved_attachment_frames[key] = resolved
+
+
 func _resolve_wound_world_frame(wound: Dictionary) -> Dictionary:
+	var key := _wound_attachment_key(wound)
+	var cached := _resolved_attachment_frames.get(key, {}) as Dictionary
+	if not cached.is_empty():
+		return cached
+	var attachment := _surface_attachments.get(key, {}) as Dictionary
+	if not attachment.is_empty():
+		var resolved: Dictionary = _surface_sampler.resolve_attachment(attachment)
+		if not resolved.is_empty():
+			_resolved_attachment_frames[key] = resolved
+			return resolved
 	var local_position: Vector3 = wound.get("local_position", Vector3.ZERO)
 	var local_direction: Vector3 = wound.get("local_direction", Vector3.FORWARD)
 	var part_id := StringName(str(wound.get("part", &"")))
