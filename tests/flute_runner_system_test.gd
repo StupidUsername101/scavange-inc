@@ -1009,6 +1009,12 @@ func _test_humanoid_presentation_contract() -> void:
 		})
 	var tissue_audit := DESTRUCTION_MESH_AUDIT.audit_results(tissue_results, torso_field)
 	var surface_metrics := presentation.wound_presentation.debug_surface_metrics()
+	var simulated_wound_depth := float(
+		(presentation.wound_presentation._presented_wounds[0] as Dictionary).get(
+			"depth",
+			0.0
+		)
+	)
 	_expect(
 		presentation.wound_presentation != null
 		and presentation.wound_presentation.get_visible_wound_count() == 2
@@ -1018,8 +1024,14 @@ func _test_humanoid_presentation_contract() -> void:
 		and wound_axes.size() == EnemyWoundPresentation3D.MAX_WOUNDS
 		and wound_entries[0].w > 0.0
 		and wound_axes[0].w >= wound_entries[0].w
+		and simulated_wound_depth >= SERVICE_9MM.penetration_depth * 0.95
+		and wound_axes[0].w < simulated_wound_depth * 0.2
+		and wound_axes[0].w <= wound_entries[0].w * 2.0
 		and wound_material.shader.code.contains("void vertex()")
 		and wound_material.shader.code.contains("wound_axis_distance")
+		and wound_material.shader.code.contains("cull_disabled")
+		and wound_material.shader.code.contains("FRONT_FACING")
+		and wound_material.shader.code.contains("wound_deep_color")
 		and not wound_material.shader.code.contains("wound_spheres")
 		and torso_tissue != null
 		and torso_tissue.visible
@@ -1163,6 +1175,8 @@ func _test_animated_thigh_wound_surface_alignment() -> void:
 	var resolved_direction: Vector3 = frame.get("direction", Vector3.ZERO)
 	var radius := float(wound.get("radius", 0.0))
 	var aperture_radius := entries[0].w if not entries.is_empty() else 0.0
+	var simulated_depth := float(wound.get("depth", 0.0))
+	var shell_aperture_depth := axes[0].w if not axes.is_empty() else INF
 	_expect(
 		bool(result.get("geometry_changed", false))
 		and StringName(str(result.get("part_id", &""))) == EnemyDestructibleAnatomy.PART_RIGHT_LEG
@@ -1172,6 +1186,9 @@ func _test_animated_thigh_wound_surface_alignment() -> void:
 		and float(alignment.get("minimum_tissue_distance", INF)) <= aperture_radius
 		and aperture_radius >= float(alignment.get("maximum_mouth_radius", INF)) + 0.002
 		and aperture_radius <= radius + 0.011
+		and simulated_depth >= SERVICE_9MM.penetration_depth * 0.95
+		and shell_aperture_depth < simulated_depth * 0.2
+		and shell_aperture_depth <= aperture_radius * 2.0
 		and entry.distance_to(resolved_entry) < 0.0001
 		and axis.normalized().dot(resolved_direction.normalized()) > 0.999,
 		(

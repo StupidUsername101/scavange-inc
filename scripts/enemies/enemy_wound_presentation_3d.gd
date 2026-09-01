@@ -15,6 +15,8 @@ const MAX_PARALLEL_SURFACE_JOBS := 3
 const MAX_SURFACE_COMMITS_PER_FRAME := 2
 const REMESH_NEIGHBOR_RING := 1
 const TISSUE_PIPELINE_WARMUP_NAME := &"EnemyTissuePipelineWarmup"
+const SHELL_APERTURE_DEPTH_PER_RADIUS := 1.7
+const SHELL_APERTURE_MINIMUM_VOXELS := 2.5
 
 static var _tissue_pipeline_registered := false
 
@@ -161,7 +163,7 @@ func update_presentation() -> void:
 			_wound_attachment_key(wound),
 			float(wound.get("radius", 0.03))
 		))
-		var depth := float(wound.get("depth", radius * 1.4))
+		var depth := _visual_shell_aperture_depth(wound, radius, part_id)
 		entries[visible_count] = Vector4(entry.x, entry.y, entry.z, radius)
 		axes[visible_count] = Vector4(direction.x, direction.y, direction.z, depth)
 		visible_count += 1
@@ -314,6 +316,15 @@ func _install_skin_materials() -> void:
 				material.set_shader_parameter(&"has_albedo_texture", source.albedo_texture != null)
 				material.set_shader_parameter(&"material_roughness", source.roughness)
 				material.set_shader_parameter(&"material_metallic", source.metallic)
+			if anatomy_definition != null and anatomy_definition.damage_texture != null:
+				material.set_shader_parameter(
+					&"wound_inner_color",
+					anatomy_definition.damage_texture.interior_color
+				)
+				material.set_shader_parameter(
+					&"wound_deep_color",
+					anatomy_definition.damage_texture.deep_interior_color
+				)
 			mesh_instance.set_surface_override_material(surface_index, material)
 			skin_materials.append(material)
 
@@ -989,6 +1000,28 @@ func _refresh_visual_aperture_radii() -> void:
 			measured_radius + field.voxel_size * 0.35,
 			base_radius + field.voxel_size
 		)
+
+
+func _visual_shell_aperture_depth(
+	wound: Dictionary,
+	radius: float,
+	part_id: StringName
+) -> float:
+	var simulated_depth := maxf(float(wound.get("depth", radius)), radius)
+	var field := part_surface_fields.get(part_id) as SparseSdfVolumeData
+	var minimum_depth := (
+		field.voxel_size * SHELL_APERTURE_MINIMUM_VOXELS
+		if field != null
+		else radius
+	)
+	# Ballistic penetration belongs to the SDF/material simulation. The imported skin is only a
+	# zero-thickness presentation shell, so extending its clip capsule through the full projectile
+	# range erases the far side (or a folded neighboring limb). Clip just enough shell around the
+	# measured mouth. A real exit can later be represented by its own second surface attachment.
+	return minf(
+		simulated_depth,
+		maxf(radius * SHELL_APERTURE_DEPTH_PER_RADIUS, minimum_depth)
+	)
 
 
 func _capture_surface_attachment(wound: Dictionary) -> Dictionary:

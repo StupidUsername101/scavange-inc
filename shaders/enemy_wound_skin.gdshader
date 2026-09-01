@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back, depth_draw_opaque;
+render_mode cull_disabled, depth_draw_opaque;
 
 const int MAX_WOUNDS = 24;
 
@@ -8,10 +8,13 @@ uniform sampler2D albedo_texture : source_color, filter_nearest_mipmap;
 uniform bool has_albedo_texture = false;
 uniform float material_roughness : hint_range(0.0, 1.0) = 0.8;
 uniform float material_metallic : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 wound_inner_color : source_color = vec3(0.92, 0.045, 0.025);
+uniform vec3 wound_deep_color : source_color = vec3(0.16, 0.002, 0.004);
 uniform int wound_count : hint_range(0, 24) = 0;
 // xyz = animated entry point, w = radius.
 uniform vec4 wound_entries[MAX_WOUNDS];
-// xyz = direction into the body, w = penetration depth.
+// xyz = direction into the body, w = shallow presentation-shell aperture depth. The authoritative
+// SDF retains the projectile's complete penetration independently.
 uniform vec4 wound_axes[MAX_WOUNDS];
 
 
@@ -74,8 +77,8 @@ void fragment() {
 			max(axis.w, entry.w),
 			axial
 		);
-		// A tapered tunnel is the actual removed material. The old implementation discarded a
-		// sphere and then placed another red sphere on top, which could never look like deformation.
+		// Clip only the tapered mouth in the imported presentation shell. Extending this to the
+		// projectile's material penetration would delete the far side of the animated body.
 		float depth_weight = clamp(axial / max(axis.w, 0.001), 0.0, 1.0);
 		float local_radius = entry.w * mix(1.0, 0.58, depth_weight);
 		if (axial >= -0.002 && axial <= axis.w && radial < local_radius) {
@@ -95,7 +98,17 @@ void fragment() {
 	if (sampled.a < 0.5) {
 		discard;
 	}
-	ALBEDO = mix(sampled.rgb, vec3(0.19, 0.018, 0.012), wound_rim * 0.58);
-	ROUGHNESS = material_roughness;
-	METALLIC = material_metallic;
+	if (FRONT_FACING) {
+		ALBEDO = mix(sampled.rgb, vec3(0.19, 0.018, 0.012), wound_rim * 0.58);
+		ROUGHNESS = material_roughness;
+		METALLIC = material_metallic;
+	} else {
+		// Imported character skins are zero-thickness shells. Their back faces are the only natural
+		// occluder behind an aperture; render those as deep tissue so a valid entry hole does not
+		// expose the sky through the character when the ballistic SDF channel perforates.
+		ALBEDO = mix(wound_inner_color, wound_deep_color, 0.72);
+		ROUGHNESS = max(material_roughness, 0.88);
+		METALLIC = 0.0;
+		NORMAL = -NORMAL;
+	}
 }
