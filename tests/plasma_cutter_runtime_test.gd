@@ -73,7 +73,13 @@ func _test_authoritative_cut_route() -> void:
 	server.call("_process_player_plasma_cutter", player)
 	_expect(
 		first_query != null and player.plasma_cutter_ray_query == first_query,
-		"continuous aiming reuses its physics query instead of allocating one every tick"
+		"the single discharge reuses its cached physics query without allocating a second one"
+	)
+	_expect(
+		player.plasma_cutter_overheated
+		and not player.plasma_cutter_active
+		and is_equal_approx(player.plasma_cutter_heat_ratio, 1.0),
+		"one authoritative cutter pulse consumes the complete heat cycle"
 	)
 	var event := sink.received_event
 	_expect(

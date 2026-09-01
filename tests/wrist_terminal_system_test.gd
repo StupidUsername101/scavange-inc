@@ -307,7 +307,8 @@ func _test_handheld_tool_separation_contract() -> void:
 		and not generic_cutter is EquippableItemDefinition
 		and float(stats.get("range_meters", 0.0)) > 0.0
 		and float(stats.get("kerf_millimeters", 0.0)) > 0.0
-		and float(stats.get("continuous_duty_seconds", 0.0)) > 2.0,
+		and float(stats.get("continuous_duty_seconds", 1.0)) < 0.2
+		and float(stats.get("full_cool_seconds", 2.0)) < 1.0,
 		"the cutter is a standalone item with a finite authored operating envelope"
 	)
 
@@ -343,19 +344,26 @@ func _test_handheld_tool_separation_contract() -> void:
 		and player.consume_plasma_cutter_pulse(),
 		"ordinary held primary action energizes the selected cutter immediately"
 	)
-	for _thermal_tick: int in range(34):
+	_expect(
+		player.plasma_cutter_overheated
+		and not player.plasma_cutter_active
+		and not player.plasma_cutter_trigger_held
+		and not player.consume_plasma_cutter_pulse(),
+		"one authoritative discharge atomically overheats and stops the cutter"
+	)
+	for _thermal_tick: int in range(5):
 		player.call("_update_plasma_cutter_thermal", 0.1)
 	_expect(
 		player.plasma_cutter_overheated
 		and not player.plasma_cutter_active
 		and not player.plasma_cutter_trigger_held,
-		"overheat atomically stops the beam and requires a fresh press"
+		"the shortened cooldown still enforces a visible lockout"
 	)
-	for _cool_tick: int in range(30):
+	for _cool_tick: int in range(4):
 		player.call("_update_plasma_cutter_thermal", 0.1)
 	_expect(
 		not player.plasma_cutter_overheated
-		and player.plasma_cutter_heat_ratio < 0.3,
+		and player.plasma_cutter_heat_ratio <= 0.01,
 		"thermal lockout releases only after the authored recovery threshold"
 	)
 	var replicated_state := player.to_state_dict(false)
@@ -393,12 +401,20 @@ func _test_device_contact_contract() -> void:
 	var radio := load(
 		"res://resources/items/radios/portable_radio.tres"
 	) as ItemDefinition
+	var cutter := load(PLASMA_CUTTER_PATH) as ItemDefinition
 	_expect(
 		radio != null
 		and radio.fieldlink_detectable
 		and radio.fieldlink_device_class == &"AUDIO"
 		and radio.fieldlink_control_type == &"radio",
 		"portable technical items opt into the generic Fieldlink contact contract"
+	)
+	_expect(
+		cutter != null
+		and cutter.fieldlink_detectable
+		and cutter.fieldlink_device_class == &"CUTTING TOOL"
+		and cutter.fieldlink_control_type.is_empty(),
+		"loose plasma cutters use the same read-only Fieldlink scanner contract as other technical items"
 	)
 	var beacon := DEVICE_BEACON.new() as Node3D
 	beacon.set("contact_id", &"test:fabricator")
@@ -407,6 +423,13 @@ func _test_device_contact_contract() -> void:
 	beacon.position = Vector3(3.0, 1.0, -4.0)
 	root.add_child(beacon)
 	var client := root.get_node_or_null("Client")
+	var cutter_proxy := ItemProxy.new()
+	cutter_proxy.item_id = 991
+	cutter_proxy.item_definition = cutter
+	cutter_proxy.position = Vector3(-2.0, 0.5, -1.0)
+	root.add_child(cutter_proxy)
+	var item_proxies: Dictionary = client.get("item_proxies_by_item_id")
+	item_proxies[cutter_proxy.item_id] = cutter_proxy
 	var contacts_value: Variant = client.call(
 		"collect_nearby_fieldlink_devices",
 		Vector3.ZERO,
@@ -415,6 +438,7 @@ func _test_device_contact_contract() -> void:
 	)
 	var contacts: Array = contacts_value if contacts_value is Array else []
 	var found_beacon := false
+	var found_cutter := false
 	for contact_value: Variant in contacts:
 		if (
 			contact_value is Dictionary
@@ -432,9 +456,23 @@ func _test_device_contact_contract() -> void:
 				and contact.get("world_offset", Vector3.ZERO)
 				== Vector3(3.0, 1.0, -4.0)
 			)
+		elif (
+			contact_value is Dictionary
+			and (contact_value as Dictionary).get("contact_id", &"") == &"item:991"
+		):
+			var cutter_contact := contact_value as Dictionary
+			found_cutter = (
+				cutter_contact.get("device_class", &"") == &"CUTTING TOOL"
+				and cutter_contact.get("display_name", "")
+				== "Industrial Plasma Cutter"
+			)
 	_expect(
 		found_beacon,
 		"the client scanner derives range and player-relative bearing from replicated device transforms"
+	)
+	_expect(
+		found_cutter,
+		"the real client scanner returns a nearby replicated plasma-cutter item"
 	)
 	var out_of_range: Array = client.call(
 		"collect_nearby_fieldlink_devices",
@@ -455,6 +493,8 @@ func _test_device_contact_contract() -> void:
 		"Fieldlink excludes compatible devices beyond the scanner's bounded range"
 	)
 	beacon.free()
+	item_proxies.erase(cutter_proxy.item_id)
+	cutter_proxy.free()
 	var client_world_scene := load("res://scenes/proxy/world.tscn") as PackedScene
 	var client_world := client_world_scene.instantiate() as Node3D
 	root.add_child(client_world)

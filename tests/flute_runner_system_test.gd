@@ -10,6 +10,9 @@ const RADIO_STATE_SNAPSHOT_CODEC := preload(
 const DESTRUCTION_MESH_AUDIT := preload(
 	"res://tests/helpers/destruction_mesh_audit.gd"
 )
+const SERVICE_9MM: BallisticProjectileDefinition = preload(
+	"res://resources/weapons/projectiles/service_9mm.tres"
+)
 
 var assertion_count := 0
 var failure_count := 0
@@ -27,6 +30,7 @@ func _run() -> void:
 	_test_acoustic_source_ownership_and_expiry()
 	_test_legacy_enemy_compatibility()
 	_test_definition_and_compact_wire_contract()
+	_test_firearm_wound_scale_and_limb_anchors()
 	_test_sdf_anatomy_survival_contract()
 	_test_continuous_audio_boundary()
 	_test_reversible_world_spawn()
@@ -34,6 +38,7 @@ func _run() -> void:
 	await _test_hidden_player_requires_real_acoustic_stimulus()
 	await _test_authoritative_chase_integration()
 	await _test_humanoid_presentation_contract()
+	await _test_incremental_wound_presentation_budget()
 	if failure_count == 0:
 		print("Flute runner tests passed: %d assertions" % assertion_count)
 		quit(0)
@@ -390,14 +395,16 @@ func _test_sdf_anatomy_survival_contract() -> void:
 	) as EnemyDestructibleAnatomyDefinition
 	var limb_anatomy := EnemyDestructibleAnatomy.new().configure(73, profile)
 	var event_id := 1
-	for row: int in range(9):
-		for column: int in range(4):
+	# Cut a narrow ballistic seam across the arm. Scattered tissue loss should not magically remove a
+	# limb; a face-disconnecting path through the shared SDF should.
+	for row: int in range(2):
+		for column: int in range(17):
 			limb_anatomy.apply_damage_event(
 				_make_anatomy_damage_event(
 					event_id,
 					Vector3(
-						-0.465 + float(column) * 0.03,
-						0.90 + float(row) * 0.08,
+						-0.48 + float(column) * 0.01,
+						1.205 + float(row) * 0.01,
 						-0.36
 					)
 				),
@@ -406,9 +413,11 @@ func _test_sdf_anatomy_survival_contract() -> void:
 			event_id += 1
 	var limb_state := limb_anatomy.state_dict()
 	var limb_wounds: Array = limb_state.get("wounds", [])
+	var severed_parts := limb_state.get("part_severed", {}) as Dictionary
 	var projected_wound: Dictionary = limb_wounds.front() if not limb_wounds.is_empty() else {}
 	_expect(
 		not limb_anatomy.has_limb(EnemyDestructibleAnatomy.PART_LEFT_ARM)
+		and bool(severed_parts.get(EnemyDestructibleAnatomy.PART_LEFT_ARM, false))
 		and limb_anatomy.has_limb(EnemyDestructibleAnatomy.PART_RIGHT_ARM)
 		and limb_anatomy.has_limb(EnemyDestructibleAnatomy.PART_LEFT_LEG)
 		and not limb_anatomy.is_dead()
@@ -429,6 +438,61 @@ func _test_sdf_anatomy_survival_contract() -> void:
 				],
 			]
 		)
+	)
+
+
+func _test_firearm_wound_scale_and_limb_anchors() -> void:
+	var profile := load(
+		"res://resources/enemies/anatomies/humanoid_flesh.tres"
+	) as EnemyDestructibleAnatomyDefinition
+	var left_arm := profile.get_part(EnemyDestructibleAnatomy.PART_LEFT_ARM)
+	var torso := profile.get_part(EnemyDestructibleAnatomy.PART_TORSO)
+	var flesh_texture := profile.damage_texture
+	var service_profile := SERVICE_9MM.to_ballistic_profile()
+	var response_radius := flesh_texture.response_radius(
+		float(service_profile["destruction_radius"]),
+		float(service_profile["destruction_energy"])
+	)
+	_expect(
+		float(service_profile["destruction_radius"]) <= 0.0121
+		and float(service_profile["penetration_depth"]) >= 0.30
+		and float(service_profile["penetration_depth"]) <= 0.46
+		and response_radius < 0.018
+		and profile.voxel_size <= 0.01
+		and left_arm.structural_anchor_mask() == SdfStructuralFragmenter.ANCHOR_POSITIVE_Y
+		and torso.structural_anchor_mask() == SdfStructuralFragmenter.ANCHOR_NEGATIVE_Y,
+		"ordinary bullets author centimetre-scale flesh channels while anatomy anchors limbs at their proximal joint"
+	)
+	var anatomy := EnemyDestructibleAnatomy.new().configure(72, profile)
+	anatomy.apply_damage_event(
+		_make_anatomy_damage_event(7201, Vector3(0.18, 1.10, -0.36)),
+		Transform3D.IDENTITY
+	)
+	anatomy.apply_damage_event(
+		_make_anatomy_damage_event(7202, Vector3(0.19, 1.10, -0.36)),
+		Transform3D.IDENTITY
+	)
+	var state := anatomy.state_dict()
+	var wounds: Array = state.get("wounds", [])
+	var first_radius := (
+		float((wounds[0] as Dictionary).get("radius", 1.0))
+		if wounds.size() > 0
+		else 1.0
+	)
+	var second_radius := (
+		float((wounds[1] as Dictionary).get("radius", 1.0))
+		if wounds.size() > 1
+		else 1.0
+	)
+	var arm_state = anatomy.parts.get(EnemyDestructibleAnatomy.PART_LEFT_ARM)
+	_expect(
+		wounds.size() == 2
+		and first_radius < 0.018
+		and second_radius < 0.018
+		and arm_state != null
+		and anatomy.has_limb(EnemyDestructibleAnatomy.PART_LEFT_ARM)
+		and arm_state.field.structural_anchor_faces == SdfStructuralFragmenter.ANCHOR_POSITIVE_Y,
+		"nearby bullets remain exact individual apertures instead of merging into one tank-sized visual hole"
 	)
 	var vital_anatomy := EnemyDestructibleAnatomy.new().configure(74, profile)
 	var vital_event := _make_anatomy_damage_event(
@@ -471,10 +535,10 @@ func _make_anatomy_damage_event(
 		"normal": Vector3.BACK,
 		"direction": Vector3.BACK,
 		"brush_kind": DamageEvent.BRUSH_CAPSULE,
-		"radius": 0.05,
-		"length": 0.75,
-		"penetration": 0.75,
-		"energy": 16.0,
+		"radius": SERVICE_9MM.destruction_radius,
+		"length": SERVICE_9MM.penetration_depth,
+		"penetration": SERVICE_9MM.penetration_depth,
+		"energy": SERVICE_9MM.destruction_energy,
 		"damage_tags": PackedStringArray(["ballistic"]),
 	})
 
@@ -877,7 +941,15 @@ func _test_humanoid_presentation_contract() -> void:
 	forced_presence[EnemyDestructibleAnatomy.PART_LEFT_ARM] = false
 	replicated_anatomy["part_presence"] = forced_presence
 	replicated_anatomy["left_arm"] = false
+	var presentation_apply_started := Time.get_ticks_usec()
 	presentation.apply_server_state({"anatomy_destruction": replicated_anatomy})
+	var presentation_apply_usec := Time.get_ticks_usec() - presentation_apply_started
+	presentation.update_presentation(STEP)
+	for _surface_frame: int in range(240):
+		if not presentation.wound_presentation.has_pending_surface_rebuilds():
+			break
+		await process_frame
+		presentation.update_presentation(STEP)
 	presentation.update_presentation(STEP)
 	var left_arm_index := presentation.character_skin.skeleton.find_bone(
 		&"mixamorig_LeftArm"
@@ -898,7 +970,7 @@ func _test_humanoid_presentation_contract() -> void:
 	)
 	var torso_tissue := presentation.wound_presentation.part_surface_nodes.get(
 		EnemyDestructibleAnatomy.PART_TORSO
-	) as MeshInstance3D
+	) as Node3D
 	var torso_field := presentation.wound_presentation.part_surface_fields.get(
 		EnemyDestructibleAnatomy.PART_TORSO
 	) as SparseSdfVolumeData
@@ -910,34 +982,32 @@ func _test_humanoid_presentation_contract() -> void:
 		if authority_torso_part != null
 		else null
 	)
-	var tissue_mesh := torso_tissue.mesh as ArrayMesh if torso_tissue != null else null
-	var tissue_arrays := (
-		tissue_mesh.surface_get_arrays(0)
-		if tissue_mesh != null and tissue_mesh.get_surface_count() > 0
-		else []
+	var tissue_meshes := presentation.wound_presentation.get_part_surface_meshes(
+		EnemyDestructibleAnatomy.PART_TORSO
 	)
-	var tissue_colors := (
-		tissue_arrays[Mesh.ARRAY_COLOR] as PackedColorArray
-		if not tissue_arrays.is_empty()
-		else PackedColorArray()
-	)
-	var tissue_audit := DESTRUCTION_MESH_AUDIT.audit_results([{
-		"vertices": (
-			tissue_arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
-			if not tissue_arrays.is_empty()
-			else PackedVector3Array()
-		),
-		"normals": (
-			tissue_arrays[Mesh.ARRAY_NORMAL] as PackedVector3Array
-			if not tissue_arrays.is_empty()
-			else PackedVector3Array()
-		),
-		"indices": (
-			tissue_arrays[Mesh.ARRAY_INDEX] as PackedInt32Array
-			if not tissue_arrays.is_empty()
-			else PackedInt32Array()
-		),
-	}], torso_field)
+	var tissue_results: Array[Dictionary] = []
+	var tissue_color_count := 0
+	var brightest_tissue_red := 0.0
+	var strongest_tissue_red_dominance := 0.0
+	for tissue_mesh: ArrayMesh in tissue_meshes:
+		if tissue_mesh == null or tissue_mesh.get_surface_count() <= 0:
+			continue
+		var tissue_arrays := tissue_mesh.surface_get_arrays(0)
+		var tissue_colors := tissue_arrays[Mesh.ARRAY_COLOR] as PackedColorArray
+		tissue_color_count += tissue_colors.size()
+		for tissue_color: Color in tissue_colors:
+			brightest_tissue_red = maxf(brightest_tissue_red, tissue_color.r)
+			strongest_tissue_red_dominance = maxf(
+				strongest_tissue_red_dominance,
+				tissue_color.r - maxf(tissue_color.g, tissue_color.b)
+			)
+		tissue_results.append({
+			"vertices": tissue_arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array,
+			"normals": tissue_arrays[Mesh.ARRAY_NORMAL] as PackedVector3Array,
+			"indices": tissue_arrays[Mesh.ARRAY_INDEX] as PackedInt32Array,
+		})
+	var tissue_audit := DESTRUCTION_MESH_AUDIT.audit_results(tissue_results, torso_field)
+	var surface_metrics := presentation.wound_presentation.debug_surface_metrics()
 	_expect(
 		presentation.wound_presentation != null
 		and presentation.wound_presentation.get_visible_wound_count() == 2
@@ -952,13 +1022,22 @@ func _test_humanoid_presentation_contract() -> void:
 		and not wound_material.shader.code.contains("wound_spheres")
 		and torso_tissue != null
 		and torso_tissue.visible
-		and tissue_mesh != null
+		and not tissue_meshes.is_empty()
 		and presentation.wound_presentation.get_generated_tissue_triangle_count() > 0
-		and not tissue_colors.is_empty()
+		and tissue_color_count > 0
+		and brightest_tissue_red > 0.5
+		and strongest_tissue_red_dominance > 0.4
+		and presentation.wound_presentation._tissue_material != null
+		and presentation.wound_presentation._tissue_material.shader == EnemyWoundPresentation3D.TISSUE_SHADER
+		and presentation.wound_presentation._tissue_material.shader.code.contains("EMISSION")
 		and torso_field != null
 		and bool(presentation_damage_result.get("geometry_changed", false))
 		and authority_torso_field != null
 		and torso_field.checksum() == authority_torso_field.checksum()
+		and presentation_apply_usec < 50000
+		and int(surface_metrics.get("full_replay_count", 1)) == 0
+		and int(surface_metrics.get("applied_event_count", 0)) == 1
+		and not presentation.wound_presentation.has_pending_surface_rebuilds()
 		and int(tissue_audit.get("invalid_indices", 1)) == 0
 		and int(tissue_audit.get("degenerate_triangles", 1)) == 0
 		and int(tissue_audit.get("duplicate_faces", 1)) == 0
@@ -968,7 +1047,7 @@ func _test_humanoid_presentation_contract() -> void:
 		and not FileAccess.file_exists("res://shaders/enemy_wound_cavity.gdshader")
 		and presentation.character_skin.skeleton.get_bone_pose_scale(left_arm_index).length() < 0.01,
 		(
-			"replicated anatomy clips the animated shell but builds visible tissue with the shared sparse-SDF contour, without primitive cavity props, while removing only the unavailable limb (visible=%d count=%s entries=%d axes=%d radius=%.3f depth=%.3f triangles=%d arm_scale=%.4f)"
+			"replicated anatomy accepts a hit without synchronous replay, then clips the animated shell only after worker-built red SDF tissue is ready (visible=%d count=%s entries=%d axes=%d radius=%.3f depth=%.3f triangles=%d apply=%dus replay=%d arm_scale=%.4f)"
 			% [
 				presentation.wound_presentation.get_visible_wound_count(),
 				str(wound_material.get_shader_parameter(&"wound_count")),
@@ -977,11 +1056,22 @@ func _test_humanoid_presentation_contract() -> void:
 				wound_entries[0].w if not wound_entries.is_empty() else -1.0,
 				wound_axes[0].w if not wound_axes.is_empty() else -1.0,
 				presentation.wound_presentation.get_generated_tissue_triangle_count(),
+				presentation_apply_usec,
+				int(surface_metrics.get("full_replay_count", -1)),
 				presentation.character_skin.skeleton.get_bone_pose_scale(left_arm_index).length(),
 			]
 		)
 	)
 	presentation.apply_server_state({"alive": false})
+	presentation.update_presentation(STEP)
+	for _ragdoll_surface_frame: int in range(240):
+		if (
+			presentation.ragdoll_wound_presentation != null
+			and not presentation.ragdoll_wound_presentation.has_pending_surface_rebuilds()
+		):
+			break
+		await process_frame
+		presentation.update_presentation(STEP)
 	presentation.update_presentation(STEP)
 	var ragdoll_skin := presentation.ragdoll.get_authored_skin()
 	var ragdoll_left_arm_index := (
@@ -999,6 +1089,68 @@ func _test_humanoid_presentation_contract() -> void:
 		and ragdoll_skin.skeleton.get_bone_pose_scale(ragdoll_left_arm_index).length() < 0.01
 		and not presentation.pose_root.visible,
 		"enemy death carries wounds and missing limbs into the weighted authored-body ragdoll instead of healing or becoming grey goo"
+	)
+	presentation.queue_free()
+	await process_frame
+
+
+func _test_incremental_wound_presentation_budget() -> void:
+	var definition := load(
+		"res://resources/enemies/flute_runner.tres"
+	) as EnemyDefinition
+	var presentation := EnemyHumanoidPresentation3D.new()
+	presentation.configure(40024, definition.destructible_anatomy)
+	root.add_child(presentation)
+	await process_frame
+	var authority := EnemyDestructibleAnatomy.new().configure(
+		40024,
+		definition.destructible_anatomy
+	)
+	var maximum_apply_usec := 0
+	for hit_index: int in range(6):
+		var damage := _make_anatomy_damage_event(
+			5000 + hit_index,
+			Vector3(-0.13 + float(hit_index) * 0.052, 1.08, -0.36)
+		)
+		authority.apply_damage_event(damage, Transform3D.IDENTITY)
+		var started_usec := Time.get_ticks_usec()
+		presentation.apply_server_state({"anatomy_destruction": authority.state_dict()})
+		maximum_apply_usec = maxi(
+			maximum_apply_usec,
+			Time.get_ticks_usec() - started_usec
+		)
+		presentation.update_presentation(STEP)
+	for _surface_frame: int in range(300):
+		if not presentation.wound_presentation.has_pending_surface_rebuilds():
+			break
+		await process_frame
+		presentation.update_presentation(STEP)
+	presentation.update_presentation(STEP)
+	var metrics := presentation.wound_presentation.debug_surface_metrics()
+	var authority_torso = authority.parts.get(EnemyDestructibleAnatomy.PART_TORSO)
+	var presentation_torso := presentation.wound_presentation.part_surface_fields.get(
+		EnemyDestructibleAnatomy.PART_TORSO
+	) as SparseSdfVolumeData
+	_expect(
+		maximum_apply_usec < 75000
+		and int(metrics.get("full_replay_count", 1)) == 0
+		and int(metrics.get("applied_event_count", 0)) == 6
+		and int(metrics.get("rebuild_count", 0)) > 0
+		and not presentation.wound_presentation.has_pending_surface_rebuilds()
+		and presentation.wound_presentation.get_visible_wound_count() == 6
+		and presentation.wound_presentation.get_generated_tissue_triangle_count() > 0
+		and authority_torso != null
+		and presentation_torso != null
+		and presentation_torso.checksum() == authority_torso.field.checksum(),
+		(
+			"six sequential firearm hits stay incremental and worker-contoured instead of replaying full anatomy on every packet (max_apply=%dus replay=%d events=%d rebuilds=%d)"
+			% [
+				maximum_apply_usec,
+				int(metrics.get("full_replay_count", -1)),
+				int(metrics.get("applied_event_count", -1)),
+				int(metrics.get("rebuild_count", -1)),
+			]
+		)
 	)
 	presentation.queue_free()
 	await process_frame

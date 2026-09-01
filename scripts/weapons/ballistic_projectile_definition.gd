@@ -7,8 +7,11 @@ const DEFAULT_MUZZLE_VELOCITY := 60.0
 const DEFAULT_MAXIMUM_RANGE := 40.0
 const DEFAULT_GRAVITY_SCALE := 1.0
 const DEFAULT_IMPACT_IMPULSE := 0.8
-const DEFAULT_DESTRUCTION_RADIUS := 0.045
-const DEFAULT_PENETRATION_DEPTH := 0.8
+# These are material-space brush dimensions, not tracer dimensions. Keep the generic firearm
+# fallback close to an ordinary bullet channel; individual ammunition can still opt into larger
+# projectiles without making every unspecified round behave like an explosive cutter.
+const DEFAULT_DESTRUCTION_RADIUS := 0.012
+const DEFAULT_PENETRATION_DEPTH := 0.38
 const DEFAULT_IMPACT_SOUND_ID := &"projectile_impact_generic"
 const DEFAULT_IMPACT_SOUND_MAX_DISTANCE := 68.0
 const DEFAULT_IMPACT_SOUND_VOLUME_DB := 4.0

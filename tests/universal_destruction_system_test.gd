@@ -269,7 +269,7 @@ func _test_production_profile_artifact_stress() -> void:
 					Vector3(x, y, -volume.half_extents.z),
 					direction,
 					Vector3.FORWARD,
-					_impact_event(16.0, 0.05, 0.75, fixture_seed + impact_index),
+					_impact_event(16.0, 0.05, 3.0, fixture_seed + impact_index),
 					texture
 				)
 				changed = changed and bool(result.get("changed", false))
@@ -493,6 +493,7 @@ func _test_material_responses_and_replay() -> void:
 	var event := _impact_event(2.0, 0.18, 0.8, 991)
 	var concrete_texture := DestructionMaterialRegistry.profile_for(&"concrete")
 	var metal_texture := DestructionMaterialRegistry.profile_for(&"metal")
+	var wood_texture := DestructionMaterialRegistry.profile_for(&"wood")
 	var concrete := _wall_volume(concrete_texture.material_index)
 	var concrete_replay := _wall_volume(concrete_texture.material_index)
 	var metal := _wall_volume(metal_texture.material_index)
@@ -533,6 +534,36 @@ func _test_material_responses_and_replay() -> void:
 		and concrete.checksum() == concrete_replay.checksum(),
 		"the same material event produces an identical sparse-field checksum"
 	)
+	var authored_rifle_travel := 0.5
+	var concrete_rifle_travel := concrete_texture.effective_penetration_distance(
+		authored_rifle_travel
+	)
+	var metal_rifle_travel := metal_texture.effective_penetration_distance(
+		authored_rifle_travel
+	)
+	var wood_rifle_travel := wood_texture.effective_penetration_distance(
+		authored_rifle_travel
+	)
+	_expect(
+		metal_rifle_travel < concrete_rifle_travel
+		and concrete_rifle_travel < wood_rifle_travel
+		and wood_rifle_travel <= authored_rifle_travel,
+		"density and bulk strength spend one shared projectile travel budget across materials"
+	)
+	var rifle_wall := _wall_volume(concrete_texture.material_index)
+	var rifle_result := rifle_wall.apply_damage_event(
+		Vector3(0.0, 0.0, -0.2),
+		Vector3(0.0, 0.0, 1.0),
+		Vector3(0.0, 0.0, -1.0),
+		_impact_event(9.0, 0.011, authored_rifle_travel, 77331),
+		concrete_texture
+	)
+	_expect(
+		not bool(rifle_result.get("perforated", true))
+		and float(rifle_result.get("penetration_depth", 1.0)) < 0.25
+		and rifle_wall.sample_distance(Vector3(0.0, 0.0, 0.18)) <= 0.0,
+		"the shipped rifle-class hit cannot tunnel through forty centimetres of concrete in one shot"
+	)
 
 	var checkpoint := concrete.changed_brick_states()
 	var restored := _wall_volume(concrete_texture.material_index)
@@ -543,7 +574,7 @@ func _test_material_responses_and_replay() -> void:
 	)
 
 	var perforated := _wall_volume(metal_texture.material_index)
-	var high_energy := _impact_event(14.0, 0.14, 1.0, 1234)
+	var high_energy := _impact_event(14.0, 0.14, 3.0, 1234)
 	var perforation_result := perforated.apply_damage_event(
 		Vector3(0.0, 0.0, -0.2),
 		Vector3(0.0, 0.0, 1.0),

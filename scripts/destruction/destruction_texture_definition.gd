@@ -5,6 +5,15 @@ extends Resource
 ## Authored spatial response of a material. It is called a destruction texture because it controls
 ## the shape and character of damage, not only the amount of health removed.
 
+## The authored projectile penetration is its maximum travel through a flesh-density reference
+## target. Target density and bulk strength spend that budget before the SDF checks whether the
+## remaining travel actually reaches the far surface. Keeping this calculation on the material
+## profile gives bullets and thermal cutters one thickness-aware rule.
+const PENETRATION_MODEL_VERSION := 2
+const PENETRATION_REFERENCE_DENSITY_KG_M3 := 1040.0
+const PENETRATION_STRENGTH_BASELINE := 0.20
+const PENETRATION_STRENGTH_SCALE := 1.40
+
 @export_group("Identity")
 @export var texture_id := &"concrete"
 @export var physical_surface := &"concrete"
@@ -44,6 +53,8 @@ extends Resource
 @export_group("Fragments and Integration")
 @export_range(0, 64, 1) var maximum_physical_fragments := 6
 @export_range(0.0, 10.0, 0.01, "or_greater") var minimum_fragment_volume := 0.03
+## Bulk material density. The legacy name remains serialized for compatibility; fragment mass and
+## penetration resistance intentionally consume the same physical density.
 @export_range(1.0, 10000.0, 1.0, "or_greater") var fragment_density_kg_m3 := 2200.0
 @export_range(1.0, 600.0, 1.0, "or_greater") var fragment_lifetime_seconds := 180.0
 @export_range(0.0, 4.0, 0.01, "or_greater") var acoustic_aperture_area := 0.08
@@ -121,10 +132,57 @@ func response_radius(base_radius: float, event_energy: float) -> float:
 	)
 
 
+func effective_penetration_distance(
+	authored_distance: float,
+	minimum_resolvable_distance := 0.0
+) -> float:
+	var safe_authored_distance := maxf(
+		authored_distance if is_finite(authored_distance) else 0.0,
+		0.0
+	)
+	if safe_authored_distance <= 0.0 or penetration_depth_scale <= 0.0:
+		return 0.0
+	# Density controls the inertial work needed to clear a channel. Do not let unusually light
+	# targets grant more range than the projectile profile authored; they merely spend less of it.
+	var density_scale := minf(
+		sqrt(PENETRATION_REFERENCE_DENSITY_KG_M3 / maxf(fragment_density_kg_m3, 1.0)),
+		1.0
+	)
+	# Hardness resists the initial channel, toughness resists propagation, and structural support
+	# keeps material around that channel coupled to the bulk object. Soft tissue sits at the
+	# baseline and therefore preserves the projectile's authored travel.
+	var bulk_strength_index := (
+		hardness * 0.55
+		+ fracture_toughness * 0.30
+		+ support_strength * 0.15
+	)
+	var strength_scale := 1.0 / (
+		1.0
+		+ maxf(bulk_strength_index - PENETRATION_STRENGTH_BASELINE, 0.0)
+		* PENETRATION_STRENGTH_SCALE
+	)
+	var resolved := (
+		safe_authored_distance
+		* penetration_depth_scale
+		* density_scale
+		* strength_scale
+	)
+	return maxf(
+		resolved,
+		maxf(
+			minimum_resolvable_distance
+			if is_finite(minimum_resolvable_distance)
+			else 0.0,
+			0.0
+		)
+	)
+
+
 func content_signature() -> int:
 	# Checkpoints must fail closed when geometry-affecting tuning changes. An ordered array avoids
 	# Dictionary iteration order and quantizes floats to stable authored precision.
 	return hash([
+		PENETRATION_MODEL_VERSION,
 		texture_id,
 		physical_surface,
 		material_index,
@@ -155,6 +213,7 @@ func content_signature() -> int:
 		_q(grain_axis.x),
 		_q(grain_axis.y),
 		_q(grain_axis.z),
+		_q(fragment_density_kg_m3),
 		_q(support_strength),
 	]) & 0x7fffffff
 

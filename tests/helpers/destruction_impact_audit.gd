@@ -123,6 +123,9 @@ static func shoot(
 	)
 	report["ok"] = true
 	report["apply_result"] = apply_result
+	# Energy only authorizes a channel attempt. Density, bulk strength, impact angle, and actual
+	# target thickness decide whether that channel reaches the far surface.
+	report["expects_perforation"] = bool(apply_result.get("perforated", false))
 	report["event"] = event.to_dict(false)
 	report["reference_intersection_count"] = pristine_hits.size()
 	report["impact_position"] = local_impact
@@ -354,7 +357,7 @@ static func audit_deformation(
 		"field_ray_clear_fraction": field_path,
 		"post_impact_ray_intersections": post_hits.size(),
 		"off_axis_intact_fraction": off_axis_intact,
-		"expects_perforation": profile.perforates(event.energy) if profile != null else false,
+		"expects_perforation": false,
 	}
 
 

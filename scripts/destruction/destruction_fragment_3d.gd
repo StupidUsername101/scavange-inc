@@ -228,7 +228,10 @@ func _store_thermal_cut(event: DamageEvent) -> void:
 		0.003
 	)
 	var channel_depth := (
-		maxf(event.penetration, response_radius * 3.0) * _profile.penetration_depth_scale
+		_profile.effective_penetration_distance(
+			maxf(event.penetration, response_radius * 3.0),
+			0.003
+		)
 		if perforated
 		else response_radius * _profile.entry_depth_scale
 	)

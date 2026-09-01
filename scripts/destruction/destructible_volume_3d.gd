@@ -498,10 +498,9 @@ func _record_thermal_cut(
 		),
 		field.voxel_size * 0.45
 	)
-	var channel_depth := (
-		maxf(event.penetration, response_radius * 3.0) * _profile.penetration_depth_scale
-		if perforated
-		else maxf(response_radius * _profile.entry_depth_scale, field.voxel_size)
+	var channel_depth := maxf(
+		float(result.get("penetration_depth", 0.0)),
+		maxf(response_radius * _profile.entry_depth_scale, field.voxel_size)
 	)
 	_ensure_thermal_overlay().add_damage_event(
 		event,

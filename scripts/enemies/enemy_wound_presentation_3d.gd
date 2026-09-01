@@ -2,11 +2,18 @@ class_name EnemyWoundPresentation3D
 extends Node3D
 
 const SKIN_SHADER: Shader = preload("res://shaders/enemy_wound_skin.gdshader")
+const TISSUE_SHADER: Shader = preload("res://shaders/enemy_tissue_surface.gdshader")
 const ANATOMY := preload("res://scripts/enemies/enemy_destructible_anatomy.gd")
 const SDF_INTERIOR_SURFACE_BUILDER := preload(
 	"res://scripts/destruction/sdf_interior_surface_builder.gd"
 )
 const MAX_WOUNDS := 24
+const MAX_PARALLEL_SURFACE_JOBS := 3
+const MAX_SURFACE_COMMITS_PER_FRAME := 2
+const REMESH_NEIGHBOR_RING := 1
+const TISSUE_PIPELINE_WARMUP_NAME := &"EnemyTissuePipelineWarmup"
+
+static var _tissue_pipeline_registered := false
 
 var character_skin: PlayerCharacterSkin
 var anatomy_definition: EnemyDestructibleAnatomyDefinition
@@ -23,9 +30,30 @@ var target_part_presence := {
 var skin_materials: Array[ShaderMaterial] = []
 var part_surface_nodes: Dictionary = {}
 var part_surface_fields: Dictionary = {}
+var part_chunk_surface_nodes: Dictionary = {}
 var _visible_aperture_count := 0
-var _tissue_material: StandardMaterial3D
+var _tissue_material: ShaderMaterial
 var _configured_variant_path := ""
+var _presented_wounds: Array[Dictionary] = []
+var _applied_deformation_keys: Array[String] = []
+var _dirty_surface_chunks: Array[Dictionary] = []
+var _dirty_surface_chunk_keys: Dictionary[String, bool] = {}
+var _active_surface_jobs: Array[Dictionary] = []
+var _surface_job_pool: Array[SdfChunkBuildJob] = []
+var _pending_chunk_meshes: Dictionary[String, Dictionary] = {}
+var _pending_visual_commit := false
+var _surface_rebuild_count := 0
+var _surface_worker_usec := 0
+var _surface_commit_usec := 0
+var _full_replay_count := 0
+
+
+func _process(_delta: float) -> void:
+	_pump_surface_jobs()
+
+
+func _exit_tree() -> void:
+	_discard_surface_jobs()
 
 
 func configure(
@@ -106,8 +134,8 @@ func update_presentation() -> void:
 	entries.resize(MAX_WOUNDS)
 	axes.resize(MAX_WOUNDS)
 	var visible_count := 0
-	for wound_index: int in range(target_wounds.size()):
-		var wound: Dictionary = target_wounds[wound_index]
+	for wound_index: int in range(_presented_wounds.size()):
+		var wound: Dictionary = _presented_wounds[wound_index]
 		var part_id := StringName(str(wound.get("part", &"")))
 		if not _part_is_present(part_id) and not bool(wound.get("stump", false)):
 			continue
@@ -136,16 +164,48 @@ func get_visible_wound_count() -> int:
 
 func get_generated_tissue_triangle_count() -> int:
 	var count := 0
-	for node_value: Variant in part_surface_nodes.values():
-		var node := node_value as MeshInstance3D
-		if node == null or not node.mesh is ArrayMesh:
+	for part_chunks_value: Variant in part_chunk_surface_nodes.values():
+		if not part_chunks_value is Dictionary:
 			continue
-		var mesh := node.mesh as ArrayMesh
-		for surface_index: int in range(mesh.get_surface_count()):
-			var arrays := mesh.surface_get_arrays(surface_index)
-			var indices := arrays[Mesh.ARRAY_INDEX] as PackedInt32Array
-			count += indices.size() / 3
+		for node_value: Variant in (part_chunks_value as Dictionary).values():
+			var node := node_value as MeshInstance3D
+			if node == null or not node.mesh is ArrayMesh:
+				continue
+			var mesh := node.mesh as ArrayMesh
+			for surface_index: int in range(mesh.get_surface_count()):
+				var arrays := mesh.surface_get_arrays(surface_index)
+				var indices := arrays[Mesh.ARRAY_INDEX] as PackedInt32Array
+				count += indices.size() / 3
 	return count
+
+
+func has_pending_surface_rebuilds() -> bool:
+	return not _dirty_surface_chunks.is_empty() or not _active_surface_jobs.is_empty()
+
+
+func get_part_surface_meshes(part_id: StringName) -> Array[ArrayMesh]:
+	var result: Array[ArrayMesh] = []
+	var chunks_value: Variant = part_chunk_surface_nodes.get(part_id, {})
+	if not chunks_value is Dictionary:
+		return result
+	var chunks := chunks_value as Dictionary
+	for node_value: Variant in chunks.values():
+		var node := node_value as MeshInstance3D
+		if node != null and node.mesh is ArrayMesh:
+			result.append(node.mesh as ArrayMesh)
+	return result
+
+
+func debug_surface_metrics() -> Dictionary:
+	return {
+		"pending_chunks": _dirty_surface_chunks.size(),
+		"active_jobs": _active_surface_jobs.size(),
+		"rebuild_count": _surface_rebuild_count,
+		"worker_usec": _surface_worker_usec,
+		"commit_usec": _surface_commit_usec,
+		"full_replay_count": _full_replay_count,
+		"applied_event_count": _applied_deformation_keys.size(),
+	}
 
 
 func part_is_present(part_id: StringName) -> bool:
@@ -174,20 +234,30 @@ func _install_skin_materials() -> void:
 
 
 func _configure_part_surfaces() -> void:
+	_discard_surface_jobs()
 	for node_value: Variant in part_surface_nodes.values():
-		var old_node := node_value as MeshInstance3D
+		var old_node := node_value as Node3D
 		if old_node != null and is_instance_valid(old_node):
 			old_node.queue_free()
 	part_surface_nodes.clear()
 	part_surface_fields.clear()
+	part_chunk_surface_nodes.clear()
+	_applied_deformation_keys.clear()
+	_presented_wounds.clear()
+	_pending_visual_commit = false
 	if anatomy_definition == null:
 		return
-	_tissue_material = StandardMaterial3D.new()
-	_tissue_material.albedo_color = Color.WHITE
-	_tissue_material.vertex_color_use_as_albedo = true
-	_tissue_material.vertex_color_is_srgb = false
-	_tissue_material.roughness = anatomy_definition.damage_texture.roughness
-	_tissue_material.metallic = anatomy_definition.damage_texture.metallic
+	_tissue_material = ShaderMaterial.new()
+	_tissue_material.shader = TISSUE_SHADER
+	_tissue_material.set_shader_parameter(
+		&"material_roughness",
+		anatomy_definition.damage_texture.roughness
+	)
+	_tissue_material.set_shader_parameter(
+		&"material_metallic",
+		anatomy_definition.damage_texture.metallic
+	)
+	_register_tissue_pipeline()
 	for part: EnemyAnatomyPartDefinition in anatomy_definition.parts:
 		if part == null:
 			continue
@@ -198,40 +268,64 @@ func _configure_part_surfaces() -> void:
 			anatomy_definition.damage_texture.material_index,
 			4.0
 		)
+		field.structural_anchor_faces = part.structural_anchor_mask()
 		part_surface_fields[part.part_id] = field
-		var surface := MeshInstance3D.new()
-		surface.name = "SdfTissue_%s" % part.part_id
-		surface.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		surface.material_override = _tissue_material
-		surface.visible = false
-		add_child(surface)
-		part_surface_nodes[part.part_id] = surface
+		var surface_root := Node3D.new()
+		surface_root.name = "SdfTissue_%s" % part.part_id
+		surface_root.visible = false
+		add_child(surface_root)
+		part_surface_nodes[part.part_id] = surface_root
+		part_chunk_surface_nodes[part.part_id] = {}
+
+
+func _register_tissue_pipeline() -> void:
+	if _tissue_pipeline_registered or _tissue_material == null:
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector3Array([
+		Vector3(-0.005, -0.005, 0.0),
+		Vector3(0.005, -0.005, 0.0),
+		Vector3(0.0, 0.005, 0.0),
+	])
+	arrays[Mesh.ARRAY_NORMAL] = PackedVector3Array([Vector3.BACK, Vector3.BACK, Vector3.BACK])
+	arrays[Mesh.ARRAY_COLOR] = PackedColorArray([Color.RED, Color.RED, Color.RED])
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2])
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var warmup := MeshInstance3D.new()
+	warmup.name = TISSUE_PIPELINE_WARMUP_NAME
+	warmup.mesh = mesh
+	warmup.material_override = _tissue_material
+	warmup.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	warmup.visible = false
+	add_child(warmup)
+	_tissue_pipeline_registered = true
 
 
 func _rebuild_part_surfaces(raw_events: Variant) -> void:
 	if anatomy_definition == null:
 		return
-	# Reconstruct from the immutable authored boxes on every authoritative revision. An enemy has only
-	# a handful of tiny part fields; this avoids drift, event-order ambiguity, and host/client forks.
-	for part: EnemyAnatomyPartDefinition in anatomy_definition.parts:
-		if part == null:
-			continue
-		part_surface_fields[part.part_id] = SparseSdfVolumeData.new().configure(
-			part.sanitized_size(),
-			anatomy_definition.voxel_size,
-			anatomy_definition.brick_cells,
-			anatomy_definition.damage_texture.material_index,
-			4.0
-		)
-		var reset_surface := part_surface_nodes.get(part.part_id) as MeshInstance3D
-		if reset_surface != null:
-			reset_surface.mesh = null
-			reset_surface.visible = false
 	var events: Array = raw_events if raw_events is Array else []
 	if events.is_empty():
 		events = _legacy_deformation_events_from_wounds()
-	var changed_parts: Dictionary[StringName, bool] = {}
-	for raw_event: Variant in events:
+	var event_keys: Array[String] = []
+	for event_value: Variant in events:
+		event_keys.append(_deformation_event_key(event_value))
+	var preserves_prefix := _applied_deformation_keys.size() <= event_keys.size()
+	if preserves_prefix:
+		for key_index: int in range(_applied_deformation_keys.size()):
+			if _applied_deformation_keys[key_index] != event_keys[key_index]:
+				preserves_prefix = false
+				break
+	if not preserves_prefix:
+		# Live replication appends. Only a replacement/recovery snapshot rebuilds from the immutable
+		# profile; normal bullets keep all six fields and never replay prior damage on the render thread.
+		_reset_surface_fields()
+		_full_replay_count += 1
+	var first_new_event := _applied_deformation_keys.size()
+	for event_index: int in range(first_new_event, events.size()):
+		var raw_event: Variant = events[event_index]
 		if not raw_event is Dictionary:
 			continue
 		var event_state := raw_event as Dictionary
@@ -254,18 +348,265 @@ func _rebuild_part_surfaces(raw_events: Variant) -> void:
 			anatomy_definition.damage_texture
 		)
 		if bool(result.get("geometry_changed", false)):
-			changed_parts[part_id] = true
-	for part_id: StringName in changed_parts.keys():
-		var field := part_surface_fields.get(part_id) as SparseSdfVolumeData
-		var surface := part_surface_nodes.get(part_id) as MeshInstance3D
-		if field == null or surface == null:
+			var changed_chunks: Array[Vector3i] = result.get("changed_chunks", [])
+			_queue_surface_chunks(
+				part_id,
+				_remesh_chunks_for_changed_samples(field, result, changed_chunks)
+			)
+	_applied_deformation_keys = event_keys
+	if has_pending_surface_rebuilds():
+		_pending_visual_commit = true
+		set_process(true)
+		_schedule_surface_jobs()
+	else:
+		_commit_target_wounds()
+
+
+func _deformation_event_key(raw_event: Variant) -> String:
+	if not raw_event is Dictionary:
+		return "invalid:%d" % hash(raw_event)
+	var state := raw_event as Dictionary
+	var damage_state: Variant = state.get("event", {})
+	if not damage_state is Dictionary:
+		return "invalid:%d" % hash(state)
+	var damage := damage_state as Dictionary
+	return "%s:%d:%d:%d" % [
+		str(state.get("part", &"")),
+		int(damage.get("event_id", 0)),
+		int(damage.get("sequence", 0)),
+		int(damage.get("seed", 0)),
+	]
+
+
+func _reset_surface_fields() -> void:
+	_discard_surface_jobs()
+	_applied_deformation_keys.clear()
+	_presented_wounds.clear()
+	for part: EnemyAnatomyPartDefinition in anatomy_definition.parts:
+		if part == null:
 			continue
-		var build: Dictionary = SDF_INTERIOR_SURFACE_BUILDER.build(
-			field,
-			anatomy_definition.damage_texture
+		var field := SparseSdfVolumeData.new().configure(
+			part.sanitized_size(),
+			anatomy_definition.voxel_size,
+			anatomy_definition.brick_cells,
+			anatomy_definition.damage_texture.material_index,
+			4.0
 		)
-		surface.mesh = build.get("mesh") as ArrayMesh
-		surface.visible = surface.mesh != null and _part_is_present(part_id)
+		field.structural_anchor_faces = part.structural_anchor_mask()
+		part_surface_fields[part.part_id] = field
+		var chunks_value: Variant = part_chunk_surface_nodes.get(part.part_id, {})
+		if chunks_value is Dictionary:
+			for node_value: Variant in (chunks_value as Dictionary).values():
+				var node := node_value as MeshInstance3D
+				if node != null and is_instance_valid(node):
+					node.queue_free()
+		part_chunk_surface_nodes[part.part_id] = {}
+
+
+func _remesh_chunks_for_changed_samples(
+	field: SparseSdfVolumeData,
+	result: Dictionary,
+	changed_chunks: Array[Vector3i]
+) -> Array[Vector3i]:
+	if changed_chunks.is_empty():
+		return []
+	if not bool(result.get("has_changed_sample_bounds", false)):
+		return field.expanded_chunk_ring(changed_chunks, REMESH_NEIGHBOR_RING)
+	var changed_minimum: Vector3i = result.get("changed_sample_minimum", Vector3i.ZERO)
+	var changed_maximum: Vector3i = result.get("changed_sample_maximum", Vector3i.ZERO)
+	var candidates := field.expanded_chunk_ring(changed_chunks, REMESH_NEIGHBOR_RING)
+	var selected_count := 0
+	var halo := SdfDualContouringMesher.SAMPLE_CACHE_HALO
+	for candidate: Vector3i in candidates:
+		if changed_chunks.has(candidate):
+			candidates[selected_count] = candidate
+			selected_count += 1
+			continue
+		var capture_minimum := candidate * field.brick_cells - Vector3i.ONE * halo
+		var capture_maximum := (
+			candidate * field.brick_cells
+			+ Vector3i.ONE * (field.brick_cells + halo - 1)
+		)
+		if not (
+			changed_maximum.x < capture_minimum.x
+			or changed_minimum.x > capture_maximum.x
+			or changed_maximum.y < capture_minimum.y
+			or changed_minimum.y > capture_maximum.y
+			or changed_maximum.z < capture_minimum.z
+			or changed_minimum.z > capture_maximum.z
+		):
+			candidates[selected_count] = candidate
+			selected_count += 1
+	candidates.resize(selected_count)
+	return candidates
+
+
+func _queue_surface_chunks(part_id: StringName, coordinates: Array[Vector3i]) -> void:
+	for coordinate: Vector3i in coordinates:
+		_queue_surface_chunk(part_id, coordinate)
+
+
+func _queue_surface_chunk(part_id: StringName, coordinate: Vector3i) -> void:
+	var field := part_surface_fields.get(part_id) as SparseSdfVolumeData
+	if field == null or not field.brick_is_valid(coordinate):
+		return
+	var key := _surface_chunk_key(part_id, coordinate)
+	if _dirty_surface_chunk_keys.has(key) or _surface_chunk_has_active_job(key):
+		return
+	_dirty_surface_chunk_keys[key] = true
+	_dirty_surface_chunks.append({
+		"part": part_id,
+		"coordinate": coordinate,
+		"key": key,
+	})
+
+
+func _surface_chunk_key(part_id: StringName, coordinate: Vector3i) -> String:
+	return "%s:%d:%d:%d" % [part_id, coordinate.x, coordinate.y, coordinate.z]
+
+
+func _surface_chunk_has_active_job(key: String) -> bool:
+	for state: Dictionary in _active_surface_jobs:
+		if str(state.get("key", "")) == key:
+			return true
+	return false
+
+
+func _schedule_surface_jobs() -> void:
+	var capacity := MAX_PARALLEL_SURFACE_JOBS - _active_surface_jobs.size()
+	while capacity > 0 and not _dirty_surface_chunks.is_empty():
+		var state := _dirty_surface_chunks.pop_back() as Dictionary
+		var key := str(state.get("key", ""))
+		_dirty_surface_chunk_keys.erase(key)
+		if _surface_chunk_has_active_job(key):
+			continue
+		var part_id := StringName(str(state.get("part", &"")))
+		var coordinate: Vector3i = state.get("coordinate", Vector3i.ZERO)
+		var field := part_surface_fields.get(part_id) as SparseSdfVolumeData
+		if field == null:
+			continue
+		var job: SdfChunkBuildJob = (
+			_surface_job_pool.pop_back()
+			if not _surface_job_pool.is_empty()
+			else SdfChunkBuildJob.new()
+		)
+		job.capture(field, coordinate)
+		job.task_id = WorkerThreadPool.add_task(job.execute, false, "Enemy tissue chunk")
+		state["job"] = job
+		state["source_signature"] = int(job.snapshot.get("source_signature", -1))
+		_active_surface_jobs.append(state)
+		capacity -= 1
+
+
+func _pump_surface_jobs() -> void:
+	var remaining := MAX_SURFACE_COMMITS_PER_FRAME
+	for job_index: int in range(_active_surface_jobs.size() - 1, -1, -1):
+		if remaining <= 0:
+			break
+		var state: Dictionary = _active_surface_jobs[job_index]
+		var job := state.get("job") as SdfChunkBuildJob
+		if job == null or job.task_id < 0 or not WorkerThreadPool.is_task_completed(job.task_id):
+			continue
+		WorkerThreadPool.wait_for_task_completion(job.task_id)
+		_active_surface_jobs.remove_at(job_index)
+		var part_id := StringName(str(state.get("part", &"")))
+		var coordinate: Vector3i = state.get("coordinate", Vector3i.ZERO)
+		var field := part_surface_fields.get(part_id) as SparseSdfVolumeData
+		if (
+			field == null
+			or int(state.get("source_signature", -1))
+			!= field.chunk_sample_revision_signature(coordinate)
+		):
+			_queue_surface_chunk(part_id, coordinate)
+		else:
+			_surface_worker_usec += job.elapsed_usec
+			_commit_surface_chunk(part_id, coordinate, field, job.result)
+		_surface_job_pool.append(job)
+		remaining -= 1
+	_schedule_surface_jobs()
+	if not has_pending_surface_rebuilds():
+		if _pending_visual_commit:
+			_commit_target_wounds()
+		set_process(false)
+
+
+func _commit_surface_chunk(
+	part_id: StringName,
+	coordinate: Vector3i,
+	field: SparseSdfVolumeData,
+	contour: Dictionary
+) -> void:
+	var started_usec := Time.get_ticks_usec()
+	var build: Dictionary = SDF_INTERIOR_SURFACE_BUILDER.build_chunk(
+		field,
+		anatomy_definition.damage_texture,
+		coordinate,
+		contour
+	)
+	_pending_chunk_meshes[_surface_chunk_key(part_id, coordinate)] = {
+		"part": part_id,
+		"coordinate": coordinate,
+		"mesh": build.get("mesh") as ArrayMesh,
+	}
+	_surface_rebuild_count += 1
+	_surface_commit_usec += Time.get_ticks_usec() - started_usec
+
+
+func _apply_surface_chunk_mesh(
+	part_id: StringName,
+	coordinate: Vector3i,
+	mesh: ArrayMesh
+) -> void:
+	var chunks_value: Variant = part_chunk_surface_nodes.get(part_id, {})
+	if not chunks_value is Dictionary:
+		return
+	var chunks := chunks_value as Dictionary
+	var surface := chunks.get(coordinate) as MeshInstance3D
+	if mesh == null:
+		if surface != null:
+			surface.mesh = null
+			surface.visible = false
+	else:
+		if surface == null:
+			surface = MeshInstance3D.new()
+			surface.name = "Chunk_%d_%d_%d" % [coordinate.x, coordinate.y, coordinate.z]
+			surface.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+			surface.material_override = _tissue_material
+			var root := part_surface_nodes.get(part_id) as Node3D
+			if root == null:
+				return
+			root.add_child(surface)
+			chunks[coordinate] = surface
+		surface.mesh = mesh
+		surface.visible = _part_surface_should_be_visible(part_id)
+	part_chunk_surface_nodes[part_id] = chunks
+
+
+func _commit_target_wounds() -> void:
+	for state: Dictionary in _pending_chunk_meshes.values():
+		_apply_surface_chunk_mesh(
+			StringName(str(state.get("part", &""))),
+			state.get("coordinate", Vector3i.ZERO),
+			state.get("mesh") as ArrayMesh
+		)
+	_pending_chunk_meshes.clear()
+	_presented_wounds.assign(target_wounds)
+	_pending_visual_commit = false
+
+
+func _discard_surface_jobs() -> void:
+	# Reconfiguration is rare and must not leave a worker writing into a recycled job object.
+	for state: Dictionary in _active_surface_jobs:
+		var job := state.get("job") as SdfChunkBuildJob
+		if job != null and job.task_id >= 0:
+			WorkerThreadPool.wait_for_task_completion(job.task_id)
+			job.task_id = -1
+			_surface_job_pool.append(job)
+	_active_surface_jobs.clear()
+	_dirty_surface_chunks.clear()
+	_dirty_surface_chunk_keys.clear()
+	_pending_chunk_meshes.clear()
+	set_process(false)
 
 
 func _legacy_deformation_events_from_wounds() -> Array:
@@ -311,11 +652,11 @@ func _update_part_surface_transforms() -> void:
 	for part: EnemyAnatomyPartDefinition in anatomy_definition.parts:
 		if part == null:
 			continue
-		var surface := part_surface_nodes.get(part.part_id) as MeshInstance3D
-		if surface == null or surface.mesh == null:
+		var surface := part_surface_nodes.get(part.part_id) as Node3D
+		if surface == null:
 			continue
 		surface.global_transform = _profile_part_world_transform(part)
-		surface.visible = _part_is_present(part.part_id)
+		surface.visible = _part_surface_should_be_visible(part.part_id)
 
 
 func _profile_part_world_transform(part: EnemyAnatomyPartDefinition) -> Transform3D:
@@ -577,3 +918,15 @@ func _bone_world_origin(bone_name: StringName) -> Vector3:
 
 func _part_is_present(part_id: StringName) -> bool:
 	return not target_part_presence.has(part_id) or bool(target_part_presence[part_id])
+
+
+func _part_surface_should_be_visible(part_id: StringName) -> bool:
+	if _part_is_present(part_id):
+		return true
+	for wound: Dictionary in target_wounds:
+		if (
+			bool(wound.get("stump", false))
+			and StringName(str(wound.get("part", &""))) == part_id
+		):
+			return true
+	return false

@@ -20,7 +20,7 @@ const MAX_PULSE_INTERVAL := 0.5
 @export_range(MIN_PULSE_INTERVAL, MAX_PULSE_INTERVAL, 0.005) var pulse_interval := 0.085
 
 @export_group("Thermal")
-@export_range(0.01, 2.0, 0.01) var heat_per_second := 0.34
+@export_range(0.01, 1.0, 0.01) var heat_per_discharge := 1.0
 @export_range(0.01, 2.0, 0.01) var cooling_per_second := 0.26
 @export_range(0.0, 0.95, 0.01) var overheat_recovery_ratio := 0.28
 
@@ -41,7 +41,7 @@ func sanitize() -> PlasmaCutterDefinition:
 		MIN_PULSE_INTERVAL,
 		MAX_PULSE_INTERVAL
 	)
-	heat_per_second = clampf(_finite_or(heat_per_second, 0.34), 0.01, 2.0)
+	heat_per_discharge = clampf(_finite_or(heat_per_discharge, 1.0), 0.01, 1.0)
 	cooling_per_second = clampf(_finite_or(cooling_per_second, 0.26), 0.01, 2.0)
 	overheat_recovery_ratio = clampf(
 		_finite_or(overheat_recovery_ratio, 0.28),
@@ -52,7 +52,7 @@ func sanitize() -> PlasmaCutterDefinition:
 
 
 func continuous_duty_seconds() -> float:
-	return 1.0 / maxf(heat_per_second, 0.01)
+	return pulse_interval * ceilf(1.0 / maxf(heat_per_discharge, 0.01))
 
 
 func full_cool_seconds() -> float:

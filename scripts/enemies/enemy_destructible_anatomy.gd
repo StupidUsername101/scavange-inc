@@ -8,14 +8,14 @@ extends RefCounted
 const FLESH_TEXTURE: DestructionTextureDefinition = preload(
 	"res://resources/destruction/flesh.tres"
 )
-const VOXEL_SIZE := 0.045
+const VOXEL_SIZE := 0.01
 const BRICK_CELLS := 12
 const VISUAL_WOUND_LIMIT := 24
 const LIMB_REMAINING_THRESHOLD := 0.38
 const HEAD_REMAINING_THRESHOLD := 0.56
 const TORSO_REMAINING_THRESHOLD := 0.34
 const AGGREGATE_DESTRUCTION_THRESHOLD := 0.58
-const CORE_AIR_MARGIN := 0.008
+const CORE_AIR_MARGIN := 0.003
 
 const PART_HEAD := &"head"
 const PART_TORSO := &"torso"
@@ -47,14 +47,14 @@ const PART_LAYOUT := {
 		"vital": true,
 	},
 	PART_LEFT_ARM: {
-		"center": Vector3(-0.38, 1.22, 0.0),
-		"size": Vector3(0.20, 0.70, 0.22),
+		"center": Vector3(-0.395, 1.22, 0.0),
+		"size": Vector3(0.17, 0.70, 0.22),
 		"weight": 0.09,
 		"vital": false,
 	},
 	PART_RIGHT_ARM: {
-		"center": Vector3(0.38, 1.22, 0.0),
-		"size": Vector3(0.20, 0.70, 0.22),
+		"center": Vector3(0.395, 1.22, 0.0),
+		"size": Vector3(0.17, 0.70, 0.22),
 		"weight": 0.09,
 		"vital": false,
 	},
@@ -87,6 +87,7 @@ class PartState:
 	var definition: EnemyAnatomyPartDefinition
 	var field: SparseSdfVolumeData
 	var remaining_fraction := 1.0
+	var severed := false
 
 
 var enemy_identity := -1
@@ -153,6 +154,7 @@ func _configure_part(part_definition: EnemyAnatomyPartDefinition) -> void:
 		damage_texture.material_index,
 		4.0
 	)
+	part.field.structural_anchor_faces = part_definition.structural_anchor_mask()
 	parts[part.part_id] = part
 
 
@@ -183,6 +185,7 @@ func _configure_legacy_part(part_id: StringName, descriptor: Dictionary) -> void
 		FLESH_TEXTURE.material_index,
 		4.0
 	)
+	part.field.structural_anchor_faces = _legacy_structural_anchor_mask(part_id)
 	parts[part_id] = part
 
 
@@ -217,6 +220,12 @@ func apply_damage_event(event: DamageEvent, body_transform: Transform3D) -> Dict
 	)
 	if not bool(result.get("changed", false)):
 		return result
+	if (
+		part.severable
+		and int(result.get("detached_component_count", 0)) > 0
+		and _primary_limb_attachment_is_lost(part)
+	):
+		part.severed = true
 	part.remaining_fraction = _measure_remaining_fraction(part)
 	_recalculate_aggregate_state()
 	if bool(result.get("geometry_changed", true)):
@@ -318,7 +327,11 @@ func _ray_entry_distance_to_part(
 
 func has_limb(part_id: StringName) -> bool:
 	var part := parts.get(part_id) as PartState
-	return part != null and part.remaining_fraction > part.remaining_threshold
+	return (
+		part != null
+		and not part.severed
+		and part.remaining_fraction > part.remaining_threshold
+	)
 
 
 func mobility_scale() -> float:
@@ -338,17 +351,20 @@ func is_dead() -> bool:
 func state_dict() -> Dictionary:
 	var fractions := {}
 	var presence := {}
+	var severed_parts := {}
 	for part_value: Variant in parts.values():
 		var part := part_value as PartState
 		if part == null:
 			continue
 		fractions[part.part_id] = part.remaining_fraction
 		presence[part.part_id] = not part.severable or has_limb(part.part_id)
+		severed_parts[part.part_id] = part.severed
 	return {
 		"revision": revision,
 		"remaining_fraction": aggregate_remaining_fraction,
 		"part_fractions": fractions,
 		"part_presence": presence,
+		"part_severed": severed_parts,
 		"profile_path": anatomy_definition.resource_path if anatomy_definition != null else "",
 		"left_arm": has_limb(PART_LEFT_ARM),
 		"right_arm": has_limb(PART_RIGHT_ARM),
@@ -472,7 +488,7 @@ func _record_wound(
 	)
 	var radius := clampf(
 		damage_texture.response_radius(event.radius, event.energy),
-		0.018,
+		maxf(part.field.voxel_size * 0.45, 0.005),
 		minf(part.size.x, part.size.z) * 0.48
 	)
 	var depth := clampf(
@@ -480,37 +496,9 @@ func _record_wound(
 		radius,
 		part.size.length()
 	)
-	var nearest_index := -1
-	var nearest_distance := INF
-	for wound_index: int in range(wounds.size()):
-		var existing: Dictionary = wounds[wound_index]
-		if StringName(str(existing.get("part", &""))) != part.part_id:
-			continue
-		var distance := local_hit.distance_to(existing.get("local_position", local_hit))
-		if distance < nearest_distance:
-			nearest_distance = distance
-			nearest_index = wound_index
-	var must_merge := (
-		nearest_index >= 0
-		and (
-			nearest_distance <= radius + float(wounds[nearest_index].get("radius", radius)) * 0.72
-				or wounds.size() >= _wound_limit()
-		)
-	)
-	if must_merge:
-		var merged := wounds[nearest_index].duplicate(false)
-		var old_radius := float(merged.get("radius", radius))
-		var old_position: Vector3 = merged.get("local_position", local_hit)
-		var area_sum := old_radius * old_radius + radius * radius
-		merged["radius"] = minf(sqrt(area_sum), minf(part.size.x, part.size.z) * 0.49)
-		merged["depth"] = maxf(float(merged.get("depth", depth)), depth)
-		merged["local_position"] = old_position.lerp(local_hit, radius * radius / maxf(area_sum, 0.000001))
-		merged["local_direction"] = (
-			(merged.get("local_direction", direction) as Vector3).lerp(direction, 0.35).normalized()
-		)
-		merged["event_id"] = event.event_id
-		wounds[nearest_index] = merged
-		return
+	# The SDF already unions overlapping edits. Keep the aperture list one-to-one with those edits;
+	# area-merging nearby bullets creates a much larger fake hole in the imported skin than exists in
+	# the generated tissue surface, which is what made enemy wounds appear hollow and tank-sized.
 	wounds.append({
 		"event_id": event.event_id,
 		"part": part.part_id,
@@ -521,6 +509,49 @@ func _record_wound(
 	})
 	if wounds.size() > _wound_limit():
 		wounds.pop_front()
+
+
+func _legacy_structural_anchor_mask(part_id: StringName) -> int:
+	if (
+		part_id == PART_LEFT_ARM
+		or part_id == PART_RIGHT_ARM
+		or part_id == PART_LEFT_LEG
+		or part_id == PART_RIGHT_LEG
+	):
+		return SdfStructuralFragmenter.ANCHOR_POSITIVE_Y
+	return SdfStructuralFragmenter.ANCHOR_NEGATIVE_Y
+
+
+func _primary_limb_attachment_is_lost(part: PartState) -> bool:
+	if part.definition == null:
+		return true
+	var toward_attachment := (
+		part.definition.rest_axis_start
+		- part.definition.rest_axis_end
+	)
+	if toward_attachment.length_squared() <= 0.000001:
+		# Vital zero-axis parts such as a head are governed by their core probes, not by an unrelated
+		# chip becoming a structural fragment.
+		return false
+	toward_attachment = toward_attachment.normalized()
+	var basis := SdfMath.orthogonal_basis(toward_attachment)
+	var cross_radius := maxf(
+		minf(part.size.x, minf(part.size.y, part.size.z)) * 0.22,
+		part.field.voxel_size
+	)
+	var distal_probe := (
+		part.definition.rest_axis_end
+		- part.center
+		+ toward_attachment * maxf(part.field.voxel_size * 2.0, cross_radius * 0.5)
+	)
+	var air_threshold := part.field.voxel_size * 0.25
+	var air_probes := 0
+	if part.field.sample_distance(distal_probe) > air_threshold:
+		air_probes += 1
+	for tangent: Vector3 in [basis.x, -basis.x, basis.y, -basis.y]:
+		if part.field.sample_distance(distal_probe + tangent * cross_radius) > air_threshold:
+			air_probes += 1
+	return air_probes >= 4
 
 
 func _record_deformation_event(

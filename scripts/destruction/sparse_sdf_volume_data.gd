@@ -37,6 +37,8 @@ var _operation_second_radii := PackedFloat32Array()
 var _operation_bounds: Array[AABB] = []
 var _operation_combined_bounds := AABB()
 var _operation_maximum_radius := 0.0
+var _last_operation_perforated := false
+var _last_operation_penetration_depth := 0.0
 var _changed_chunk_stamps := PackedInt32Array()
 var _ring_chunk_stamps := PackedInt32Array()
 var _changed_chunks_buffer: Array[Vector3i] = []
@@ -410,7 +412,7 @@ func _apply_geometry_event(
 	revision += 1
 	var changed_chunks: Array[Vector3i] = _changed_chunks_buffer.duplicate()
 	_stamp_changed_bricks(changed_chunks)
-	var perforated := texture.perforates(event.energy)
+	var perforated := _last_operation_perforated
 	var aperture_radius := (
 		texture.response_radius(event.radius, event.energy) * texture.channel_radius_scale
 		if perforated
@@ -428,6 +430,7 @@ func _apply_geometry_event(
 		"operation_count": _operation_count,
 		"normalized_energy": normalized_energy,
 		"perforated": perforated,
+		"penetration_depth": _last_operation_penetration_depth,
 		"aperture_radius": aperture_radius,
 		"detached_fragments": fragmentation.get("fragments", []),
 		"detached_component_count": int(fragmentation.get("detached_component_count", 0)),
@@ -707,10 +710,11 @@ func _build_operations(
 	)
 
 	if perforates:
-		var penetration_depth := maxf(
-			maxf(event.penetration, radius * 3.0) * texture.penetration_depth_scale,
+		var penetration_depth := texture.effective_penetration_distance(
+			maxf(event.penetration, radius * 3.0),
 			voxel_size * 2.0
 		)
+		_last_operation_penetration_depth = penetration_depth
 		var channel_radius := maxf(radius * texture.channel_radius_scale, voxel_size * 0.45)
 		var channel_end := position + direction * penetration_depth
 		_append_operation(
@@ -721,6 +725,7 @@ func _build_operations(
 			channel_radius
 		)
 		var exit_distance := _find_exit_distance(position, direction, penetration_depth)
+		_last_operation_perforated = exit_distance >= 0.0
 		if exit_distance >= 0.0 and texture.exit_spall_radius_scale > 0.0:
 			var exit_position := position + direction * exit_distance
 			var spall_depth := maxf(radius * texture.exit_spall_depth_scale, voxel_size)
@@ -789,6 +794,8 @@ func _reset_operation_buffer() -> void:
 	_operation_count = 0
 	_operation_combined_bounds = AABB()
 	_operation_maximum_radius = 0.0
+	_last_operation_perforated = false
+	_last_operation_penetration_depth = 0.0
 
 
 func _append_operation(

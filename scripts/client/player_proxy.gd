@@ -2437,7 +2437,7 @@ func _process(delta: float) -> void:
 				target_plasma_cutter_range_meters = float(cutter.get("range_meters"))
 				target_plasma_cutter_kerf_millimeters = float(cutter.get("cut_radius")) * 2000.0
 				target_plasma_cutter_cut_depth_millimeters = float(cutter.get("cut_depth")) * 1000.0
-				target_plasma_cutter_continuous_duty_seconds = 1.0 / maxf(float(cutter.get("heat_per_second")), 0.01)
+				target_plasma_cutter_continuous_duty_seconds = float(cutter.call("continuous_duty_seconds"))
 				target_plasma_cutter_full_cool_seconds = 1.0 / maxf(float(cutter.get("cooling_per_second")), 0.01)
 			gait_initialized = true
 			_update_edit_aim_visual()

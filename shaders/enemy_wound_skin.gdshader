@@ -59,6 +59,7 @@ void vertex() {
 
 void fragment() {
 	vec3 world_position = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	float wound_rim = 0.0;
 	for (int wound_index = 0; wound_index < MAX_WOUNDS; wound_index++) {
 		if (wound_index >= wound_count) {
 			break;
@@ -80,6 +81,12 @@ void fragment() {
 		if (axial >= -0.002 && axial <= axis.w && radial < local_radius) {
 			discard;
 		}
+		// Break up the visually sterile edge left by clipping an imported animated shell. This is only
+		// a narrow discoloration around the real SDF aperture, not a second fake wound primitive.
+		float mouth_weight = 1.0 - smoothstep(entry.w * 0.45, entry.w * 2.2, max(axial, 0.0));
+		float outer_rim = 1.0 - smoothstep(local_radius, local_radius * 1.65, radial);
+		float inner_rim = smoothstep(local_radius * 0.94, local_radius * 1.08, radial);
+		wound_rim = max(wound_rim, outer_rim * inner_rim * mouth_weight);
 	}
 	vec4 sampled = albedo_color;
 	if (has_albedo_texture) {
@@ -88,7 +95,7 @@ void fragment() {
 	if (sampled.a < 0.5) {
 		discard;
 	}
-	ALBEDO = sampled.rgb;
+	ALBEDO = mix(sampled.rgb, vec3(0.19, 0.018, 0.012), wound_rim * 0.58);
 	ROUGHNESS = material_roughness;
 	METALLIC = material_metallic;
 }

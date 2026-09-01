@@ -1138,6 +1138,20 @@ func consume_plasma_cutter_pulse() -> bool:
 	if not plasma_cutter_active or not plasma_cutter_pulse_ready:
 		return false
 	plasma_cutter_pulse_ready = false
+	var cutter := get_plasma_cutter_definition()
+	plasma_cutter_heat_ratio = minf(
+		plasma_cutter_heat_ratio
+		+ (
+			float(cutter.get("heat_per_discharge"))
+			if cutter != null
+			else 1.0
+		),
+		1.0
+	)
+	if plasma_cutter_heat_ratio >= 1.0:
+		plasma_cutter_overheated = true
+		plasma_cutter_trigger_held = false
+		plasma_cutter_active = false
 	return true
 
 
@@ -1170,11 +1184,6 @@ func _update_plasma_cutter_thermal(delta: float) -> void:
 		)
 	var safe_delta := clampf(delta if is_finite(delta) else 0.0, 0.0, 0.1)
 	if plasma_cutter_active:
-		plasma_cutter_heat_ratio = minf(
-			plasma_cutter_heat_ratio
-			+ float(cutter.get("heat_per_second")) * safe_delta,
-			1.0
-		)
 		if not plasma_cutter_pulse_ready:
 			plasma_cutter_pulse_remaining -= safe_delta
 		if not plasma_cutter_pulse_ready and plasma_cutter_pulse_remaining <= 0.0:
@@ -3928,10 +3937,7 @@ func to_state_dict(include_inventory := true) -> Dictionary:
 		cutter_range = float(cutter.get("range_meters"))
 		cutter_kerf_mm = float(cutter.get("cut_radius")) * 2000.0
 		cutter_depth_mm = float(cutter.get("cut_depth")) * 1000.0
-		cutter_duty_seconds = 1.0 / maxf(
-			float(cutter.get("heat_per_second")),
-			0.01
-		)
+		cutter_duty_seconds = float(cutter.call("continuous_duty_seconds"))
 		cutter_cool_seconds = 1.0 / maxf(
 			float(cutter.get("cooling_per_second")),
 			0.01

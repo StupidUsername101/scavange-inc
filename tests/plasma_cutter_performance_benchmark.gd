@@ -1,11 +1,14 @@
 extends SceneTree
 
-## Continuous-stroke benchmark for the shipped plasma cutter. Unlike the general SDF microbench,
-## this deliberately grows one connected cut across a real wall so structural scans, worker-job
-## coalescing, ArrayMesh commits, and Jolt collision replacement are all represented.
+## Multi-pass stroke benchmark for the shipped plasma cutter. Unlike the general SDF microbench,
+## this deliberately advances into dense concrete as each pass exposes a deeper surface, then grows
+## one connected cut across a real wall. Structural scans, worker-job coalescing, ArrayMesh commits,
+## and Jolt collision replacement are all represented.
 
 const CUTTER := preload("res://resources/items/tools/plasma_cutter_standard.tres")
-const PULSE_COUNT := 52
+const PULSES_PER_PASS := 23
+const PASS_COUNT := 3
+const PULSE_COUNT := PULSES_PER_PASS * PASS_COUNT
 const WALL_SIZE := Vector3(4.0, 3.0, 0.45)
 const WALL_VOXEL_SIZE := 0.06
 const WALL_BRICK_CELLS := 16
@@ -143,9 +146,17 @@ func _profile_runtime_volume(
 
 
 func _stroke_position(pulse_index: int) -> Vector3:
-	var progress := float(pulse_index) / float(PULSE_COUNT - 1)
+	var pass_index := pulse_index / PULSES_PER_PASS
+	var position_in_pass := pulse_index % PULSES_PER_PASS
+	var progress := float(position_in_pass) / float(PULSES_PER_PASS - 1)
 	# Begin/end beyond the side faces so this is a complete structural cut, not merely a scar.
-	return Vector3(lerpf(-2.08, 2.08, progress), 0.0, WALL_SIZE.z * 0.5)
+	# A real ray hits the newly exposed back of the kerf after each pass. Advancing the fixture by
+	# slightly less than concrete's material-limited travel reproduces that overlap deterministically.
+	return Vector3(
+		lerpf(-2.08, 2.08, progress),
+		0.0,
+		WALL_SIZE.z * 0.5 - float(pass_index) * 0.15
+	)
 
 
 func _cutter_event(event_index: int, world_position: Vector3) -> DamageEvent:
@@ -224,7 +235,9 @@ func _profiles_are_valid(
 		var field_state: Dictionary = state.get("field", state)
 		if (
 			timings.size() != PULSE_COUNT
-			or int(profile.get("changed_pulses", 0)) != PULSE_COUNT
+			# The final edge pulse may already be in air after the unsupported half detaches. That is a
+			# correct no-op, while all three authority/client fixtures must still produce the same cut.
+			or int(profile.get("changed_pulses", 0)) < PULSE_COUNT - 1
 			or int(profile.get("detached_components", 0)) != 1
 			or int(profile.get("full_scans", 0)) != 1
 			or int(field_state.get("checksum", -2)) != expected_checksum

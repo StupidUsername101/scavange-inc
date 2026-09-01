@@ -115,7 +115,10 @@ func _process(delta: float) -> void:
 	# Following it directly keeps the rendered model exactly on its collider.
 	# Joining clients do not have that body and use network smoothing below.
 	if multiplayer.is_server():
-		var server_item := Server.get_server_item(item_id)
+		var server := get_node_or_null("/root/Server")
+		var server_item: Node3D = null
+		if server != null and server.has_method("get_server_item"):
+			server_item = server.call("get_server_item", item_id) as Node3D
 
 		if is_instance_valid(server_item):
 			global_transform = server_item.global_transform

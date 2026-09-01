@@ -2354,7 +2354,9 @@ func _process_player_plasma_cutter(player: ServerPlayer) -> void:
 	var has_hit := not hit.is_empty()
 	var endpoint: Vector3 = hit.get("position", finish)
 	player.set_plasma_cutter_aim_result(endpoint, has_hit)
-	if not has_hit or not player.consume_plasma_cutter_pulse():
+	# A discharge spends its thermal cycle even when it misses. Consuming before collider handling
+	# makes one press exactly one pulse instead of an unlimited free aiming beam.
+	if not player.consume_plasma_cutter_pulse() or not has_hit:
 		return
 	var collider := hit.get("collider") as Node
 	if collider == null:

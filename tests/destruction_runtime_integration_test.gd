@@ -5,6 +5,7 @@ extends SceneTree
 ## and the real projectile adapter. The mathematical field has its own faster unit test.
 
 const MeshAudit := preload("res://tests/helpers/destruction_mesh_audit.gd")
+const TEST_HIGH_ENERGY_RADIUS := 0.045
 
 var assertion_count := 0
 var failure_count := 0
@@ -62,7 +63,7 @@ func _test_volume_replay_and_collision_swap() -> void:
 		"normal": Vector3(0.0, 0.0, 1.0),
 		"direction": Vector3(0.0, 0.0, -1.0),
 		"brush_kind": DamageEvent.BRUSH_CAPSULE,
-		"radius": BallisticProjectileDefinition.DEFAULT_DESTRUCTION_RADIUS,
+		"radius": TEST_HIGH_ENERGY_RADIUS,
 		"length": 1.0,
 		"energy": 16.0,
 		"impulse": 3.0,
@@ -618,9 +619,9 @@ func _test_service_pistol_routing() -> void:
 		concrete_wall != null
 		and metal_wall != null
 		and not profiles.is_empty()
-		and is_equal_approx(float(profiles[0].get("destruction_energy", 0.0)), 16.0)
-		and is_equal_approx(float(profiles[0].get("destruction_radius", 0.0)), 0.05)
-		and is_equal_approx(float(profiles[0].get("penetration_depth", 0.0)), 0.75)
+		and is_equal_approx(float(profiles[0].get("destruction_energy", 0.0)), 6.0)
+		and is_equal_approx(float(profiles[0].get("destruction_radius", 0.0)), 0.012)
+		and is_equal_approx(float(profiles[0].get("penetration_depth", 0.0)), 0.38)
 		and projectile.resolved
 		and metal_projectile.resolved
 		and concrete_wall.field.revision == 1
@@ -1210,7 +1211,7 @@ func _configure_test_projectile(
 			"maximum_range": 20.0,
 			"damage": 16.0,
 			"destruction_energy": 16.0,
-			"destruction_radius": BallisticProjectileDefinition.DEFAULT_DESTRUCTION_RADIUS,
+			"destruction_radius": TEST_HIGH_ENERGY_RADIUS,
 			"penetration_depth": 1.0,
 			"impact_impulse": 2.0,
 			"damage_tags": PackedStringArray(["ballistic"]),

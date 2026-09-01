@@ -55,6 +55,54 @@ static func build(
 	}
 
 
+static func build_chunk(
+	field: SparseSdfVolumeData,
+	profile: DestructionTextureDefinition,
+	coordinate: Vector3i,
+	prepared_contour: Dictionary = {}
+) -> Dictionary:
+	## Filter one already-contoured chunk down to newly exposed material. The expensive contour can
+	## therefore run on WorkerThreadPool while ArrayMesh creation remains on the main thread.
+	if field == null or profile == null or not field.brick_is_valid(coordinate):
+		return {"mesh": null, "vertices": PackedVector3Array(), "indices": PackedInt32Array()}
+	var vertices := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
+	var indices := PackedInt32Array()
+	var contour := (
+		prepared_contour
+		if not prepared_contour.is_empty()
+		else SdfDualContouringMesher.build_chunk(field, coordinate)
+	)
+	_append_contour_interior(
+		field,
+		profile,
+		contour,
+		vertices,
+		normals,
+		colors,
+		indices
+	)
+	var mesh: ArrayMesh
+	if not indices.is_empty():
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = vertices
+		arrays[Mesh.ARRAY_NORMAL] = normals
+		arrays[Mesh.ARRAY_COLOR] = colors
+		arrays[Mesh.ARRAY_INDEX] = indices
+		mesh = ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return {
+		"mesh": mesh,
+		"vertices": vertices,
+		"normals": normals,
+		"colors": colors,
+		"indices": indices,
+		"triangle_count": indices.size() / 3,
+	}
+
+
 static func _append_chunk_interior(
 	field: SparseSdfVolumeData,
 	profile: DestructionTextureDefinition,
@@ -65,6 +113,18 @@ static func _append_chunk_interior(
 	indices: PackedInt32Array
 ) -> void:
 	var result := SdfDualContouringMesher.build_chunk(field, coordinate)
+	_append_contour_interior(field, profile, result, vertices, normals, colors, indices)
+
+
+static func _append_contour_interior(
+	field: SparseSdfVolumeData,
+	profile: DestructionTextureDefinition,
+	result: Dictionary,
+	vertices: PackedVector3Array,
+	normals: PackedVector3Array,
+	colors: PackedColorArray,
+	indices: PackedInt32Array
+) -> void:
 	if bool(result.get("empty", true)):
 		return
 	SdfDualContouringMesher.split_box_reference_surface_classes(result)
