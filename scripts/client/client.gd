@@ -1084,13 +1084,13 @@ func on_spatial_sound_received(packet: Dictionary) -> void:
 	spatial_audio_renderer.submit(sanitized)
 
 
-@rpc("authority", "unreliable_ordered", "call_local", 9)
+@rpc("authority", "unreliable", "call_local", 9)
 func on_voice_frame_received(packet: Dictionary) -> void:
 	_ensure_voice_runtime()
 	spatial_voice_chat_renderer.submit(packet)
 
 
-@rpc("authority", "call_local", "reliable", 9)
+@rpc("authority", "call_local", "reliable", 3)
 func on_voice_speaking_state_received(
 	player_id: int,
 	generation: int,
@@ -1108,7 +1108,7 @@ func on_voice_speaking_state_received(
 	voice_speaking_state_changed.emit(player_id, generation, active)
 
 
-@rpc("authority", "call_local", "reliable", 9)
+@rpc("authority", "call_local", "reliable", 3)
 func on_voice_mimic_consent_received(enabled: bool) -> void:
 	local_voice_mimic_consent = enabled
 	var local_proxy := get_local_player_proxy()
@@ -1536,7 +1536,7 @@ func _apply_player_corpse_state(state: Dictionary) -> void:
 	proxy.call("apply_server_state", state)
 
 
-@rpc("authority", "reliable", "call_local", 1)
+@rpc("authority", "reliable", "call_local", 3)
 func on_player_inventory_state_received(
 	player_id_value: int,
 	revision_value: int,

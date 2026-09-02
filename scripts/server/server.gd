@@ -4904,7 +4904,7 @@ func cancel_enemy_mimic(enemy_id: int) -> void:
 		voice_chat_service.cancel_enemy_mimic(enemy_id)
 
 
-@rpc("any_peer", "call_local", "reliable", 9)
+@rpc("any_peer", "call_local", "reliable", 3)
 func receive_voice_speaking(active: bool) -> void:
 	if not multiplayer.is_server() or voice_chat_service == null:
 		return
@@ -4917,7 +4917,7 @@ func receive_voice_speaking(active: bool) -> void:
 		)
 
 
-@rpc("any_peer", "call_local", "unreliable_ordered", 9)
+@rpc("any_peer", "call_local", "unreliable", 9)
 func receive_voice_frame(
 	sequence: int,
 	captured_msec: int,
@@ -4938,7 +4938,7 @@ func receive_voice_frame(
 		)
 
 
-@rpc("any_peer", "call_local", "reliable", 9)
+@rpc("any_peer", "call_local", "reliable", 3)
 func set_voice_mimic_consent(enabled: bool) -> void:
 	if not multiplayer.is_server() or voice_chat_service == null:
 		return
@@ -5305,7 +5305,7 @@ func receive_grab_rotation_input(
 
 	set_grab_rotation_input_target(player.grabber, input_target, session_id)
 
-@rpc("any_peer", "call_local", "unreliable")
+@rpc("any_peer", "call_local", "unreliable", 1)
 func receive_player_input(
 	move: Vector2,
 	yaw: float,

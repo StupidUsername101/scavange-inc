@@ -3,7 +3,11 @@ extends RefCounted
 
 const DEFAULT_GRACE_MILLISECONDS := 20000
 const CLIENT_RETRY_WINDOW_MILLISECONDS := 15000
-const FIRST_RETRY_DELAY_MILLISECONDS := 180
+## Steam P2P symmetric connections retain a short native teardown lifetime after CloseConnection.
+## Reopening the same identity/virtual-port pair immediately can let an old connection epoch race
+## the replacement. Keep recovery sub-second, but give both endpoints time to retire their SNP lane
+## counters before creating the first replacement connection.
+const FIRST_RETRY_DELAY_MILLISECONDS := 600
 const MAX_RETRY_DELAY_MILLISECONDS := 1200
 
 #######################################################

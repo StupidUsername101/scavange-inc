@@ -43,6 +43,7 @@ func _run() -> void:
 	_test_transient_disconnect_resume()
 	_test_disconnect_rpc_safety()
 	_test_transfer_channel_capacity()
+	_test_transfer_channel_reliability_isolation()
 	_test_replaceable_snapshot_transport()
 	_test_snapshot_stream_lifecycle()
 	_test_replication_service_boundary()
@@ -87,8 +88,8 @@ func _test_four_player_limit() -> void:
 
 func _test_lobby_compatibility() -> void:
 	_expect(
-		LobbyRules.PROTOCOL_VERSION == "11",
-		"spatial voice and mimic replay have an explicit multiplayer protocol"
+		LobbyRules.PROTOCOL_VERSION == "12",
+		"Steam lane reliability isolation has an explicit multiplayer protocol"
 	)
 	_expect(
 		LobbyRules.is_compatible_lobby(
@@ -736,6 +737,94 @@ func _test_transfer_channel_capacity() -> void:
 	)
 
 
+func _test_transfer_channel_reliability_isolation() -> void:
+	var client_source := FileAccess.get_file_as_string(
+		"res://scripts/client/client.gd"
+	)
+	var server_source := FileAccess.get_file_as_string(
+		"res://scripts/server/server.gd"
+	)
+	_expect(
+		MULTIPLAYER_CHANNELS.has_disjoint_reliability_lanes(),
+		"Steam reliable and unreliable lane contracts are disjoint"
+	)
+	var server_to_client_classes := _rpc_transport_classes_in_file(
+		"res://scripts/client/client.gd"
+	)
+	var client_to_server_classes := _rpc_transport_classes_in_file(
+		"res://scripts/server/server.gd"
+	)
+	_expect(
+		_rpc_transport_classes_match_contract(server_to_client_classes)
+		and _rpc_transport_classes_match_contract(client_to_server_classes),
+		"every RPC direction uses exactly one Steam reliability class per lane"
+	)
+	_expect(
+		client_source.contains(
+			'@rpc("authority", "unreliable", "call_local", 9)\nfunc on_voice_frame_received'
+		)
+		and server_source.contains(
+			'@rpc("any_peer", "call_local", "unreliable", 9)\nfunc receive_voice_frame'
+		)
+		and client_source.contains(
+			'@rpc("authority", "call_local", "reliable", 3)\nfunc on_voice_speaking_state_received'
+		)
+		and server_source.contains(
+			'@rpc("any_peer", "call_local", "reliable", 3)\nfunc receive_voice_speaking'
+		),
+		"voice payload and voice control cannot share a Steam counter lane"
+	)
+	_expect(
+		client_source.contains(
+			'@rpc("authority", "unreliable", "call_local", 1)\nfunc on_player_states_received'
+		)
+		and server_source.contains(
+			'@rpc("any_peer", "call_local", "unreliable", 1)\nfunc receive_player_input'
+		)
+		and client_source.contains(
+			'@rpc("authority", "reliable", "call_local", 3)\nfunc on_player_inventory_state_received'
+		),
+		"player snapshots and inputs remain loss-tolerant while inventory uses the reliable lane"
+	)
+	_expect(
+		SESSION_RECONNECT_LEDGER.FIRST_RETRY_DELAY_MILLISECONDS >= 500,
+		"a retired symmetric Steam connection gets a quiet period before replacement"
+	)
+
+
+func _rpc_transport_classes_in_file(path: String) -> Dictionary[int, int]:
+	var classes: Dictionary[int, int] = {}
+	for source_line: String in FileAccess.get_file_as_string(path).split("\n"):
+		var line := source_line.strip_edges()
+		if not line.begins_with("@rpc("):
+			continue
+		var close_index := line.find(")")
+		if close_index < 0:
+			continue
+		var arguments := line.substr(5, close_index - 5).split(",")
+		var channel := 0
+		if arguments.size() >= 4:
+			var channel_text := str(arguments[3]).strip_edges()
+			if channel_text.is_valid_int():
+				channel = channel_text.to_int()
+		# GodotSteam 4.22 explicitly maps `unreliable_ordered` to Steam reliable.
+		var transport_class := 2 if line.contains('"unreliable"') else 1
+		classes[channel] = int(classes.get(channel, 0)) | transport_class
+	return classes
+
+
+func _rpc_transport_classes_match_contract(classes: Dictionary[int, int]) -> bool:
+	for channel: int in classes:
+		var transport_class := int(classes[channel])
+		if transport_class == 1 and not MULTIPLAYER_CHANNELS.is_reliable_lane(channel):
+			return false
+		if transport_class == 2 and not MULTIPLAYER_CHANNELS.is_unreliable_lane(channel):
+			return false
+		if transport_class != 1 and transport_class != 2:
+			return false
+	return true
+
+
 func _test_replaceable_snapshot_transport() -> void:
 	var client_source := FileAccess.get_file_as_string(
 		"res://scripts/client/client.gd"
@@ -849,9 +938,9 @@ func _test_replaceable_snapshot_transport() -> void:
 	_expect(
 		replication_source.contains("player.to_state_dict(false)")
 		and client_source.contains(
-			'@rpc("authority", "reliable", "call_local", 1)\nfunc on_player_inventory_state_received'
+			'@rpc("authority", "reliable", "call_local", 3)\nfunc on_player_inventory_state_received'
 		),
-		"realtime player poses stay lean while inventory revisions use a reliable player lane"
+		"realtime player poses stay lean while inventory revisions use the reliable command lane"
 	)
 	_expect(
 		REPLICATION_SCHEDULE.read_snapshot_sequence(

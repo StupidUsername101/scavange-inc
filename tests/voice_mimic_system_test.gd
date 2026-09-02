@@ -254,12 +254,12 @@ func _test_transport_and_enemy_contract() -> void:
 	)
 	_expect(
 		client_source.contains(
-			'@rpc("authority", "unreliable_ordered", "call_local", 9)\nfunc on_voice_frame_received'
+			'@rpc("authority", "unreliable", "call_local", 9)\nfunc on_voice_frame_received'
 		)
 		and server_source.contains(
-			'@rpc("any_peer", "call_local", "unreliable_ordered", 9)\nfunc receive_voice_frame'
+			'@rpc("any_peer", "call_local", "unreliable", 9)\nfunc receive_voice_frame'
 		),
-		"voice frames own the contracted loss-tolerant Steam lane in both directions"
+		"voice frames use their application jitter buffer on a genuinely loss-tolerant Steam lane"
 	)
 	_expect(
 		server_source.contains("voice_chat_service.tick(delta")
