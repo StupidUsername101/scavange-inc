@@ -107,8 +107,9 @@ calibrated reference drone.
 The limb-kinematics suite validates the allocation-light two-segment solver shared by
 ML body authoring and runtime rigs: exact segment lengths, unreachable-target clamping,
 bend-hemisphere continuity, finite degenerate poses, and orthonormal knee joint frames.
-The retired deterministic enemy gait and its dev-zoo runtime no longer gate the learned
-worker stack; the dormant zoo assets remain available for a future AI implementation.
+The retired deterministic enemy gait no longer gates the learned worker stack. The development zoo
+is now a curated encounter for the expressive flute runner and voice mimic; it uses their active
+shared humanoid runtime rather than reviving the obsolete deterministic gait.
 
 The runtime integration test additionally uses the real Jolt rigid body, rotor-force,
 battery, targeting, weapon, player-follow, and relocation-recovery paths. It checks
@@ -226,6 +227,11 @@ barrel mounts, caliber-gated payout, backward-compatible build serialization,
 per-barrel mass/ammunition/projectile behavior, procedural multi-muzzle geometry,
 server/client station replication, local rotating preview, input priority near the
 machine, and physical pickup-ready payout through the ordinary inventory path.
+
+The level-editor suite also covers authored lighting: the preview inspector exposes a
+dedicated light tab, surface placement aims spotlights away from the mounting face,
+live color/energy/range/falloff/cone/shadow edits update the editor world, and the
+versioned level document reconstructs the same real `Light3D` types at runtime.
 
 The acoustic suite checks listener-centered wavefront routing, material-dependent
 three-band transmission, graph-path selection, parallel direct/diffracted energy, physical arrival delay, apparent
@@ -345,16 +351,25 @@ changes. Set `SCAVANGE_TUNNEL_AUDIT_MODE=cross` for the focused cross-tunnel swe
 fast parse/world-bake check.
 
 The flute-runner vertical slice keeps the first expressive humanoid enemy off the retired zoo
-controller. It checks sight/hearing/search transitions, contact-speed and facing-gated tackles,
+controller while placing it inside a curated zoo pen. It checks sight/hearing/search transitions, contact-speed and facing-gated tackles,
 bounded player-originated acoustic memory with the same loudness-scaled reach as player playback,
 compact no-bone replication, the restricted continuous-audio boundary, the removable shared-world
-spawn, a real authority chase/tackle fixture, and reuse of the player-quality
+zoo spawn beside a separate voice-mimic specimen, a real authority chase/tackle fixture, and reuse of the player-quality
 skin/foot/ocular/authored-ragdoll presentation stack. A wall-occlusion fixture additionally proves
 that proximity alone cannot reveal a hidden player: only a real player-originated cue admitted by
 the shared acoustic solve may switch the enemy to audible pursuit. Run it with:
 
 ```sh
 godot --headless --path . --script res://tests/flute_runner_system_test.gd
+```
+
+The voice-mimic suite checks bounded Steam-compressed frame admission, short jitter reordering,
+generation resets, explicit session-only consent, immediate revocation, per-player phrase/byte
+limits, the dedicated loss-tolerant transport lane, reconnect cleanup, the installed GodotSteam
+voice API, and the flute runner's non-periodic captured-phrase behavior contract. Run it with:
+
+```sh
+godot --headless --path . --script res://tests/voice_mimic_system_test.gd
 ```
 
 The radio suite checks music-folder discovery, specialized item spawning, authoritative
@@ -440,8 +455,8 @@ tunnel-sized wet-only racks, then measures their post-warmup RMS. It fails if th
 normalization still leaves Godot's feedback network hot or crushes the return beyond its calibrated
 window.
 
-The industrial-environment suite verifies that the inactive zoo is absent from both live worlds,
-server collision and client presentation share one three-storey/ramp/tunnel/large-bunker layout, every storey and
+The industrial-environment suite verifies that the curated zoo has matching server/client placement,
+while server collision and client presentation share one three-storey/ramp/tunnel/large-bunker layout, every storey and
 four-metre tunnel probe section participates in the acoustic graph, elongated tunnel geometry produces
 a narrowed hall with a finite outdoor spill field, and the large bunker is at least eight garage
 volumes with clear nature bounds, four symmetric speakers, and a sampled long-decay response. The multi-storey building uses dense per-floor probes

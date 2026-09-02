@@ -62,6 +62,16 @@ const FIELDLINK_FOREARM_LENGTH_RATIO := 0.68
 const FIELDLINK_HAND_PRONATION := PI
 const FIELDLINK_HAND_TWIST := deg_to_rad(12.0)
 const FIELDLINK_ELBOW_HOLD_MOTION_INHERITANCE := 0.35
+const LOCOMOTION_HAND_WALK_WEIGHT := 0.34
+const LOCOMOTION_HAND_RUN_WEIGHT := 0.88
+const HELD_HAND_REACH_RATIO := 0.94
+const HELD_PISTOL_FORWARD := 0.43
+const HELD_RIFLE_FORWARD := 0.29
+const HELD_TOOL_FORWARD := 0.40
+const HELD_GENERIC_FORWARD := 0.31
+# Fallback for skins that predate authored hand anchors. Current player scenes expose editable
+# Marker3D grip points instead of relying on this value during ordinary setup.
+const DEFAULT_HAND_GRIP_LOCAL_POSITION := Vector3(0.0, 0.125, 0.0)
 
 var player_id := -1
 var variant_index := -1
@@ -86,8 +96,19 @@ var _right_wrist_mount: Node3D
 var _backpack_attachment: BoneAttachment3D
 var _left_forearm_attachment: BoneAttachment3D
 var _right_forearm_attachment: BoneAttachment3D
-var _left_hand_item_mount: Node3D
-var _right_hand_item_mount: Node3D
+var _left_hand_attachment: BoneAttachment3D
+var _right_hand_attachment: BoneAttachment3D
+var _left_hand_grip_point: Node3D
+var _right_hand_grip_point: Node3D
+var _left_hand_grip_local_transform := Transform3D(
+	Basis.IDENTITY,
+	DEFAULT_HAND_GRIP_LOCAL_POSITION
+)
+var _right_hand_grip_local_transform := Transform3D(
+	Basis.IDENTITY,
+	DEFAULT_HAND_GRIP_LOCAL_POSITION
+)
+var _hand_grip_points_captured := false
 var _left_leg_solution := LimbKinematics.TwoBoneSolution.new()
 var _right_leg_solution := LimbKinematics.TwoBoneSolution.new()
 var _left_previous_bend := Vector3.ZERO
@@ -194,9 +215,28 @@ func get_wrist_mount(left_side: bool) -> Node3D:
 	return _left_wrist_mount if left_side else _right_wrist_mount
 
 
-func get_hand_item_mount(left_side: bool) -> Node3D:
+func get_hand_grip_point(left_side: bool) -> Node3D:
 	_ensure_mounts()
-	return _left_hand_item_mount if left_side else _right_hand_item_mount
+	return _left_hand_grip_point if left_side else _right_hand_grip_point
+
+
+## Compatibility for callers written before hand/item grip points were named explicitly.
+func get_hand_item_mount(left_side: bool) -> Node3D:
+	return get_hand_grip_point(left_side)
+
+
+func get_hand_grip_world_position(left_side: bool) -> Vector3:
+	if not _usable or skeleton == null:
+		return global_position
+	var grip_local_transform := (
+		_left_hand_grip_local_transform
+		if left_side
+		else _right_hand_grip_local_transform
+	)
+	return (
+		_bone_world_transform(LEFT_HAND if left_side else RIGHT_HAND)
+		* grip_local_transform.origin
+	)
 
 
 func reset_fieldlink_arm_pose_history() -> void:
@@ -240,6 +280,156 @@ func sync_two_hand_targets(
 		)
 	skeleton.force_update_all_bone_transforms()
 	force_equipment_attachment_update()
+
+
+## Pulls the actual shared hands into the lower first-person frame while retaining an ordinary
+## third-person running silhouette. This is applied to the authored body itself; there is no
+## owner-only arm pair. The alternating target comes from the replicated gait clock.
+func sync_locomotion_hands(
+	gait_cycle: float,
+	movement_weight: float,
+	run_weight: float
+) -> void:
+	if not _usable or skeleton == null:
+		return
+	var moving := clampf(movement_weight, 0.0, 1.0)
+	var running := smoothstep(0.0, 1.0, clampf(run_weight, 0.0, 1.0))
+	var weight := moving * lerpf(
+		LOCOMOTION_HAND_WALK_WEIGHT,
+		LOCOMOTION_HAND_RUN_WEIGHT,
+		running
+	)
+	if weight <= EPSILON:
+		return
+	var phase := (gait_cycle if is_finite(gait_cycle) else 0.0) * PI
+	_sync_locomotion_hand_target(true, sin(phase), running, weight)
+	_sync_locomotion_hand_target(false, -sin(phase), running, weight)
+	skeleton.force_update_all_bone_transforms()
+	force_equipment_attachment_update()
+
+
+## Solves a held prop from anatomical hand targets and updates the hand-owned mount in the same
+## frame. Profile names come from ItemDefinition, but this layer remains item-agnostic and supports
+## missing arms by mirroring the primary grip.
+func sync_held_item_hands(
+	profile: StringName,
+	aim_basis: Basis,
+	gait_cycle: float,
+	movement_weight: float,
+	run_weight: float,
+	primary_left: bool,
+	pose_weight := 1.0
+) -> void:
+	if not _usable or skeleton == null or (not _has_left_arm and not _has_right_arm):
+		return
+	var safe_aim_basis := aim_basis.orthonormalized()
+	if absf(safe_aim_basis.determinant()) <= EPSILON:
+		safe_aim_basis = global_basis.orthonormalized()
+	var forward := -safe_aim_basis.z
+	var up := safe_aim_basis.y
+	var right := safe_aim_basis.x
+	var moving := clampf(movement_weight, 0.0, 1.0)
+	var running := smoothstep(0.0, 1.0, clampf(run_weight, 0.0, 1.0))
+	var safe_cycle := gait_cycle if is_finite(gait_cycle) else 0.0
+	var safe_pose_weight := clampf(pose_weight, 0.0, 1.0)
+	if safe_pose_weight <= EPSILON:
+		return
+	var stride_wave := sin(safe_cycle * PI)
+	var contact_wave := sin(safe_cycle * TAU)
+	# The prop is held by the arms, so running creates small gait-derived grip travel rather than a
+	# synthetic camera bob. Both the owner and remote players receive this exact displacement.
+	var grip_motion := (
+		right * stride_wave * (0.006 + running * 0.010)
+		+ up * contact_wave * (0.004 + running * 0.008)
+	) * moving
+	var eye := _camera_mount.global_position if _camera_mount != null else _bone_world_origin(&"mixamorig_Head")
+	var primary_sign := -1.0 if primary_left else 1.0
+	var primary_forward := HELD_GENERIC_FORWARD
+	var primary_drop := 0.34
+	var primary_side := 0.20
+	match profile:
+		ItemDefinition.HELD_PROFILE_PISTOL:
+			primary_forward = HELD_PISTOL_FORWARD
+			primary_drop = 0.27
+			primary_side = 0.16
+		ItemDefinition.HELD_PROFILE_RIFLE:
+			primary_forward = HELD_RIFLE_FORWARD
+			primary_drop = 0.29
+			primary_side = 0.13
+		ItemDefinition.HELD_PROFILE_TOOL:
+			primary_forward = HELD_TOOL_FORWARD
+			primary_drop = 0.30
+			primary_side = 0.17
+	var primary_target := (
+		eye
+		+ forward * primary_forward
+		- up * primary_drop
+		+ right * primary_side * primary_sign
+		+ grip_motion
+	)
+	primary_target = _clamp_hand_target_to_reach(primary_left, primary_target)
+	var primary_hint := (
+		right * primary_sign * 0.78
+		+ up * 0.16
+		- forward * 0.10
+	).normalized()
+	_sync_hand_target(primary_left, primary_target, primary_hint, safe_pose_weight)
+
+	var support_left := not primary_left
+	var has_support := _has_left_arm if support_left else _has_right_arm
+	if profile == ItemDefinition.HELD_PROFILE_RIFLE and has_support:
+		# The support hand meets the handguard ahead of and slightly above the trigger hand. It is an
+		# IK target, not a parent, so customized/multi-barrel rifle geometry stays free to vary.
+		var support_target := (
+			eye
+			+ forward * 0.46
+			- up * 0.19
+			- right * primary_sign * 0.12
+			+ grip_motion
+			+ right * stride_wave * 0.004 * moving
+		)
+		support_target = _clamp_hand_target_to_reach(
+			support_left,
+			support_target
+		)
+		var support_sign := -primary_sign
+		var support_hint := (
+			right * support_sign * 0.76
+			+ up * 0.10
+			- forward * 0.18
+		).normalized()
+		_sync_hand_target(
+			support_left,
+			support_target,
+			support_hint,
+			safe_pose_weight
+		)
+	elif has_support and moving > EPSILON:
+		_sync_locomotion_hand_target(
+			support_left,
+			-stride_wave if primary_left else stride_wave,
+			running,
+			moving * lerpf(0.30, 0.72, running) * safe_pose_weight
+		)
+
+	skeleton.force_update_all_bone_transforms()
+	force_equipment_attachment_update()
+	var mount := _left_hand_grip_point if primary_left else _right_hand_grip_point
+	var mount_roll := 0.035 if primary_left else -0.035
+	_set_mount_world_transform(
+		mount,
+		get_hand_grip_world_position(primary_left),
+		(
+			safe_aim_basis
+			* Basis.from_euler(Vector3(0.0, 0.0, mount_roll))
+		).orthonormalized()
+	)
+
+
+func get_hand_world_position(left_side: bool) -> Vector3:
+	if not _usable or skeleton == null:
+		return global_position
+	return _bone_world_origin(LEFT_HAND if left_side else RIGHT_HAND)
 
 
 func set_local_view(value: bool) -> void:
@@ -368,6 +558,14 @@ func _bind_wrist_mounts_to_skeleton() -> void:
 		&"RightForearmEquipmentAttachment",
 		RIGHT_FOREARM
 	)
+	_left_hand_attachment = _create_bone_attachment(
+		&"LeftHandGripAttachment",
+		LEFT_HAND
+	)
+	_right_hand_attachment = _create_bone_attachment(
+		&"RightHandGripAttachment",
+		RIGHT_HAND
+	)
 	_bind_backpack_mount()
 	_bind_wrist_mount(
 		_left_wrist_mount,
@@ -380,6 +578,16 @@ func _bind_wrist_mounts_to_skeleton() -> void:
 		_right_forearm_attachment,
 		_right_lower_arm_length,
 		false
+	)
+	_bind_hand_grip_point(
+		_left_hand_grip_point,
+		_left_hand_attachment,
+		_left_hand_grip_local_transform
+	)
+	_bind_hand_grip_point(
+		_right_hand_grip_point,
+		_right_hand_attachment,
+		_right_hand_grip_local_transform
 	)
 
 
@@ -432,17 +640,33 @@ func _bind_wrist_mount(
 	)
 
 
+func _bind_hand_grip_point(
+	mount: Node3D,
+	attachment: BoneAttachment3D,
+	grip_local_transform: Transform3D
+) -> void:
+	if mount == null or attachment == null:
+		return
+	attachment.on_skeleton_update()
+	mount.reparent(attachment, false)
+	mount.transform = grip_local_transform
+
+
 func _detach_wrist_mounts_from_skeleton() -> void:
 	for mount: Node3D in [
 		_backpack_mount,
 		_left_wrist_mount,
 		_right_wrist_mount,
+		_left_hand_grip_point,
+		_right_hand_grip_point,
 	]:
 		if is_instance_valid(mount) and mount.get_parent() != self:
 			mount.reparent(self, false)
 			mount.transform = Transform3D.IDENTITY
 	_left_forearm_attachment = null
 	_right_forearm_attachment = null
+	_left_hand_attachment = null
+	_right_hand_attachment = null
 	_backpack_attachment = null
 
 
@@ -514,8 +738,8 @@ func _ensure_mounts() -> void:
 		and _camera_mount != null
 		and _left_wrist_mount != null
 		and _right_wrist_mount != null
-		and _left_hand_item_mount != null
-		and _right_hand_item_mount != null
+		and _left_hand_grip_point != null
+		and _right_hand_grip_point != null
 	):
 		return
 	_backpack_mount = _ensure_mount(&"BackpackMount")
@@ -523,8 +747,26 @@ func _ensure_mounts() -> void:
 	_camera_mount = _ensure_mount(&"CameraMount")
 	_left_wrist_mount = _ensure_mount(&"LeftWristMount")
 	_right_wrist_mount = _ensure_mount(&"RightWristMount")
-	_left_hand_item_mount = _ensure_mount(&"LeftHandItemMount")
-	_right_hand_item_mount = _ensure_mount(&"RightHandItemMount")
+	_left_hand_grip_point = _ensure_mount(&"LeftHandGripPoint")
+	_right_hand_grip_point = _ensure_mount(&"RightHandGripPoint")
+	if not _hand_grip_points_captured:
+		_left_hand_grip_local_transform = _authored_hand_grip_transform(
+			_left_hand_grip_point
+		)
+		_right_hand_grip_local_transform = _authored_hand_grip_transform(
+			_right_hand_grip_point
+		)
+		_hand_grip_points_captured = true
+
+
+func _authored_hand_grip_transform(point: Node3D) -> Transform3D:
+	if point == null or point.get_parent() != self:
+		return Transform3D(Basis.IDENTITY, DEFAULT_HAND_GRIP_LOCAL_POSITION)
+	# An identity transform means the point was synthesized for an older scene, not that a grip was
+	# deliberately authored at the wrist pivot. Keep those scenes usable with the anatomical default.
+	if point.transform == Transform3D.IDENTITY:
+		point.position = DEFAULT_HAND_GRIP_LOCAL_POSITION
+	return point.transform
 
 
 func _ensure_mount(mount_name: StringName) -> Node3D:
@@ -847,6 +1089,59 @@ func _sync_hand_target(
 	skeleton.force_update_bone_child_transform(hand_index)
 
 
+func _sync_locomotion_hand_target(
+	left_side: bool,
+	stride_wave: float,
+	run_weight: float,
+	weight: float
+) -> void:
+	var player_basis := global_basis.orthonormalized()
+	var forward := -player_basis.z
+	var up := player_basis.y
+	var right := player_basis.x
+	var side_sign := -1.0 if left_side else 1.0
+	var eye := _camera_mount.global_position if _camera_mount != null else _bone_world_origin(&"mixamorig_Head")
+	var forward_distance := (
+		lerpf(0.10, 0.24, run_weight)
+		+ stride_wave * lerpf(0.055, 0.14, run_weight)
+	)
+	var target := (
+		eye
+		+ right * side_sign * lerpf(0.27, 0.22, run_weight)
+		- up * lerpf(0.50, 0.39, run_weight)
+		+ forward * forward_distance
+		+ up * absf(stride_wave) * 0.025 * run_weight
+	)
+	target = _clamp_hand_target_to_reach(left_side, target)
+	var bend_hint := (
+		right * side_sign * 0.84
+		- up * 0.08
+		- forward * (0.12 + run_weight * 0.12)
+	).normalized()
+	_sync_hand_target(left_side, target, bend_hint, weight)
+
+
+func _clamp_hand_target_to_reach(
+	left_side: bool,
+	target_world: Vector3
+) -> Vector3:
+	var shoulder := _bone_world_origin(
+		LEFT_UPPER_ARM if left_side else RIGHT_UPPER_ARM
+	)
+	var maximum_reach := (
+		(
+			_left_upper_arm_length + _left_lower_arm_length
+			if left_side
+			else _right_upper_arm_length + _right_lower_arm_length
+		)
+		* HELD_HAND_REACH_RATIO
+	)
+	var offset := target_world - shoulder
+	if offset.length_squared() <= maximum_reach * maximum_reach:
+		return target_world
+	return shoulder + offset.normalized() * maximum_reach
+
+
 func _sync_equipment_mounts(pose: PlayerCharacterPoseController) -> void:
 	_ensure_mounts()
 	force_equipment_attachment_update()
@@ -899,6 +1194,10 @@ func force_equipment_attachment_update() -> void:
 		_left_forearm_attachment.on_skeleton_update()
 	if is_instance_valid(_right_forearm_attachment):
 		_right_forearm_attachment.on_skeleton_update()
+	if is_instance_valid(_left_hand_attachment):
+		_left_hand_attachment.on_skeleton_update()
+	if is_instance_valid(_right_hand_attachment):
+		_right_hand_attachment.on_skeleton_update()
 
 
 func _sync_arm_mounts(
@@ -908,13 +1207,12 @@ func _sync_arm_mounts(
 	up: Vector3,
 	player_basis: Basis
 ) -> void:
-	var hand_name := LEFT_HAND if left_side else RIGHT_HAND
-	var hand := _bone_world_origin(hand_name)
+	var hand_grip := get_hand_grip_world_position(left_side)
 	var arm_basis := (
 		player_basis * Basis.from_euler(arm_rotation)
 	).orthonormalized()
 	var item_mount := (
-		_left_hand_item_mount if left_side else _right_hand_item_mount
+		_left_hand_grip_point if left_side else _right_hand_grip_point
 	)
 	var item_roll := 0.08 if left_side else -0.08
 	var item_basis := (
@@ -923,7 +1221,7 @@ func _sync_arm_mounts(
 	).orthonormalized()
 	_set_mount_world_transform(
 		item_mount,
-		hand + forward * 0.17 + up * 0.035,
+		hand_grip,
 		item_basis
 	)
 
@@ -957,13 +1255,17 @@ func _set_bone_world_pose(
 
 
 func _bone_world_origin(bone_name: StringName) -> Vector3:
+	return _bone_world_transform(bone_name).origin
+
+
+func _bone_world_transform(bone_name: StringName) -> Transform3D:
 	var index := _bone_index(bone_name)
 	if index < 0:
-		return global_position
+		return global_transform
 	return (
 		skeleton.global_transform
 		* skeleton.get_bone_global_pose(index)
-	).origin
+	)
 
 
 func _sync_leg(leg_rig: PlayerProceduralLegRig, side: int) -> void:

@@ -73,17 +73,18 @@ func display_stats() -> Dictionary:
 
 func instantiate_held_visual(
 	_state: Dictionary,
-	first_person := false
+	_first_person := false
 ) -> Node3D:
 	var visual := (
 		visual_scene.instantiate() as Node3D
 		if visual_scene != null
 		else Node3D.new()
 	)
-	visual.position = Vector3(0.0, -0.035, -0.03)
-	visual.rotation_degrees = Vector3(-4.0, 0.0, 0.0)
-	visual.scale = Vector3.ONE * (0.94 if first_person else 1.0)
 	return visual
+
+
+func get_held_presentation_profile(_state: Dictionary) -> StringName:
+	return ItemDefinition.HELD_PROFILE_TOOL
 
 
 func get_inventory_status_text(_state: Dictionary) -> String:

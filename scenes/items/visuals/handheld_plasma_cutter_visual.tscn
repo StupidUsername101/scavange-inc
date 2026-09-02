@@ -62,6 +62,10 @@ position = Vector3(0, -0.17, 0.015)
 rotation = Vector3(-0.18, 0, 0)
 mesh = SubResource("Mesh_grip")
 
+[node name="ItemGripPoint" type="Marker3D" parent="."]
+position = Vector3(0, -0.17, 0.015)
+rotation = Vector3(0.0698132, 0, 0)
+
 [node name="HandGuard" type="MeshInstance3D" parent="."]
 position = Vector3(0, -0.075, -0.115)
 mesh = SubResource("Mesh_guard")

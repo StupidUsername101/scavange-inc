@@ -51,9 +51,11 @@ script = ExtResource("7_character_skin")
 
 [node name="RightWristMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
 
-[node name="LeftHandItemMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
+[node name="LeftHandGripPoint" type="Marker3D" parent="BodyVisual/CharacterSkin"]
+position = Vector3(0, 0.125, 0)
 
-[node name="RightHandItemMount" type="Node3D" parent="BodyVisual/CharacterSkin"]
+[node name="RightHandGripPoint" type="Marker3D" parent="BodyVisual/CharacterSkin"]
+position = Vector3(0, 0.125, 0)
 
 [node name="UpperBodyPose" type="Node3D" parent="BodyVisual"]
 
@@ -97,10 +99,6 @@ position = Vector3(0, 0.02, -0.265)
 [node name="HeldItemMount" type="Node3D" parent="BodyVisual/UpperBodyPose"]
 position = Vector3(0.43, 0.05, -0.32)
 rotation = Vector3(0.04, -0.08, -0.08)
-
-[node name="FirstPersonItemMount" type="Node3D" parent="HeadPivot/Camera3D"]
-position = Vector3(0.22, -0.2, -0.58)
-rotation = Vector3(-0.025, -0.025, 0.0)
 
 [node name="EditAimHit" type="MeshInstance3D" parent="."]
 cast_shadow = 0

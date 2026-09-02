@@ -13,6 +13,7 @@ const DESTRUCTION_MESH_AUDIT := preload(
 const SERVICE_9MM: BallisticProjectileDefinition = preload(
 	"res://resources/weapons/projectiles/service_9mm.tres"
 )
+const DEV_ZOO_CATALOG := preload("res://scripts/enemies/dev_zoo_catalog.gd")
 
 var assertion_count := 0
 var failure_count := 0
@@ -34,6 +35,7 @@ func _run() -> void:
 	_test_sdf_anatomy_survival_contract()
 	_test_continuous_audio_boundary()
 	_test_reversible_world_spawn()
+	await _test_zoo_runtime()
 	await _test_continuous_audio_lifecycle_and_wire_identity()
 	await _test_hidden_player_requires_real_acoustic_stimulus()
 	await _test_authoritative_chase_integration()
@@ -577,15 +579,62 @@ func _test_continuous_audio_boundary() -> void:
 func _test_reversible_world_spawn() -> void:
 	var world_scene := load("res://scenes/server/server_world.tscn") as PackedScene
 	var world := world_scene.instantiate() as Node3D
-	var encounter := world.get_node_or_null("FluteRunnerFieldTest") as ServerEnemy
+	var zoo := world.get_node_or_null("DevZoo") as Node3D
+	var layout := DEV_ZOO_CATALOG.build_layout()
+	var pens: Array = layout.get("pens", [])
+	var definition_paths: Array[String] = []
+	for raw_pen: Variant in pens:
+		definition_paths.append(str((raw_pen as Dictionary).get("definition_path", "")))
 	_expect(
-		encounter != null
-		and encounter.definition != null
-		and encounter.definition.flute_runner != null
-		and encounter.position.distance_to(Vector3(69.0, 0.02, -20.0)) < 0.001,
-		"the removable field-test spawn lives in the shared server world outside the test core"
+		zoo != null
+		and zoo.position.distance_to(DEV_ZOO_CATALOG.WORLD_POSITION) < 0.001
+		and world.get_node_or_null("FluteRunnerFieldTest") == null
+		and definition_paths == DEV_ZOO_CATALOG.FEATURED_DEFINITION_PATHS
+		and (layout.get("nature_props", []) as Array).size() >= 12,
+		"the flute runner and voice mimic live in one removable, nature-dressed zoo encounter"
 	)
 	world.free()
+
+
+func _test_zoo_runtime() -> void:
+	var server_zoo := (
+		load("res://scenes/server/dev_zoo.tscn") as PackedScene
+	).instantiate() as Node3D
+	var client_zoo := (
+		load("res://scenes/proxy/dev_zoo.tscn") as PackedScene
+	).instantiate() as Node3D
+	root.add_child(server_zoo)
+	root.add_child(client_zoo)
+	await process_frame
+	await process_frame
+	var enemies: Array[ServerEnemy] = []
+	for child: Node in server_zoo.get_children():
+		if child is ServerEnemy:
+			enemies.append(child as ServerEnemy)
+	var flute_count := 0
+	var mimic_count := 0
+	for enemy: ServerEnemy in enemies:
+		var runner := enemy.definition.flute_runner if enemy.definition != null else null
+		if runner == null:
+			continue
+		if runner.flute_program_enabled and enemy.get_flute_pose_weight() > 0.9:
+			flute_count += 1
+		if runner.captured_voice_mimic_enabled and enemy.get_flute_pose_weight() < 0.1:
+			mimic_count += 1
+	_expect(
+		enemies.size() == 2
+		and flute_count == 1
+		and mimic_count == 1
+		and server_zoo.get_node_or_null("WoodNatureCollision") != null
+		and server_zoo.get_node_or_null("StoneNatureCollision") != null
+		and server_zoo.get_node_or_null("Pen0GateBar0") != null
+		and client_zoo.get_node_or_null("Pen0Canopy") != null
+		and client_zoo.get_node_or_null("Pen1Canopy") != null,
+		"both contained zoo specimens and their matching collision-backed nature dressing build at runtime"
+	)
+	server_zoo.queue_free()
+	client_zoo.queue_free()
+	await process_frame
 
 
 func _test_continuous_audio_lifecycle_and_wire_identity() -> void:

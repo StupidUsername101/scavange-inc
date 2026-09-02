@@ -87,8 +87,8 @@ func _test_four_player_limit() -> void:
 
 func _test_lobby_compatibility() -> void:
 	_expect(
-		LobbyRules.PROTOCOL_VERSION == "10",
-		"presented foot contacts have an explicit multiplayer protocol"
+		LobbyRules.PROTOCOL_VERSION == "11",
+		"spatial voice and mimic replay have an explicit multiplayer protocol"
 	)
 	_expect(
 		LobbyRules.is_compatible_lobby(
@@ -691,8 +691,12 @@ func _test_transfer_channel_capacity() -> void:
 		and MULTIPLAYER_CHANNELS.has_capacity_for(
 			MULTIPLAYER_CHANNELS.ITEM_SNAPSHOT_CHANNEL,
 			configured_lane_count
+		)
+		and MULTIPLAYER_CHANNELS.has_capacity_for(
+			MULTIPLAYER_CHANNELS.VOICE_CHANNEL,
+			configured_lane_count
 		),
-		"one-shot audio, continuous audio, and interactive items own valid Steam lanes"
+		"audio, interactive items, and voice own valid Steam lanes"
 	)
 	_expect(
 		client_source.contains(

@@ -65,9 +65,14 @@ func _test_authoritative_cut_route() -> void:
 		player.get_plasma_cutter_definition() == CUTTER_DEFINITION,
 		"the selected inventory item owns the cutter operating envelope"
 	)
-	player.set_plasma_cutter_triggered(true)
 	var server := root.get_node_or_null("Server")
 	_expect(server != null, "the authoritative server coordinator is available")
+	_expect(
+		server.call("try_primary_action", player)
+		and player.plasma_cutter_trigger_held
+		and player.plasma_cutter_active,
+		"ordinary primary action energizes the selected handheld cutter before the authoritative cut tick"
+	)
 	server.call("_process_player_plasma_cutter", player)
 	var first_query := player.plasma_cutter_ray_query
 	server.call("_process_player_plasma_cutter", player)
@@ -287,6 +292,12 @@ func _test_physical_emitter_presentation() -> void:
 	var visual := CUTTER_DEFINITION.instantiate_held_visual({}, true)
 	var generic_definition: Resource = CUTTER_DEFINITION
 	root.add_child(visual)
+	visual.transform = CUTTER_DEFINITION.get_held_visual_transform({}, visual)
+	var primary_grip := visual.find_child(
+		ItemDefinition.ITEM_GRIP_POINT_NAME,
+		true,
+		false
+	) as Node3D
 	var emitter := visual.find_child("PlasmaEmitter", true, false) as Node3D
 	var beam := BEAM_SCRIPT.new() as Node3D
 	root.add_child(beam)
@@ -308,9 +319,21 @@ func _test_physical_emitter_presentation() -> void:
 	var impact := beam.get_node_or_null("Impact") as MeshInstance3D
 	_expect(
 		emitter != null
+		and primary_grip != null
 		and generic_definition is ItemDefinition
 		and not generic_definition is EquippableItemDefinition,
-		"the cutter is an ordinary handheld inventory item with its own muzzle"
+		"the cutter is an ordinary handheld inventory item with an authored grip and its own muzzle"
+	)
+	var grip_in_mount := (
+		visual.transform * primary_grip.transform
+		if primary_grip != null
+		else Transform3D.IDENTITY
+	)
+	_expect(
+		primary_grip != null
+		and grip_in_mount.origin.length() < 0.0001
+		and emitter.global_position.distance_to(primary_grip.global_position) > 0.35,
+		"the cutter's ItemGripPoint resolves exactly onto its parent HandGripPoint while its live emitter remains clear"
 	)
 	var warehouse_has_cutter := false
 	for slot_value: Variant in WAREHOUSE_CATALOG.build_layout().get("slots", []):

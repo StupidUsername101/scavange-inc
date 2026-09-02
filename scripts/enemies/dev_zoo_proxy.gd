@@ -1,9 +1,18 @@
 extends Node3D
 
 const CATALOG := preload("res://scripts/enemies/dev_zoo_catalog.gd")
+const NATURE_ASSETS := {
+	&"pine": preload("res://assets/third_party/pizza_doggy/models/nature/pine_tree_1.glb"),
+	&"broadleaf": preload("res://assets/third_party/pizza_doggy/models/nature/tree_8.glb"),
+	&"fern": preload("res://assets/third_party/pizza_doggy/models/nature/fern_1.glb"),
+	&"grass": preload("res://assets/third_party/pizza_doggy/models/nature/grass_1.glb"),
+	&"stone": preload("res://assets/third_party/pizza_doggy/models/nature/stone_2.glb"),
+}
 const WALL_HEIGHT := 1.35
 const WALL_THICKNESS := 0.22
 const ENTRANCE_WIDTH := 3.2
+const GATE_BAR_COUNT := 5
+const GATE_BAR_WIDTH := 0.11
 
 #######################################################
 # Mirrors authoritative dev zoo state on clients and updates its local visual presentation.
@@ -11,15 +20,15 @@ const ENTRANCE_WIDTH := 3.2
 
 var rail_material: StandardMaterial3D
 var floor_material: StandardMaterial3D
-var active_material: StandardMaterial3D
+var ground_material: StandardMaterial3D
 
 
 func _ready() -> void:
 	rail_material = VisualMaterialFactory.standard(Color(0.17, 0.2, 0.23, 1.0), 0.68, 0.38)
 	floor_material = VisualMaterialFactory.standard(Color(0.09, 0.105, 0.115, 1.0), 0.15, 0.84)
-	active_material = VisualMaterialFactory.standard(Color(0.9, 0.24, 0.1, 1.0), 0.2, 0.42)
-	active_material.emission_enabled = true
-	active_material.emission = Color(0.36, 0.035, 0.012, 1.0)
+	ground_material = VisualMaterialFactory.standard(
+		Color(0.115, 0.145, 0.105, 1.0), 0.04, 0.97
+	)
 	_build_zoo(CATALOG.build_layout())
 
 
@@ -40,6 +49,8 @@ func _build_zoo(layout: Dictionary) -> void:
 	)
 	for raw_pen: Variant in layout.get("pens", []):
 		_build_pen(raw_pen as Dictionary)
+	for raw_prop: Variant in layout.get("nature_props", []):
+		_add_nature_prop(raw_prop as Dictionary)
 
 
 func _build_pen(pen: Dictionary) -> void:
@@ -80,7 +91,25 @@ func _build_pen(pen: Dictionary) -> void:
 		"Pen%dMarker" % slot_index,
 		center + Vector3(0.0, 0.035, 0.0),
 		Vector3(size.x - 0.3, 0.02, size.y - 0.3),
-		active_material
+		ground_material
+	)
+	var gate_spacing := ENTRANCE_WIDTH / float(GATE_BAR_COUNT + 1)
+	for gate_index: int in range(GATE_BAR_COUNT):
+		_add_box(
+			"Pen%dGateBar%d" % [slot_index, gate_index],
+			center + Vector3(
+				-ENTRANCE_WIDTH * 0.5 + gate_spacing * float(gate_index + 1),
+				WALL_HEIGHT * 0.58,
+				-size.y * 0.5
+			),
+			Vector3(GATE_BAR_WIDTH, WALL_HEIGHT * 1.16, WALL_THICKNESS),
+			rail_material
+		)
+	_add_box(
+		"Pen%dGateRail" % slot_index,
+		center + Vector3(0.0, WALL_HEIGHT * 1.12, -size.y * 0.5),
+		Vector3(ENTRANCE_WIDTH, WALL_THICKNESS, WALL_THICKNESS),
+		rail_material
 	)
 	_add_label(
 		str(pen["display_name"]),
@@ -103,6 +132,20 @@ func _add_box(
 	instance.name = node_name
 	instance.position = local_position
 	instance.mesh = mesh
+	add_child(instance)
+
+
+func _add_nature_prop(descriptor: Dictionary) -> void:
+	var packed_scene := NATURE_ASSETS.get(
+		StringName(descriptor.get("asset_id", &""))
+	) as PackedScene
+	if packed_scene == null:
+		return
+	var instance := packed_scene.instantiate() as Node3D
+	if instance == null:
+		return
+	instance.name = str(descriptor.get("name", "NatureProp"))
+	instance.transform = CATALOG.descriptor_transform(descriptor)
 	add_child(instance)
 
 

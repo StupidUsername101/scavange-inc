@@ -40,15 +40,21 @@ func _ready() -> void:
 	if Engine.is_editor_hint():
 		return
 
-	item_id = ServerItemFactory.get_next_id()
-	Server.register_item(item_id, self)
+	var item_factory := get_node_or_null("/root/ServerItemFactory")
+	var server := get_node_or_null("/root/Server")
+	if item_factory == null or server == null:
+		return
+	item_id = int(item_factory.call("get_next_id"))
+	server.call("register_item", item_id, self)
 
 
 func _exit_tree() -> void:
 	if Engine.is_editor_hint() or item_id == -1:
 		return
 
-	Server.unregister_item(item_id)
+	var server := get_node_or_null("/root/Server")
+	if server != null:
+		server.call("unregister_item", item_id)
 
 
 func _on_definition_changed() -> void:
@@ -135,7 +141,7 @@ func to_inventory_entry() -> Dictionary:
 
 
 func to_state_dict() -> Dictionary:
-	return {
+	var state := {
 		"item_id": item_id,
 		"definition_path": (
 			definition.resource_path
@@ -155,7 +161,28 @@ func to_state_dict() -> Dictionary:
 			"dev_warehouse_display_name",
 			""
 		)),
+		"economy_category": (
+			definition.economy_category
+			if definition != null
+			else ItemDefinition.EconomyCategory.ITEM
+		),
+		"mass_kg": mass,
+		"value_per_mass": (
+			definition.get_instance_value_per_mass(instance_state)
+			if definition != null
+			else 0.0
+		),
+		"total_value": (
+			definition.get_instance_total_value(instance_state)
+			if definition != null
+			else 0.0
+		),
 	}
+	if definition != null and definition.has_method("to_network_descriptor"):
+		state["authored_level_item"] = definition.call(
+			"to_network_descriptor"
+		)
+	return state
 
 
 func to_motion_state_dict() -> Dictionary:

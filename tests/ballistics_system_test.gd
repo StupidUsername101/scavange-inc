@@ -89,6 +89,18 @@ func _test_modular_gun_contract() -> void:
 		is_equal_approx(gun.get_instance_mass(state), build.get_total_mass()),
 		"crafted component mass determines the physical gun instance"
 	)
+	var world_visual := gun.instantiate_visual_from_state(state)
+	_expect(
+		gun.authored_visual_scene != null
+		and world_visual.find_child("AuthoredPistolModel", true, false) != null
+		and world_visual.find_child(
+			ItemDefinition.ITEM_GRIP_POINT_NAME,
+			true,
+			false
+		) != null,
+		"the service pistol uses the same authored model and handle anchor as a world item"
+	)
+	world_visual.free()
 	var profile := gun.get_ballistic_profile(state)
 	_expect(
 		float(profile.get("muzzle_velocity", 0.0)) > 0.0
@@ -160,13 +172,22 @@ func _test_automatic_rifle_contract() -> void:
 		"rifle receiver selects its matching magazine cues"
 	)
 	var visual := rifle.instantiate_held_visual(state, true)
+	var grip_point := visual.find_child(
+		ItemDefinition.ITEM_GRIP_POINT_NAME,
+		true,
+		false
+	) as Node3D
 	_expect(
 		visual.get_node_or_null("UpperReceiver") != null
 		and visual.get_node_or_null("Handguard") != null
 		and visual.get_node_or_null("Stock") != null
 		and visual.get_node_or_null("MuzzleBrake") != null
-		and visual.get_node_or_null("MagazineLower") != null,
-		"rifle presentation has a stock, handguard, curved magazine, and muzzle detail"
+		and visual.get_node_or_null("MagazineLower") != null
+		and grip_point != null
+		and grip_point.position.distance_to(
+			Vector3(0.0, -0.19, build.receiver.component_size.z * 0.24)
+		) < 0.0001,
+		"rifle presentation has a stock, handguard, curved magazine, muzzle detail, and a grip point at its real handle"
 	)
 	visual.free()
 

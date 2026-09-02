@@ -49,6 +49,9 @@ var _flute_stream_length_seconds := 0.0
 var _flute_playback_started_msec := 0
 var _flute_playback_revision := 1
 var _last_humanoid_step_sequence := 0
+var _mimic_attempt_remaining := 0.0
+var _mimic_attempt_index := 0
+var _last_mimic_target_player_id := -1
 
 
 func _server_service() -> Node:
@@ -149,6 +152,9 @@ func set_active(value: bool) -> void:
 		sensed_target_visible = false
 		sensed_target_audible = false
 		sensed_target_position = Vector3.ZERO
+		var server_service := _server_service()
+		if server_service != null and enemy_id >= 0:
+			server_service.call("cancel_enemy_mimic", enemy_id)
 	elif _is_flute_runner() and _flute_playback_started_msec <= 0:
 		_flute_playback_started_msec = Time.get_ticks_msec()
 	if physical_limb_rig != null:
@@ -282,7 +288,8 @@ func to_state_dict() -> Dictionary:
 			is_instance_valid(sensed_target)
 			or flute_runner_controller.has_last_known_position
 		),
-		"flute_pose_weight": 1.0 if _is_flute_runner() and active and alive else 0.0,
+		"flute_pose_weight": get_flute_pose_weight(),
+		"mimic_voice_active": _is_enemy_mimic_playing(),
 		"anatomy_destruction": (
 			destructible_anatomy.state_dict()
 			if destructible_anatomy != null
@@ -304,6 +311,7 @@ func build_flute_listener_state(
 	var runner := _flute_definition()
 	if (
 		runner == null
+		or not runner.flute_program_enabled
 		or not active
 		or not alive
 		or acoustic_service == null
@@ -448,6 +456,7 @@ func _server_flute_runner_tick(delta: float) -> void:
 	_apply_flute_runner_movement(runner, delta)
 	_update_humanoid_gait(delta)
 	_update_flute_program_loop()
+	_update_captured_voice_mimic(runner, delta)
 
 
 func _sense_flute_runner_target(runner: FluteRunnerDefinition) -> void:
@@ -727,12 +736,83 @@ func _configure_flute_runner() -> void:
 		else AcousticPathModifier.identity()
 	)
 	_flute_stream_length_seconds = 0.0
-	if ResourceLoader.exists(runner.flute_song_path, "AudioStream"):
+	if (
+		runner.flute_program_enabled
+		and ResourceLoader.exists(runner.flute_song_path, "AudioStream")
+	):
 		var stream := load(runner.flute_song_path) as AudioStream
 		if stream != null:
 			_flute_stream_length_seconds = maxf(stream.get_length(), 0.05)
 	_flute_playback_started_msec = Time.get_ticks_msec()
 	_flute_playback_revision = maxi(_flute_playback_revision, 1)
+	_mimic_attempt_index = 0
+	_last_mimic_target_player_id = -1
+	_reset_mimic_attempt_timer(runner)
+
+
+func _update_captured_voice_mimic(
+	runner: FluteRunnerDefinition,
+	delta: float
+) -> void:
+	if not runner.captured_voice_mimic_enabled:
+		return
+	if target_player_id >= 0:
+		_last_mimic_target_player_id = target_player_id
+	if _last_mimic_target_player_id < 0 or _is_enemy_mimic_playing():
+		return
+	var can_speak_in_state := flute_runner_controller.state in [
+		FluteRunnerBehaviorController.State.CURIOUS,
+		FluteRunnerBehaviorController.State.PURSUE,
+		FluteRunnerBehaviorController.State.CHASE,
+		FluteRunnerBehaviorController.State.SEARCH,
+	]
+	if not can_speak_in_state:
+		return
+	_mimic_attempt_remaining -= maxf(delta, 0.0)
+	if _mimic_attempt_remaining > 0.0:
+		return
+	var server_service := _server_service()
+	var scheduled := (
+		server_service != null
+		and bool(server_service.call(
+			"try_schedule_enemy_mimic",
+			enemy_id,
+			_last_mimic_target_player_id
+		))
+	)
+	if scheduled:
+		_reset_mimic_attempt_timer(runner)
+	else:
+		_mimic_attempt_remaining = maxf(
+			runner.mimic_unavailable_retry_seconds,
+			0.1
+		)
+
+
+func _reset_mimic_attempt_timer(runner: FluteRunnerDefinition) -> void:
+	_mimic_attempt_index += 1
+	var minimum := maxf(runner.mimic_interval_min_seconds, 1.0)
+	var maximum := maxf(runner.mimic_interval_max_seconds, minimum)
+	# Deterministic per-enemy jitter keeps authority/replays reproducible while avoiding a regimented
+	# speech metronome. Smoothstep biases neither end of the authored interval.
+	var hash_value := posmod(
+		(maxi(enemy_id, 0) + 1) * 1103515245
+		+ _mimic_attempt_index * 12345,
+		10000
+	)
+	var unit := float(hash_value) / 9999.0
+	unit = unit * unit * (3.0 - 2.0 * unit)
+	_mimic_attempt_remaining = lerpf(minimum, maximum, unit)
+
+
+func _is_enemy_mimic_playing() -> bool:
+	if enemy_id < 0:
+		return false
+	var server_service := _server_service()
+	return (
+		server_service != null
+		and bool(server_service.call("is_enemy_mimic_playing", enemy_id))
+	)
 
 
 func _configure_destructible_anatomy() -> void:
@@ -746,6 +826,9 @@ func _configure_destructible_anatomy() -> void:
 
 
 func _update_flute_program_loop() -> void:
+	var runner := _flute_definition()
+	if runner == null or not runner.flute_program_enabled:
+		return
 	if _flute_stream_length_seconds <= 0.05:
 		return
 	if _flute_elapsed_seconds() < _flute_stream_length_seconds - 0.02:
@@ -769,6 +852,20 @@ func _flute_source_world_position() -> Vector3:
 
 func _is_flute_runner() -> bool:
 	return definition != null and definition.flute_runner != null
+
+
+func get_flute_pose_weight() -> float:
+	var runner := _flute_definition()
+	return (
+		1.0
+		if (
+			runner != null
+			and runner.flute_pose_enabled
+			and active
+			and alive
+		)
+		else 0.0
+	)
 
 
 func _flute_definition() -> FluteRunnerDefinition:
@@ -807,6 +904,7 @@ func _die() -> void:
 	if enemy_id >= 0:
 		var server_service := _server_service()
 		if server_service != null:
+			server_service.call("cancel_enemy_mimic", enemy_id)
 			server_service.call("set_enemy_spatial_active", enemy_id, false)
 	if physical_limb_rig != null:
 		physical_limb_rig.set_ragdoll(true)

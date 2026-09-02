@@ -39,6 +39,7 @@ func _run() -> void:
 	_test_public_inventory_sanitization()
 	_test_ocular_distortion_contract()
 	_test_client_draw_order()
+	await _test_shared_held_item_mounts()
 	_test_server_wiring()
 	_test_starting_loadout_contract()
 
@@ -520,6 +521,149 @@ func _test_client_draw_order() -> void:
 		"the next reliable inventory revision applies equipment immediately"
 	)
 	proxy.free()
+
+
+func _test_shared_held_item_mounts() -> void:
+	var proxy_scene := load(
+		"res://scenes/proxy/player_proxy.tscn"
+	) as PackedScene
+	var pistol := load(
+		"res://resources/items/guns/basic_service_pistol.tres"
+	) as GunItemDefinition
+	var public_entry := PlayerInventoryRules.to_public_entry(
+		PlayerInventoryRules.make_entry(pistol)
+	)
+	var inventory := {
+		"capacity": 1,
+		"selected_slot": 0,
+		"entries": [public_entry],
+		"equipment": {},
+	}
+	var local_proxy := proxy_scene.instantiate() as PlayerProxy
+	root.add_child(local_proxy)
+	local_proxy.set_local_player(true)
+	local_proxy.call("_apply_held_item_state", inventory)
+	var remote_proxy := proxy_scene.instantiate() as PlayerProxy
+	root.add_child(remote_proxy)
+	remote_proxy.set_local_player(false)
+	remote_proxy.call("_apply_held_item_state", inventory)
+	await process_frame
+	var local_mount := local_proxy.character_skin.get_hand_grip_point(false)
+	var remote_mount := remote_proxy.character_skin.get_hand_grip_point(false)
+	_expect(
+		not local_proxy.has_node("HeadPivot/Camera3D/FirstPersonItemMount")
+		and local_proxy.held_item_visual.get_parent() == local_mount
+		and remote_proxy.held_item_visual.get_parent() == remote_mount,
+		"owner and observers attach the selected pistol to the same anatomical hand instead of an owner-only camera mount"
+	)
+	_expect(
+		local_proxy.held_item_visual.position.is_equal_approx(
+			remote_proxy.held_item_visual.position
+		)
+		and local_proxy.held_item_visual.scale.is_equal_approx(
+			remote_proxy.held_item_visual.scale
+		),
+		"the pistol has one replicated world scale and grip transform in first- and third-person presentation"
+	)
+	var pistol_grip := local_proxy.held_item_visual.find_child(
+		ItemDefinition.ITEM_GRIP_POINT_NAME,
+		true,
+		false
+	) as Node3D
+	var pistol_grip_in_hand := (
+		local_mount.global_transform.affine_inverse()
+		* pistol_grip.global_transform
+		if pistol_grip != null
+		else Transform3D.IDENTITY
+	)
+	_expect(
+		pistol_grip != null and pistol_grip_in_hand.origin.length() < 0.001,
+		"the procedural pistol's handle owns an ItemGripPoint joined exactly to the character HandGripPoint"
+	)
+	var cutter := load(
+		"res://resources/items/tools/plasma_cutter_standard.tres"
+	) as PlasmaCutterDefinition
+	var cutter_inventory := {
+		"capacity": 1,
+		"selected_slot": 0,
+		"entries": [PlayerInventoryRules.to_public_entry(
+			PlayerInventoryRules.make_entry(cutter)
+		)],
+		"equipment": {},
+	}
+	local_proxy.call("_apply_held_item_state", cutter_inventory)
+	remote_proxy.call("_apply_held_item_state", cutter_inventory)
+	await process_frame
+	local_mount = local_proxy.character_skin.get_hand_grip_point(false)
+	var cutter_grip := local_proxy.held_item_visual.find_child(
+		ItemDefinition.ITEM_GRIP_POINT_NAME,
+		true,
+		false
+	) as Node3D
+	var cutter_emitter := local_proxy.held_item_visual.find_child(
+		"PlasmaEmitter",
+		true,
+		false
+	) as Node3D
+	var grip_in_hand := (
+		local_mount.global_transform.affine_inverse()
+		* cutter_grip.global_transform
+		if cutter_grip != null
+		else Transform3D.IDENTITY
+	)
+	_expect(
+		local_proxy.held_item_visual.get_parent() == local_mount
+		and remote_proxy.held_item_visual.get_parent()
+		== remote_proxy.character_skin.get_hand_grip_point(false)
+		and cutter_grip != null
+		and cutter_emitter != null
+		and grip_in_hand.origin.length() < 0.001
+		and (
+			cutter_emitter.global_position - cutter_grip.global_position
+		).dot(-local_mount.global_basis.z.normalized()) > 0.35,
+		"the cutter's explicit grip follows the shared anatomical palm and keeps its emitter forward of the hand for owner and observers"
+	)
+	local_proxy.call("_apply_limb_state", {
+		"left_arm": true,
+		"right_arm": false,
+		"left_leg": true,
+		"right_leg": true,
+	})
+	_expect(
+		local_proxy.held_item_visual.get_parent()
+		== local_proxy.character_skin.get_hand_grip_point(true),
+		"a held item mirrors to the surviving anatomical hand instead of disappearing with a missing right arm"
+	)
+	local_proxy.call("_apply_held_item_state", {
+		"capacity": 1,
+		"selected_slot": 0,
+		"entries": [PlayerInventoryRules.to_public_entry(
+			PlayerInventoryRules.make_entry(SODA)
+		)],
+		"equipment": {},
+	})
+	var generated_grip := local_proxy.held_item_visual.find_child(
+		ItemDefinition.ITEM_GRIP_POINT_NAME,
+		true,
+		false
+	) as Node3D
+	var generated_grip_in_hand := (
+		local_proxy.character_skin.get_hand_grip_point(true).global_transform.affine_inverse()
+		* generated_grip.global_transform
+		if generated_grip != null
+		else Transform3D.IDENTITY
+	)
+	_expect(
+		is_instance_valid(local_proxy.held_item_visual)
+		and local_proxy.held_item_definition == SODA
+		and generated_grip != null
+		and bool(generated_grip.get_meta(&"generated_item_grip", false))
+		and generated_grip_in_hand.origin.length() < 0.001,
+		"an unmarked item generates a grip at the point already held by the player and uses the same anchor contract as shaped items"
+	)
+	local_proxy.queue_free()
+	remote_proxy.queue_free()
+	await process_frame
 
 
 func _test_server_wiring() -> void:

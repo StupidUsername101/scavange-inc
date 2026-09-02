@@ -42,7 +42,7 @@ static func create_part_visual(definition: GunPartDefinition) -> Node3D:
 
 static func create_gun_visual(
 	build: GunBuild,
-	first_person := false
+	_first_person := false
 ) -> Node3D:
 	var root := Node3D.new()
 	root.name = "GunVisual"
@@ -53,7 +53,6 @@ static func create_gun_visual(
 		and build.receiver.presentation_profile == &"rifle"
 	):
 		_populate_rifle_visual(root, build)
-		root.scale = Vector3.ONE * (1.04 if first_person else 1.0)
 		return root
 
 	var receiver_color = (
@@ -111,6 +110,7 @@ static func create_gun_visual(
 		grip_material,
 		0.016
 	)
+	_add_item_grip_point(root, Vector3(0.0, -0.18, 0.075))
 	for side: float in [-1.0, 1.0]:
 		_add_box(
 			root,
@@ -265,7 +265,6 @@ static func create_gun_visual(
 			0.01
 		)
 
-	root.scale = Vector3.ONE * (1.08 if first_person else 1.0)
 	return root
 
 
@@ -422,6 +421,10 @@ static func _populate_rifle_visual(root: Node3D, build: GunBuild) -> void:
 		furniture_material,
 		0.016
 	)
+	_add_item_grip_point(
+		root,
+		Vector3(0.0, -0.19, receiver_size.z * 0.24)
+	)
 	_add_torus(
 		root,
 		"TriggerGuard",
@@ -520,6 +523,13 @@ static func _create_root(definition: ItemDefinition) -> Node3D:
 		definition.mesh_size_z
 	) * definition.overall_size
 	return root
+
+
+static func _add_item_grip_point(parent: Node3D, position: Vector3) -> void:
+	var grip_point := Marker3D.new()
+	grip_point.name = ItemDefinition.ITEM_GRIP_POINT_NAME
+	grip_point.position = position
+	parent.add_child(grip_point)
 
 
 static func _create_material(color: Color) -> StandardMaterial3D:

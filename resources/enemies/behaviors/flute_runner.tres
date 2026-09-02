@@ -30,3 +30,4 @@ flute_song_path = "res://assets/sounds/music/gameplay/flute_runner_loop.wav"
 flute_output_level_db = -15.0
 flute_hearing_distance = 74.0
 flute_priority = 0.64
+captured_voice_mimic_enabled = false

@@ -4,11 +4,23 @@ extends Node3D
 const SELECTION_COLOR := Color(1.0, 0.68, 0.16, 0.88)
 const ASSET_SCENE_LOADER := preload("res://scripts/level_editor/level_asset_scene_loader.gd")
 
+static var _surface_bvh_cache: Dictionary[String, TriangleMesh] = {}
+static var _local_bounds_cache: Dictionary[String, AABB] = {}
+
 var placement_id := 0
 var asset_path := ""
+var assembly_group_id := 0
+var assembly_definition_id := ""
+var building_group_id := 0
+var building_storey := 0
 var local_bounds := AABB(Vector3(-0.5, 0.0, -0.5), Vector3.ONE)
+var acoustic_boundary := true
+var gameplay_role := LevelEditorDocument.PLACEMENT_ROLE_STATIC
+var item_mass_kg := 1.0
+var value_per_mass := 0.0
 var visual: Node3D
 var selection_box: MeshInstance3D
+var surface_bvh: TriangleMesh
 
 
 func configure(next_id: int, next_asset_path: String) -> bool:
@@ -20,18 +32,32 @@ func configure(next_id: int, next_asset_path: String) -> bool:
 		return false
 	visual.name = "AssetVisual"
 	add_child(visual)
-	local_bounds = calculate_visual_bounds(visual)
+	if _local_bounds_cache.has(asset_path):
+		local_bounds = _local_bounds_cache[asset_path]
+	else:
+		local_bounds = calculate_visual_bounds(visual)
+		_local_bounds_cache[asset_path] = local_bounds
+	surface_bvh = _surface_bvh_for_asset(asset_path, visual)
 	_create_selection_box()
 	return true
+
+
+static func asset_bounds(path: String) -> AABB:
+	if _local_bounds_cache.has(path):
+		return _local_bounds_cache[path]
+	var asset_visual := ASSET_SCENE_LOADER.instantiate(path)
+	if asset_visual == null:
+		return AABB()
+	var bounds := calculate_visual_bounds(asset_visual)
+	asset_visual.free()
+	if bounds.size.length_squared() > 0.000001:
+		_local_bounds_cache[path] = bounds
+	return bounds
 
 
 func set_selected(value: bool) -> void:
 	if selection_box != null:
 		selection_box.visible = value
-
-
-func floor_offset() -> float:
-	return -local_bounds.position.y
 
 
 func snapshot() -> Dictionary:
@@ -41,6 +67,14 @@ func snapshot() -> Dictionary:
 		"position": position,
 		"rotation": rotation,
 		"scale": scale,
+		"acoustic_boundary": acoustic_boundary,
+		"gameplay_role": gameplay_role,
+		"item_mass_kg": item_mass_kg,
+		"value_per_mass": value_per_mass,
+		"assembly_group_id": assembly_group_id,
+		"assembly_definition_id": assembly_definition_id,
+		"building_group_id": building_group_id,
+		"building_storey": building_storey,
 	}
 
 
@@ -51,43 +85,127 @@ func apply_snapshot(value: Dictionary) -> void:
 	position = safe["position"]
 	rotation = safe["rotation"]
 	scale = safe["scale"]
+	acoustic_boundary = bool(safe.get("acoustic_boundary", true))
+	gameplay_role = safe.get(
+		"gameplay_role",
+		LevelEditorDocument.PLACEMENT_ROLE_STATIC
+	)
+	item_mass_kg = float(safe.get("item_mass_kg", 1.0))
+	value_per_mass = float(safe.get("value_per_mass", 0.0))
+	assembly_group_id = int(safe.get("assembly_group_id", 0))
+	assembly_definition_id = str(safe.get("assembly_definition_id", ""))
+	building_group_id = int(safe.get("building_group_id", 0))
+	building_storey = int(safe.get("building_storey", 0))
 
 
 func ray_distance(ray_origin: Vector3, ray_direction: Vector3) -> float:
-	var inverse := global_transform.affine_inverse()
-	var local_origin := inverse * ray_origin
-	var local_direction := (inverse.basis * ray_direction).normalized()
-	var hit: Variant = local_bounds.intersects_ray(local_origin, local_direction)
-	if not hit is Vector3:
+	var hit := surface_ray_hit(ray_origin, ray_direction)
+	if hit.normal.length_squared() <= 0.000001 or not is_finite(hit.d):
 		return INF
-	return ray_origin.distance_to(global_transform * (hit as Vector3))
+	return hit.d
 
 
-func upward_surface_ray_distance(
-	ray_origin: Vector3,
-	ray_direction: Vector3,
-	minimum_up_normal_y: float
-) -> float:
+func surface_ray_hit(ray_origin: Vector3, ray_direction: Vector3) -> Plane:
 	if ray_direction.length_squared() <= 0.000001:
-		return INF
+		return Plane(Vector3.ZERO, INF)
+	var normalized_direction := ray_direction.normalized()
 	var inverse := global_transform.affine_inverse()
 	var local_origin := inverse * ray_origin
-	var local_direction := inverse.basis * ray_direction.normalized()
+	var local_direction := inverse.basis * normalized_direction
 	if local_direction.length_squared() <= 0.000001:
-		return INF
+		return Plane(Vector3.ZERO, INF)
 	local_direction = local_direction.normalized()
-	var hit: Variant = local_bounds.intersects_ray(local_origin, local_direction)
-	if not hit is Vector3:
-		return INF
-	var local_hit := hit as Vector3
+	# The AABB is only a cheap broad phase. Treating it as the actual surface
+	# seals doors, arches, tunnels, shelves, and every other concave asset.
+	var bounds_hit: Variant = local_bounds.intersects_ray(
+		local_origin,
+		local_direction
+	)
+	if not bounds_hit is Vector3:
+		return Plane(Vector3.ZERO, INF)
+	var local_hit := bounds_hit as Vector3
 	var local_normal := _aabb_surface_normal(local_hit, local_bounds)
+	if surface_bvh != null:
+		var triangle_hit := surface_bvh.intersect_ray(
+			local_origin,
+			local_direction
+		)
+		if triangle_hit.is_empty():
+			return Plane(Vector3.ZERO, INF)
+		local_hit = triangle_hit.get("position", Vector3.INF)
+		local_normal = triangle_hit.get("normal", Vector3.ZERO)
+		if (
+			not local_hit.is_finite()
+			or not local_normal.is_finite()
+			or local_normal.length_squared() <= 0.000001
+		):
+			return Plane(Vector3.ZERO, INF)
 	var normal_basis := global_transform.basis.inverse().transposed()
 	var world_normal := (normal_basis * local_normal).normalized()
-	if not world_normal.is_finite() or world_normal.y < minimum_up_normal_y:
-		return INF
+	if not world_normal.is_finite():
+		return Plane(Vector3.ZERO, INF)
+	if world_normal.dot(normalized_direction) > 0.0:
+		world_normal = -world_normal
 	var world_hit := global_transform * local_hit
-	var distance := (world_hit - ray_origin).dot(ray_direction.normalized())
-	return distance if distance >= 0.0 and is_finite(distance) else INF
+	var distance := (world_hit - ray_origin).dot(normalized_direction)
+	if distance < 0.0 or not is_finite(distance):
+		return Plane(Vector3.ZERO, INF)
+	# Plane is used as a compact value result here: normal stores the hit normal,
+	# d stores distance along the normalized ray. This avoids a Dictionary
+	# allocation for every placed asset on every pointer-motion event.
+	return Plane(world_normal, distance)
+
+
+static func _surface_bvh_for_asset(
+	path: String,
+	visual_root: Node3D
+) -> TriangleMesh:
+	if _surface_bvh_cache.has(path):
+		return _surface_bvh_cache[path]
+	var faces := PackedVector3Array()
+	_collect_mesh_faces(visual_root, Transform3D.IDENTITY, faces)
+	if faces.size() < 3:
+		return null
+	var triangle_mesh := TriangleMesh.new()
+	if not triangle_mesh.create_from_faces(faces):
+		return null
+	_surface_bvh_cache[path] = triangle_mesh
+	return triangle_mesh
+
+
+static func _collect_mesh_faces(
+	node: Node,
+	parent_transform: Transform3D,
+	faces: PackedVector3Array
+) -> void:
+	var current_transform := parent_transform
+	if node is Node3D:
+		current_transform *= (node as Node3D).transform
+	if node is MeshInstance3D:
+		var mesh_instance := node as MeshInstance3D
+		if mesh_instance.mesh != null:
+			var mesh_faces := mesh_instance.mesh.get_faces()
+			for face_vertex: Vector3 in mesh_faces:
+				faces.append(current_transform * face_vertex)
+	for child: Node in node.get_children():
+		_collect_mesh_faces(child, current_transform, faces)
+
+
+func surface_support_distance(world_normal: Vector3) -> float:
+	if world_normal.length_squared() <= 0.000001:
+		return 0.0
+	var normal := world_normal.normalized()
+	var bounds_end := local_bounds.end
+	var minimum_projection := INF
+	for x: float in [local_bounds.position.x, bounds_end.x]:
+		for y: float in [local_bounds.position.y, bounds_end.y]:
+			for z: float in [local_bounds.position.z, bounds_end.z]:
+				var relative_corner := transform.basis * Vector3(x, y, z)
+				minimum_projection = minf(
+					minimum_projection,
+					relative_corner.dot(normal)
+				)
+	return -minimum_projection if is_finite(minimum_projection) else 0.0
 
 
 static func _aabb_surface_normal(point: Vector3, bounds: AABB) -> Vector3:

@@ -4,6 +4,7 @@ extends RefCounted
 const INDUSTRIAL_LAYOUT := preload(
 	"res://scripts/world/industrial_acoustic_complex_layout.gd"
 )
+const DEV_ZOO_LAYOUT := preload("res://scripts/enemies/dev_zoo_catalog.gd")
 
 ## Shared deterministic placement data keeps visual dressing and authoritative collision aligned.
 ## Low-poly foliage is visual-only; a sampled subset of trunks and all rocks use shared baked
@@ -307,6 +308,10 @@ static func _is_excluded(position: Vector2) -> bool:
 		parkour_world_center_3d.x,
 		parkour_world_center_3d.z
 	)
+	var dev_zoo_center := Vector2(
+		DEV_ZOO_LAYOUT.WORLD_POSITION.x,
+		DEV_ZOO_LAYOUT.WORLD_POSITION.z
+	)
 	# Central interaction yard and its connection to the PA bunker.
 	return (
 		_inside_rect(position, Vector2(2.0, -9.0), Vector2(22.0, 25.0))
@@ -363,6 +368,13 @@ static func _is_excluded(position: Vector2) -> bool:
 			position,
 			parkour_world_center,
 			INDUSTRIAL_LAYOUT.MOVEMENT_PARKOUR_LAYOUT.CLEAR_HALF_EXTENTS
+		)
+		# The curated zoo supplies its own sparse nature dressing; keep the global forest from growing
+		# through pens, gates, labels, and the player approach.
+		or _inside_rect(
+			position,
+			dev_zoo_center,
+			DEV_ZOO_LAYOUT.clear_half_extents()
 		)
 	)
 

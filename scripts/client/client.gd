@@ -41,6 +41,12 @@ const LISTENER_ACTIVITY := preload(
 const REPLICATION_SCHEDULE := preload(
 	"res://scripts/network/network_replication_schedule.gd"
 )
+const STEAM_VOICE_CAPTURE := preload(
+	"res://scripts/voice/steam_voice_capture.gd"
+)
+const SPATIAL_VOICE_CHAT_RENDERER := preload(
+	"res://scripts/voice/spatial_voice_chat_renderer.gd"
+)
 
 signal spatial_sound_received(packet: Dictionary)
 signal acoustic_perception_event_rendered(packet: Dictionary)
@@ -51,6 +57,12 @@ signal acoustic_perception_continuous_sample(
 	band_gain: Vector3,
 	enclosure: float
 )
+signal voice_speaking_state_changed(
+	player_id: int,
+	generation: int,
+	active: bool
+)
+signal voice_mimic_consent_changed(enabled: bool)
 
 #######################################################
 # Collects local input, sends player intents to the authority, and owns the lifecycle of
@@ -87,6 +99,11 @@ var primary_action_held_sent := false
 var wrist_input_suspended := false
 var spatial_audio_renderer: SpatialAudioRenderer
 var radio_audio_renderer: RadioAudioRenderer
+var steam_voice_capture
+var spatial_voice_chat_renderer
+var voice_speaking_generation_by_player_id: Dictionary[int, int] = {}
+var voice_speaking_by_player_id: Dictionary[int, bool] = {}
+var local_voice_mimic_consent := false
 var last_network_snapshot_sequence_by_stream: Dictionary[StringName, int] = {}
 var local_audio_prediction_runtime := LOCAL_AUDIO_PREDICTION_RUNTIME.new()
 var next_jump_request_id := 0
@@ -94,7 +111,12 @@ var next_jump_request_id := 0
 
 func reset_session() -> void:
 	for child: Node in get_children():
-		if child == spatial_audio_renderer or child == radio_audio_renderer:
+		if (
+			child == spatial_audio_renderer
+			or child == radio_audio_renderer
+			or child == steam_voice_capture
+			or child == spatial_voice_chat_renderer
+		):
 			continue
 		child.queue_free()
 
@@ -125,6 +147,9 @@ func reset_session() -> void:
 	use_hold_action_sent = false
 	primary_action_held_sent = false
 	wrist_input_suspended = false
+	voice_speaking_generation_by_player_id.clear()
+	voice_speaking_by_player_id.clear()
+	local_voice_mimic_consent = false
 	last_network_snapshot_sequence_by_stream.clear()
 	local_audio_prediction_runtime.reset()
 	next_jump_request_id = 0
@@ -132,6 +157,10 @@ func reset_session() -> void:
 		spatial_audio_renderer.reset_session(true)
 	if is_instance_valid(radio_audio_renderer):
 		radio_audio_renderer.reset_session()
+	if is_instance_valid(steam_voice_capture):
+		steam_voice_capture.reset_session()
+	if is_instance_valid(spatial_voice_chat_renderer):
+		spatial_voice_chat_renderer.reset_session()
 
 
 func register_spatial_sound(
@@ -168,10 +197,16 @@ func get_listener_acoustic_intensity() -> float:
 		if is_instance_valid(radio_audio_renderer)
 		else 0.0
 	)
-	return LISTENER_ACTIVITY.combine_energy(
+	var world_intensity := LISTENER_ACTIVITY.combine_energy(
 		transient_intensity,
 		continuous_intensity
 	)
+	var voice_intensity: float = (
+		spatial_voice_chat_renderer.get_listener_acoustic_intensity()
+		if is_instance_valid(spatial_voice_chat_renderer)
+		else 0.0
+	)
+	return LISTENER_ACTIVITY.combine_energy(world_intensity, voice_intensity)
 
 
 func predict_local_player_sound(
@@ -405,6 +440,47 @@ func _ensure_radio_audio_renderer() -> void:
 	)
 
 
+func _ensure_voice_runtime() -> void:
+	if not is_instance_valid(steam_voice_capture):
+		steam_voice_capture = STEAM_VOICE_CAPTURE.new()
+		steam_voice_capture.name = "SteamVoiceCapture"
+		add_child(steam_voice_capture)
+		steam_voice_capture.speaking_changed.connect(
+			_on_local_voice_speaking_changed
+		)
+		steam_voice_capture.frame_captured.connect(
+			_on_local_voice_frame_captured
+		)
+	if not is_instance_valid(spatial_voice_chat_renderer):
+		spatial_voice_chat_renderer = SPATIAL_VOICE_CHAT_RENDERER.new()
+		spatial_voice_chat_renderer.name = "SpatialVoiceChatRenderer"
+		add_child(spatial_voice_chat_renderer)
+
+
+func _on_local_voice_speaking_changed(active: bool) -> void:
+	if not _has_connected_multiplayer_peer():
+		return
+	Server.rpc_id(HOST_RPC_ID, "receive_voice_speaking", active)
+
+
+func _on_local_voice_frame_captured(
+	sequence: int,
+	captured_msec: int,
+	sample_rate: int,
+	compressed: PackedByteArray
+) -> void:
+	if not _has_connected_multiplayer_peer():
+		return
+	Server.rpc_id(
+		HOST_RPC_ID,
+		"receive_voice_frame",
+		sequence,
+		captured_msec,
+		sample_rate,
+		compressed
+	)
+
+
 func _on_acoustic_perception_continuous_sample(
 	source_id: int,
 	apparent_position: Vector3,
@@ -466,6 +542,10 @@ func _apply_pending_destruction_state() -> void:
 ### PROCESSING
 #####################################################
 func _physics_process(delta: float) -> void:
+	_ensure_voice_runtime()
+	steam_voice_capture.set_session_available(
+		_has_connected_multiplayer_peer()
+	)
 	if not _has_connected_multiplayer_peer():
 		return
 
@@ -686,6 +766,12 @@ func request_wrist_device_sound(sound_id: StringName) -> void:
 		sound_id,
 		prediction_key
 	)
+
+
+func set_voice_mimic_consent(enabled: bool) -> void:
+	if not _has_connected_multiplayer_peer():
+		return
+	Server.rpc_id(HOST_RPC_ID, "set_voice_mimic_consent", enabled)
 
 
 func request_fieldlink_device_control(contact_value: StringName) -> void:
@@ -984,6 +1070,8 @@ func set_local_player_id(player_id: int) -> void:
 		proxy.set_local_player(
 			existing_player_id == local_player_id
 		)
+		if existing_player_id == local_player_id:
+			proxy.apply_voice_mimic_consent(local_voice_mimic_consent)
 
 
 @rpc("authority", "unreliable", "call_local", 5)
@@ -994,6 +1082,39 @@ func on_spatial_sound_received(packet: Dictionary) -> void:
 	spatial_sound_received.emit(sanitized)
 	_ensure_spatial_audio_renderer()
 	spatial_audio_renderer.submit(sanitized)
+
+
+@rpc("authority", "unreliable_ordered", "call_local", 9)
+func on_voice_frame_received(packet: Dictionary) -> void:
+	_ensure_voice_runtime()
+	spatial_voice_chat_renderer.submit(packet)
+
+
+@rpc("authority", "call_local", "reliable", 9)
+func on_voice_speaking_state_received(
+	player_id: int,
+	generation: int,
+	active: bool
+) -> void:
+	if player_id < 0 or generation < 0:
+		return
+	var previous_generation := int(
+		voice_speaking_generation_by_player_id.get(player_id, -1)
+	)
+	if generation < previous_generation:
+		return
+	voice_speaking_generation_by_player_id[player_id] = generation
+	voice_speaking_by_player_id[player_id] = active
+	voice_speaking_state_changed.emit(player_id, generation, active)
+
+
+@rpc("authority", "call_local", "reliable", 9)
+func on_voice_mimic_consent_received(enabled: bool) -> void:
+	local_voice_mimic_consent = enabled
+	var local_proxy := get_local_player_proxy()
+	if local_proxy != null:
+		local_proxy.apply_voice_mimic_consent(enabled)
+	voice_mimic_consent_changed.emit(enabled)
 
 
 @rpc("authority", "call_local", "reliable", 3)
@@ -1339,6 +1460,10 @@ func on_player_states_received(states: Dictionary) -> void:
 
 			add_child(proxy)
 			player_proxys_by_player_id[player_id] = proxy
+			if proxy.is_local_player:
+				proxy.apply_voice_mimic_consent(
+					local_voice_mimic_consent
+				)
 			var pending_inventory: Dictionary = (
 				pending_player_inventory_by_player_id.get(player_id, {})
 			)

@@ -2,6 +2,17 @@
 extends Resource
 class_name ItemDefinition
 
+const HELD_PROFILE_GENERIC: StringName = &"generic"
+const HELD_PROFILE_PISTOL: StringName = &"pistol"
+const HELD_PROFILE_RIFLE: StringName = &"rifle"
+const HELD_PROFILE_TOOL: StringName = &"tool"
+const ITEM_GRIP_POINT_NAME: StringName = &"ItemGripPoint"
+
+enum EconomyCategory {
+	ITEM,
+	VALUABLE,
+}
+
 #######################################################
 # Defines the serialized item configuration shared by gameplay, inspection, and replication
 # systems.
@@ -60,6 +71,17 @@ var _syncing_shape_size := false
 		physical_surface = value
 		emit_changed()
 
+@export_group("Economy")
+@export_enum("Item", "Valuable") var economy_category: int = EconomyCategory.ITEM:
+	set(value):
+		economy_category = clampi(value, EconomyCategory.ITEM, EconomyCategory.VALUABLE)
+		emit_changed()
+
+@export_range(0.0, 1000000000.0, 0.01, "or_greater") var value_per_mass := 0.0:
+	set(value):
+		value_per_mass = maxf(value, 0.0) if is_finite(value) else 0.0
+		emit_changed()
+
 @export_group("Grip")
 @export var grippable := true:
 	set(value):
@@ -75,6 +97,33 @@ var _syncing_shape_size := false
 @export var default_grab_rotation_degrees := Vector3.ZERO:
 	set(value):
 		default_grab_rotation_degrees = value if value.is_finite() else Vector3.ZERO
+		emit_changed()
+
+## Inventory presentation uses the same world-space hands for the owner and every observer. These
+## values describe how the item's authored visual origin sits relative to its primary hand; they are
+## deliberately part of the item definition rather than a camera-only weapon rig.
+@export var held_presentation_profile: StringName = HELD_PROFILE_GENERIC:
+	set(value):
+		held_presentation_profile = (
+			value if not value.is_empty() else HELD_PROFILE_GENERIC
+		)
+		emit_changed()
+
+@export var held_visual_position := Vector3.ZERO:
+	set(value):
+		held_visual_position = value if value.is_finite() else Vector3.ZERO
+		emit_changed()
+
+@export var held_visual_rotation_degrees := Vector3.ZERO:
+	set(value):
+		held_visual_rotation_degrees = (
+			value if value.is_finite() else Vector3.ZERO
+		)
+		emit_changed()
+
+@export_range(0.01, 10.0, 0.01, "or_greater") var held_visual_scale := 1.0:
+	set(value):
+		held_visual_scale = maxf(value, 0.01) if is_finite(value) else 1.0
 		emit_changed()
 
 @export_group("Mesh")
@@ -268,6 +317,89 @@ func instantiate_visual_from_state(_state: Dictionary) -> Node3D:
 	return instantiate_visual()
 
 
+## All grippable inventory items share this presentation contract. Specialized definitions may
+## replace the visual and profile, but never choose a separate owner-only mesh or transform.
+func instantiate_held_visual(
+	state: Dictionary,
+	_first_person := false
+) -> Node3D:
+	# Preserve the ordinary item's authored mesh transform inside a grip-space wrapper. The wrapper
+	# can then be aligned to the hand without erasing mesh offsets used by world/item proxies.
+	var held_root := Node3D.new()
+	held_root.name = "HeldItemVisual"
+	held_root.add_child(instantiate_visual_from_state(state))
+	return held_root
+
+
+func get_held_presentation_profile(_state: Dictionary) -> StringName:
+	return held_presentation_profile
+
+
+func get_held_visual_position(_state: Dictionary) -> Vector3:
+	return held_visual_position
+
+
+func get_held_visual_basis(_state: Dictionary) -> Basis:
+	return Basis.from_euler(Vector3(
+		deg_to_rad(held_visual_rotation_degrees.x),
+		deg_to_rad(held_visual_rotation_degrees.y),
+		deg_to_rad(held_visual_rotation_degrees.z)
+	)).orthonormalized()
+
+
+func get_held_visual_scale(_state: Dictionary) -> float:
+	return maxf(held_visual_scale, 0.01)
+
+
+## Joins the item's grip point to the character's HandGripPoint parent. Shaped items author an
+## ItemGripPoint at their real handle. For an unmarked item, the base definition derives and creates
+## that point from its existing held pose, so every held object follows the same anchor contract.
+func get_held_visual_transform(
+	state: Dictionary,
+	visual: Node3D
+) -> Transform3D:
+	var visual_scale := get_held_visual_scale(state)
+	var legacy_transform := Transform3D(
+		get_held_visual_basis(state).scaled(Vector3.ONE * visual_scale),
+		get_held_visual_position(state)
+	)
+	if visual == null:
+		return legacy_transform
+	var hand_grip_space := Transform3D(
+		Basis.IDENTITY.scaled(Vector3.ONE * visual_scale),
+		Vector3.ZERO
+	)
+	var grip := visual.find_child(
+		ITEM_GRIP_POINT_NAME,
+		true,
+		false
+	) as Node3D
+	if grip == null:
+		grip = Marker3D.new()
+		grip.name = ITEM_GRIP_POINT_NAME
+		# L * G = H: with the legacy item pose L and hand scale H, G is the point on the
+		# untransformed item that already occupied the player's grip. Aligning it reproduces L exactly.
+		grip.transform = legacy_transform.affine_inverse() * hand_grip_space
+		grip.set_meta(&"generated_item_grip", true)
+		visual.add_child(grip)
+	var grip_from_visual := _node_transform_from_ancestor(visual, grip)
+	return hand_grip_space * grip_from_visual.affine_inverse()
+
+
+static func _node_transform_from_ancestor(
+	ancestor: Node3D,
+	descendant: Node3D
+) -> Transform3D:
+	if ancestor == null or descendant == null or ancestor == descendant:
+		return Transform3D.IDENTITY
+	var result := descendant.transform
+	var cursor := descendant.get_parent() as Node3D
+	while cursor != null and cursor != ancestor:
+		result = cursor.transform * result
+		cursor = cursor.get_parent() as Node3D
+	return result if cursor == ancestor else Transform3D.IDENTITY
+
+
 func make_default_instance_state() -> Dictionary:
 	return {}
 
@@ -286,6 +418,18 @@ func get_inventory_status_text(_state: Dictionary) -> String:
 
 func get_instance_mass(_state: Dictionary) -> float:
 	return maxf(mass, 0.01)
+
+
+func is_valuable() -> bool:
+	return economy_category == EconomyCategory.VALUABLE
+
+
+func get_instance_value_per_mass(_state: Dictionary) -> float:
+	return maxf(value_per_mass, 0.0) if is_valuable() else 0.0
+
+
+func get_instance_total_value(state: Dictionary) -> float:
+	return get_instance_mass(state) * get_instance_value_per_mass(state)
 
 
 func get_inventory_code() -> String:

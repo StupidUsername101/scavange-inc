@@ -8,8 +8,8 @@ body but preserve its sound. It also evaluates how a later enemy can repeat or s
 a player's voice after proximity voice chat exists.
 
 This began as a read-only architecture plan. The first server-authoritative vertical slice described
-below was implemented on 2026-08-30; the remaining shared-motor, navigation, voice-chat and mimicry
-work stays explicitly staged rather than being hidden inside that prototype.
+below was implemented on 2026-08-30. The initial proximity-voice and consented captured-phrase
+mimic vertical slice was implemented on 2026-09-01; neural transformation remains explicitly staged.
 
 ## Implementation status — first vertical slice
 
@@ -32,13 +32,25 @@ Implemented:
 - a single removable field-test spawn at the parkour clearing and dedicated headless contract and
   physics-integration coverage.
 
+Implemented in the first voice-mimic slice:
+
+- V push-to-talk through Steam Voice compression and a dedicated loss-tolerant network lane;
+- server-authoritative speaker admission and low-rate listener geometry using the existing acoustic
+  solver, with one shared fixed-pool PCM/DSP renderer for live speech and enemy replay;
+- a bounded jitter buffer and reconnect-aware speaking generations;
+- explicit PBD opt-in for captured mimic memory, defaulting off, with at most three short compressed
+  phrases per player kept only in session memory and erased immediately on revocation/session end;
+- non-periodic flute-runner replay attempts during awareness/chase/search states, sourced from the
+  enemy's actual moving world position.
+
 Deliberately still pending:
 
 - extracting `CharacterLocomotionMotor` from the player without changing established movement;
 - navmesh/path-corridor routing through multi-room structures (the first open-area encounter uses
   bounded local steering and target memory);
 - shared missing-limb enemy capability state and authoritative enemy ragdoll anchors/recovery;
-- proximity voice chat, captured phrase replay, inference benchmarking and all mimicry consent/UI.
+- cross-platform non-Steam voice fallback, inference benchmarking, optional voice transformation,
+  mute/settings UI and transcription-derived semantic phrase selection.
 
 The field-test enemy therefore proves the architecture and is playable, but is not being presented
 as the completion of every later phase in this document.

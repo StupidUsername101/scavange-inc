@@ -8,6 +8,7 @@ const CLIENT_WORLD_PATH := "res://scenes/proxy/world.tscn"
 const PISTOL_PATH := "res://resources/items/guns/basic_service_pistol.tres"
 const GARAGE_LAYOUT := preload("res://scripts/world/speaker_cluster_demo_layout.gd")
 const NATURE_LAYOUT := preload("res://scripts/world/world_nature_layout.gd")
+const DEV_ZOO_LAYOUT := preload("res://scripts/enemies/dev_zoo_catalog.gd")
 
 var failure_count := 0
 var assertion_count := 0
@@ -159,6 +160,12 @@ func _test_shared_layout_contract() -> void:
 	var nature_clear := true
 	var parkour_nature_clear := true
 	var warehouse_nature_clear := true
+	var zoo_nature_clear := true
+	var zoo_center := Vector2(
+		DEV_ZOO_LAYOUT.WORLD_POSITION.x,
+		DEV_ZOO_LAYOUT.WORLD_POSITION.z
+	)
+	var zoo_clear_half_extents := DEV_ZOO_LAYOUT.clear_half_extents()
 	for descriptor: Dictionary in NATURE_LAYOUT.visual_descriptors():
 		var nature_position: Vector3 = descriptor.get("position", Vector3.ZERO)
 		var hall_delta := Vector2(nature_position.x, nature_position.z) - hall_world_center
@@ -170,6 +177,12 @@ func _test_shared_layout_contract() -> void:
 			Vector2(nature_position.x, nature_position.z)
 			- NATURE_LAYOUT.DEV_WAREHOUSE_CENTER
 		)
+		var zoo_delta := Vector2(nature_position.x, nature_position.z) - zoo_center
+		if (
+			absf(zoo_delta.x) <= zoo_clear_half_extents.x
+			and absf(zoo_delta.y) <= zoo_clear_half_extents.y
+		):
+			zoo_nature_clear = false
 		if (
 			absf(warehouse_delta.x)
 			<= NATURE_LAYOUT.DEV_WAREHOUSE_HALF_EXTENTS.x
@@ -207,6 +220,10 @@ func _test_shared_layout_contract() -> void:
 	_expect(
 		warehouse_nature_clear,
 		"procedural nature leaves the relocated warehouse shelf and its frontage clear"
+	)
+	_expect(
+		zoo_nature_clear,
+		"global forest generation leaves the zoo pens to their curated nature dressing"
 	)
 	var tunnel_acoustic_descriptors := LAYOUT.tunnel_acoustic_probe_descriptors()
 	var acoustic_counts_by_run: Dictionary[StringName, Dictionary] = {}
@@ -898,10 +915,14 @@ func _test_active_world_replacement() -> void:
 	var client_environment := client_world.get_node_or_null("IndustrialAcousticComplex") as Node3D
 	var server_warehouse := server_world.get_node_or_null("DevWarehouse") as Node3D
 	var client_warehouse := client_world.get_node_or_null("DevWarehouse") as Node3D
+	var server_zoo := server_world.get_node_or_null("DevZoo") as Node3D
+	var client_zoo := client_world.get_node_or_null("DevZoo") as Node3D
 	_expect(
-		server_world.get_node_or_null("DevZoo") == null
-		and client_world.get_node_or_null("DevZoo") == null,
-		"the active server and client worlds no longer instantiate the legacy enemy zoo"
+		server_zoo != null
+		and client_zoo != null
+		and server_zoo.transform == client_zoo.transform
+		and server_zoo.position.is_equal_approx(DEV_ZOO_LAYOUT.WORLD_POSITION),
+		"server authority and client presentation share the curated enemy zoo placement"
 	)
 	_expect(
 		server_environment != null
@@ -937,37 +958,26 @@ func _test_pistol_presentation_and_sound_registration() -> void:
 	)
 	_expect(
 		visual != null
-		and visual.get_node_or_null("Slide") != null
-		and visual.get_node_or_null("SlideNose") != null
-		and visual.get_node_or_null("ReceiverFrame") != null
-		and visual.get_node_or_null("TriggerGuard") != null
-		and visual.get_node_or_null("EjectionPort") != null,
-		"service pistol presentation has a shaped slide, frame, trigger guard and ejection detail"
+		and pistol.authored_visual_scene != null
+		and visual.find_child("AuthoredPistolModel", true, false) != null
+		and visual.find_child("pistol_mp_1_slide", true, false) != null
+		and visual.find_child(ItemDefinition.ITEM_GRIP_POINT_NAME, true, false) != null
+		and visual.find_child("MuzzlePoint", true, false) != null,
+		"service pistol presentation uses the authored PSX model with explicit handle and muzzle anchors"
 	)
 	if visual != null:
-		var slide := visual.get_node_or_null("Slide") as MeshInstance3D
-		var barrel := visual.get_node_or_null("Barrel") as MeshInstance3D
-		var slide_material := (
-			slide.mesh.surface_get_material(0) as StandardMaterial3D
-			if slide != null and slide.mesh != null
-			else null
-		)
-		var slide_bounds := (
-			slide.transform * slide.mesh.get_aabb()
-			if slide != null and slide.mesh != null
-			else AABB()
-		)
-		var barrel_bounds := (
-			barrel.transform * barrel.mesh.get_aabb()
-			if barrel != null and barrel.mesh != null
-			else AABB()
-		)
+		var grip := visual.find_child(
+			ItemDefinition.ITEM_GRIP_POINT_NAME,
+			true,
+			false
+		) as Node3D
+		var muzzle := visual.find_child("MuzzlePoint", true, false) as Node3D
 		_expect(
-			slide_material != null
-			and slide_material.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED
-			and slide_material.cull_mode == BaseMaterial3D.CULL_DISABLED
-			and barrel_bounds.end.z < slide_bounds.position.z,
-			"pistol slide is opaque and its visible barrel no longer intersects the closed shell"
+			grip != null
+			and muzzle != null
+			and muzzle.position.z < grip.position.z
+			and grip.position.y < muzzle.position.y,
+			"authored pistol points its muzzle forward while its grip anchor remains inside the handle"
 		)
 	if visual != null:
 		visual.free()

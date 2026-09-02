@@ -26,6 +26,7 @@ func _run() -> void:
 	await _test_all_variants_backpack_mount_contract()
 	await _test_variant_swap_preserves_equipment_mounts()
 	await _test_procedural_leg_retargeting()
+	await _test_shared_hand_presentation()
 	await _test_missing_limb_and_first_person_masks()
 	await _test_late_join_corpse_uses_authored_skin()
 	if failure_count == 0:
@@ -87,6 +88,12 @@ func _test_selected_variants_share_runtime_contract() -> void:
 		var right_mount := skin.get_wrist_mount(false)
 		var left_attachment := left_mount.get_parent() as BoneAttachment3D
 		var right_attachment := right_mount.get_parent() as BoneAttachment3D
+		var left_hand_attachment := (
+			skin.get_hand_grip_point(true).get_parent() as BoneAttachment3D
+		)
+		var right_hand_attachment := (
+			skin.get_hand_grip_point(false).get_parent() as BoneAttachment3D
+		)
 		_expect(
 			left_attachment != null
 			and right_attachment != null
@@ -97,6 +104,18 @@ func _test_selected_variants_share_runtime_contract() -> void:
 				PlayerCharacterSkin.RIGHT_FOREARM
 			),
 			"selected male variant %d exposes real left/right forearm equipment attachments"
+			% player_id
+		)
+		_expect(
+			left_hand_attachment != null
+			and right_hand_attachment != null
+			and left_hand_attachment.bone_idx == skin.skeleton.find_bone(
+				PlayerCharacterSkin.LEFT_HAND
+			)
+			and right_hand_attachment.bone_idx == skin.skeleton.find_bone(
+				PlayerCharacterSkin.RIGHT_HAND
+			),
+			"selected male variant %d binds anatomical grip points to its actual left/right hand bones"
 			% player_id
 		)
 		skin.queue_free()
@@ -415,6 +434,110 @@ func _test_missing_limb_and_first_person_masks() -> void:
 		"remote observers retain the authored head"
 	)
 	skin.queue_free()
+	await process_frame
+
+
+func _test_shared_hand_presentation() -> void:
+	var fixture := Node3D.new()
+	root.add_child(fixture)
+	_add_floor(fixture)
+	var body_root := Node3D.new()
+	body_root.position.y = 0.985
+	fixture.add_child(body_root)
+	var rig := RIG_SCENE.instantiate() as PlayerProceduralLegRig
+	body_root.add_child(rig)
+	var skin := PlayerCharacterSkin.new()
+	body_root.add_child(skin)
+	skin.set_player_identity(1)
+	await physics_frame
+	await physics_frame
+	rig.update_pose(STEP, Vector3(0.0, 0.0, -5.0), true, 2.5, true)
+	var pose := PlayerCharacterPoseController.new()
+	pose.set_expression_identity(1)
+	for frame: int in range(20):
+		pose.update(
+			STEP,
+			float(frame) * STEP,
+			2.5 + float(frame) * 0.08,
+			1.0,
+			1.0,
+			0.0,
+			Vector3(0.0, 0.0, -5.0),
+			true,
+			false,
+			rig,
+			true,
+			true,
+			true,
+			true
+		)
+	skin.sync_from_procedural_pose(rig, pose)
+	skin.sync_locomotion_hands(3.15, 1.0, 1.0)
+	var eye := skin.get_camera_mount().global_position
+	var left_from_eye := skin.global_basis.inverse() * (
+		skin.get_hand_world_position(true) - eye
+	)
+	var right_from_eye := skin.global_basis.inverse() * (
+		skin.get_hand_world_position(false) - eye
+	)
+	_expect(
+		left_from_eye.y < -0.20
+		and right_from_eye.y < -0.20
+		and left_from_eye.z < -0.08
+		and right_from_eye.z < -0.08
+		and left_from_eye.x < -0.05
+		and right_from_eye.x > 0.05,
+		"the shared running pose bends both real hands into the lower first-person field while retaining their anatomical sides"
+	)
+
+	skin.sync_from_procedural_pose(rig, pose)
+	var aim_basis := skin.global_basis.orthonormalized()
+	skin.sync_held_item_hands(
+		ItemDefinition.HELD_PROFILE_RIFLE,
+		aim_basis,
+		3.15,
+		1.0,
+		1.0,
+		false
+	)
+	var right_hand := skin.get_hand_world_position(false)
+	var left_hand := skin.get_hand_world_position(true)
+	var rifle_mount := skin.get_hand_grip_point(false)
+	var right_grip := skin.get_hand_grip_world_position(false)
+	_expect(
+		rifle_mount.global_position.distance_to(right_grip) < 0.001
+		and right_grip.distance_to(right_hand)
+		> PlayerCharacterSkin.DEFAULT_HAND_GRIP_LOCAL_POSITION.length() * 0.95
+		and (left_hand - right_hand).dot(-aim_basis.z) > 0.045
+		and left_hand.x < right_hand.x,
+		(
+			"a two-handed rifle is owned by the primary hand while the surviving support hand reaches its forward handguard (mount %.4f, lead %.4f, lateral %.4f, left=%s right=%s eye=%s)"
+			% [
+				rifle_mount.global_position.distance_to(right_grip),
+				(left_hand - right_hand).dot(-aim_basis.z),
+				left_hand.x - right_hand.x,
+				left_hand,
+				right_hand,
+				eye,
+			]
+		)
+	)
+	var owner_forward := -rifle_mount.global_basis.z.normalized()
+	skin.set_local_view(true)
+	skin.sync_from_procedural_pose(rig, pose)
+	skin.sync_held_item_hands(
+		ItemDefinition.HELD_PROFILE_RIFLE,
+		aim_basis,
+		3.15,
+		1.0,
+		1.0,
+		false
+	)
+	_expect(
+		owner_forward.dot(-skin.get_hand_grip_point(false).global_basis.z.normalized()) > 0.999,
+		"first-person head masking does not create a second weapon pose or alter the shared rifle direction"
+	)
+	fixture.queue_free()
 	await process_frame
 
 

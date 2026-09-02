@@ -62,6 +62,9 @@ const LOCAL_AUDIO_PREDICTION := preload(
 const ACOUSTIC_STIMULUS_LEDGER := preload(
 	"res://scripts/enemies/acoustic_stimulus_ledger.gd"
 )
+const SERVER_VOICE_CHAT_SERVICE := preload(
+	"res://scripts/voice/server_voice_chat_service.gd"
+)
 const STEAM_PRESENCE_CONNECT := "connect"
 const STEAM_PRESENCE_STATUS := "status"
 const STEAM_PRESENCE_GROUP := "steam_player_group"
@@ -70,6 +73,9 @@ const STEAM_PRESENCE_GROUP_SIZE := "steam_player_group_size"
 const SERVER_WORLD_SCENE := preload("res://scenes/server/server_world.tscn")
 const SERVER_PLAYER_SCENE := preload("res://scenes/server/server_player.tscn")
 const SERVER_ITEM_SCENE := preload("res://scenes/server/server_item.tscn")
+const LEVEL_GAMEPLAY_RUNTIME_BUILDER := preload(
+	"res://scripts/level_editor/level_gameplay_runtime_builder.gd"
+)
 const SERVER_RADIO_SCENE := preload("res://scenes/server/server_radio.tscn")
 const SERVER_DRONE_PART_SCENE := preload(
 	"res://scenes/server/server_drone_part.tscn"
@@ -175,6 +181,7 @@ var steam_init_message := "Steam has not been initialized."
 var lobby_operation_generation := 0
 var session_teardown_active := false
 var acoustic_service: ServerAcousticService
+var voice_chat_service
 var next_spatial_sound_sequence := 0
 var fieldlink_next_command_msec_by_player_id: Dictionary[int, int] = {}
 var pending_admission_peer_ids: Dictionary[int, int] = {}
@@ -213,6 +220,8 @@ func _ready() -> void:
 		ENABLE_ACOUSTIC_HYBRID_EARLY_REFLECTIONS
 	)
 	add_child(acoustic_service)
+	voice_chat_service = SERVER_VOICE_CHAT_SERVICE.new()
+	voice_chat_service.bind(self)
 
 	Steam.lobby_created.connect(_on_lobby_created)
 	Steam.lobby_joined.connect(_on_lobby_joined)
@@ -318,6 +327,9 @@ func _physics_process(delta: float) -> void:
 		if is_instance_valid(enemy):
 			enemy.server_physics_tick(delta)
 
+	if voice_chat_service != null:
+		voice_chat_service.tick(delta, Time.get_ticks_msec())
+
 	_update_spatial_hash_positions()
 
 	for drone: ServerDrone in server_drones_by_drone_id.values():
@@ -354,6 +366,11 @@ func spawn_server_world() -> void:
 	add_child(server_world)
 	_register_server_destructible_volumes()
 	acoustic_service.bind_world(server_world)
+	var authored_items := LEVEL_GAMEPLAY_RUNTIME_BUILDER.spawn_active_level_items(
+		Callable(self, "spawn_item")
+	)
+	if not authored_items.is_empty():
+		print("spawned authored level items: ", authored_items.size())
 
 	print("spawned server world: ", server_world.get_path())
 
@@ -371,6 +388,7 @@ func register_peer(peer_id: int, steam_id := 0) -> bool:
 	var routed_player_id := GameState.get_player_id(peer_id)
 	if routed_player_id != -1:
 		pending_admission_peer_ids.erase(peer_id)
+		_ensure_voice_player_registered(routed_player_id)
 		_send_initial_session_state(peer_id, routed_player_id)
 		return true
 
@@ -390,6 +408,7 @@ func register_peer(peer_id: int, steam_id := 0) -> bool:
 			_finalize_disconnected_player(reserved_player_id, resolved_steam_id)
 		elif GameState.rebind_player_peer(reserved_player_id, peer_id):
 			pending_admission_peer_ids.erase(peer_id)
+			_ensure_voice_player_registered(reserved_player_id)
 			_send_initial_session_state(peer_id, reserved_player_id)
 			print(
 				"PLAYER SESSION RESUMED: steam_id=",
@@ -427,6 +446,7 @@ func register_peer(peer_id: int, steam_id := 0) -> bool:
 			null,
 			_get_starting_body_loadout(player_id)
 		)
+	_ensure_voice_player_registered(player_id)
 
 	_send_initial_session_state(peer_id, player_id)
 
@@ -445,10 +465,50 @@ func _send_initial_session_state(peer_id: int, player_id: int) -> void:
 		return
 	Client.rpc_id(peer_id, "set_local_player_id", player_id)
 	Client.rpc_id(peer_id, "spawn_client_world")
+	if voice_chat_service != null:
+		Client.rpc_id(
+			peer_id,
+			"on_voice_mimic_consent_received",
+			voice_chat_service.has_mimic_consent(player_id)
+		)
 	publish_destruction_checkpoints_to_peer(peer_id)
 	publish_destruction_fragments_to_peer(peer_id)
 	replication_service.publish_all_player_inventories_to_peer(peer_id)
 	replication_service.force_optional_snapshot_refresh()
+
+
+func _ensure_voice_player_registered(player_id: int) -> void:
+	if (
+		voice_chat_service != null
+		and voice_chat_service.generation_for_player(player_id) < 0
+	):
+		voice_chat_service.register_player(player_id)
+
+
+func get_peer_id_for_player(player_id: int) -> int:
+	var state := GameState.get_player_state(player_id)
+	return state.peer_id if state != null and state.connected else -1
+
+
+func publish_voice_speaking_state_to_peer(
+	peer_id: int,
+	player_id: int,
+	generation: int,
+	active: bool
+) -> void:
+	if _is_rpc_peer_reachable(peer_id):
+		Client.rpc_id(
+			peer_id,
+			"on_voice_speaking_state_received",
+			player_id,
+			generation,
+			active
+		)
+
+
+func publish_voice_frame_to_peer(peer_id: int, packet: Dictionary) -> void:
+	if _is_rpc_peer_reachable(peer_id):
+		Client.rpc_id(peer_id, "on_voice_frame_received", packet)
 
 
 func _on_player_inventory_changed(_revision: int, player_id: int) -> void:
@@ -4169,6 +4229,8 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	# application route immediately, but preserve its authoritative body and inventory behind a
 	# Steam-identity lease. A momentary outage must not turn into an in-world death/drop event.
 	GameState.suspend_peer(peer_id)
+	if voice_chat_service != null:
+		voice_chat_service.suspend_player(player_id)
 
 	var player := get_server_player(player_id)
 	if player != null:
@@ -4216,6 +4278,8 @@ func _finalize_disconnected_player(player_id: int, steam_id: int) -> void:
 	if player_state == null or player_state.connected:
 		return
 	reconnect_ledger.erase(steam_id)
+	if voice_chat_service != null:
+		voice_chat_service.forget_player(player_id)
 	# Routing remains invalid while teardown emits item/PBD sounds to the surviving peers.
 	GameState.unregister_player(player_id)
 	if acoustic_service != null:
@@ -4606,6 +4670,8 @@ func _clear_runtime_session() -> void:
 	server_world = null
 	if acoustic_service != null:
 		acoustic_service.bind_world(null)
+	if voice_chat_service != null:
+		voice_chat_service.reset()
 
 	server_players_by_player_id.clear()
 	server_items_by_item_id.clear()
@@ -4815,6 +4881,79 @@ func _get_lobby_join_error(response: int) -> String:
 			return "Steam is rate-limiting lobby joins. Try again shortly."
 		_:
 			return "Steam could not join the lobby (response %d)." % response
+
+func try_schedule_enemy_mimic(enemy_id: int, target_player_id: int) -> bool:
+	return (
+		voice_chat_service != null
+		and voice_chat_service.try_schedule_enemy_mimic(
+			enemy_id,
+			target_player_id
+		)
+	)
+
+
+func is_enemy_mimic_playing(enemy_id: int) -> bool:
+	return (
+		voice_chat_service != null
+		and voice_chat_service.is_enemy_mimic_playing(enemy_id)
+	)
+
+
+func cancel_enemy_mimic(enemy_id: int) -> void:
+	if voice_chat_service != null:
+		voice_chat_service.cancel_enemy_mimic(enemy_id)
+
+
+@rpc("any_peer", "call_local", "reliable", 9)
+func receive_voice_speaking(active: bool) -> void:
+	if not multiplayer.is_server() or voice_chat_service == null:
+		return
+	var player := get_sending_player()
+	if player != null:
+		voice_chat_service.set_speaking(
+			player.player_id,
+			active,
+			Time.get_ticks_msec()
+		)
+
+
+@rpc("any_peer", "call_local", "unreliable_ordered", 9)
+func receive_voice_frame(
+	sequence: int,
+	captured_msec: int,
+	sample_rate: int,
+	compressed: PackedByteArray
+) -> void:
+	if not multiplayer.is_server() or voice_chat_service == null:
+		return
+	var player := get_sending_player()
+	if player != null:
+		voice_chat_service.receive_frame(
+			player.player_id,
+			sequence,
+			captured_msec,
+			sample_rate,
+			compressed,
+			Time.get_ticks_msec()
+		)
+
+
+@rpc("any_peer", "call_local", "reliable", 9)
+func set_voice_mimic_consent(enabled: bool) -> void:
+	if not multiplayer.is_server() or voice_chat_service == null:
+		return
+	var player := get_sending_player()
+	if player == null:
+		return
+	if voice_chat_service.set_mimic_consent(player.player_id, enabled):
+		var state := GameState.get_player_state(player.player_id)
+		if state != null and _is_rpc_peer_reachable(state.peer_id):
+			Client.rpc_id(
+				state.peer_id,
+				"on_voice_mimic_consent_received",
+				enabled
+			)
+
 
 @rpc("any_peer", "call_local", "reliable", 3)
 func receive_jump(

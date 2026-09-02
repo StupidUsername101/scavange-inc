@@ -16,6 +16,7 @@ signal device_command_requested(
 	payload: Dictionary
 )
 signal display_page_changed(page: StringName)
+signal voice_mimic_consent_changed(enabled: bool)
 
 const DEVICE_SCANNER := preload(
 	"res://scripts/client/wrist_device_scanner.gd"
@@ -63,6 +64,7 @@ var scanner_range_meters := 36.0
 var scanner_heading_yaw := 0.0
 var latest_contact_id: StringName = &""
 var selected_contact_id: StringName = &""
+var voice_mimic_consent := false
 
 var session_value: Label
 var invite_button: Button
@@ -82,6 +84,7 @@ var scanner_status_label: Label
 var device_panel_host: Control
 var device_control_panel: FieldlinkDeviceControlPanel
 var device_placeholder_label: Label
+var voice_mimic_button: Button
 var pointer_position := SCREEN_SIZE * 0.5
 var pointer_visible := false
 var pointer_ring: Control
@@ -105,6 +108,11 @@ func set_session_info(next_label: String, can_invite: bool) -> void:
 			if invite_available
 			else INVITE_HINT_UNAVAILABLE
 		))
+
+
+func set_voice_mimic_consent(enabled: bool) -> void:
+	voice_mimic_consent = enabled
+	_update_voice_mimic_button()
 
 
 func set_scanner_contacts(
@@ -442,10 +450,35 @@ func _build_home_page() -> void:
 	)
 	_add_label(
 		network_card,
-		"LINK  OK\nAUTH  STEAM\nMODE  CO-OP",
-		Rect2(14.0, 34.0, 189.0, 72.0),
-		15,
+		"VOICE [V]  READY",
+		Rect2(14.0, 31.0, 189.0, 22.0),
+		13,
 		COLOR_TEXT
+	)
+	voice_mimic_button = _add_action_button(
+		network_card,
+		"VoiceMimicConsent",
+		"",
+		Rect2(10.0, 56.0, 197.0, 50.0),
+		COLOR_ACCENT,
+		"Allow enemies to replay up to three short voice phrases in this session. Nothing is saved to disk.",
+		13
+	)
+	voice_mimic_button.pressed.connect(_on_voice_mimic_pressed)
+	_update_voice_mimic_button()
+
+
+func _on_voice_mimic_pressed() -> void:
+	voice_mimic_consent_changed.emit(not voice_mimic_consent)
+
+
+func _update_voice_mimic_button() -> void:
+	if voice_mimic_button == null:
+		return
+	voice_mimic_button.text = (
+		"MIMIC MEMORY  ON"
+		if voice_mimic_consent
+		else "MIMIC MEMORY  OFF"
 	)
 
 

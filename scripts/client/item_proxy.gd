@@ -1,6 +1,10 @@
 extends Node3D
 class_name ItemProxy
 
+const AUTHORED_LEVEL_ITEM_DEFINITION := preload(
+	"res://scripts/level_editor/authored_level_item_definition.gd"
+)
+
 const INTERP_SPEED := 20.0
 const GRABBED_INTERP_SPEED := 30.0
 const MAX_EXTRAPOLATION_TIME := 0.20
@@ -37,7 +41,8 @@ func from_server_state(state: Dictionary) -> void:
 
 	_apply_definition(
 		str(state.get("definition_path", "")),
-		SafeVariant.dictionary_copy(state.get("instance_state", {}))
+		SafeVariant.dictionary_copy(state.get("instance_state", {})),
+		SafeVariant.dictionary_copy(state.get("authored_level_item", {}))
 	)
 	fieldlink_status_text = "ONLINE"
 	if item_definition is RadioItemDefinition:
@@ -147,11 +152,20 @@ func _process(delta: float) -> void:
 
 func _apply_definition(
 	new_definition_path: String,
-	instance_state: Dictionary
+	instance_state: Dictionary,
+	authored_descriptor := {}
 ) -> void:
-	var next_signature := JSON.stringify(instance_state)
+	var safe_authored_descriptor := (
+		authored_descriptor as Dictionary
+		if authored_descriptor is Dictionary
+		else {}
+	)
+	var next_signature := JSON.stringify([
+		instance_state,
+		safe_authored_descriptor,
+	])
 	if (
-		new_definition_path.is_empty()
+		(new_definition_path.is_empty() and safe_authored_descriptor.is_empty())
 		or (
 			new_definition_path == definition_path
 			and next_signature == visual_state_signature
@@ -159,13 +173,17 @@ func _apply_definition(
 	):
 		return
 
-	var resource := load(new_definition_path)
-
+	var resource: Resource
+	if not safe_authored_descriptor.is_empty():
+		var authored_definition := AUTHORED_LEVEL_ITEM_DEFINITION.new()
+		if authored_definition.configure_from_network_descriptor(
+			safe_authored_descriptor
+		):
+			resource = authored_definition
+	else:
+		resource = load(new_definition_path)
 	if not resource is ItemDefinition:
-		push_error(
-			"Invalid item definition: %s"
-			% new_definition_path
-		)
+		push_error("Invalid item definition: %s" % new_definition_path)
 		return
 
 	definition_path = new_definition_path

@@ -1,0 +1,14 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="res://assets/third_party/pizza_doggy/models/weapons/service_pistol.glb" id="1_model"]
+
+[node name="ServicePistolVisual" type="Node3D"]
+
+[node name="AuthoredPistolModel" parent="." instance=ExtResource("1_model")]
+rotation = Vector3(0, 1.5708, 0)
+
+[node name="ItemGripPoint" type="Marker3D" parent="."]
+position = Vector3(0, -0.035, 0.028)
+
+[node name="MuzzlePoint" type="Marker3D" parent="."]
+position = Vector3(0, 0.07, -0.203)

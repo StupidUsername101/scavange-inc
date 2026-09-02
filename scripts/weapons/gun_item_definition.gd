@@ -10,6 +10,11 @@ extends ItemDefinition
 @export_group("Firearm")
 @export var default_build: GunBuild
 
+@export_group("Presentation")
+## Complete authored presentation for this particular weapon item. Modular/fabricated guns leave
+## this empty and continue to use geometry assembled from their selected parts.
+@export var authored_visual_scene: PackedScene
+
 const BUILD_SIGNATURE_KEY := "build_signature"
 
 
@@ -120,14 +125,33 @@ func instantiate_visual() -> Node3D:
 
 func instantiate_visual_from_state(state: Dictionary) -> Node3D:
 	var visual_root: Node3D = _create_visual_root()
-	visual_root.add_child(
-		GunGeometry.create_gun_visual(get_build(state))
-	)
+	visual_root.add_child(_instantiate_gun_visual(state))
 	return visual_root
 
 
 func instantiate_held_visual(
 	state: Dictionary,
-	first_person := false
+	_first_person := false
 ) -> Node3D:
-	return GunGeometry.create_gun_visual(get_build(state), first_person)
+	# Owner and observers render the same object at the same scale. Readability comes from the
+	# anatomical hand pose, not from silently enlarging a camera-only copy.
+	return _instantiate_gun_visual(state)
+
+
+func _instantiate_gun_visual(state: Dictionary) -> Node3D:
+	if authored_visual_scene != null:
+		var authored := authored_visual_scene.instantiate() as Node3D
+		if authored != null:
+			return authored
+	return GunGeometry.create_gun_visual(get_build(state), false)
+
+
+func get_held_presentation_profile(state: Dictionary) -> StringName:
+	var build := get_build(state)
+	if (
+		build != null
+		and build.receiver != null
+		and build.receiver.presentation_profile == ItemDefinition.HELD_PROFILE_RIFLE
+	):
+		return ItemDefinition.HELD_PROFILE_RIFLE
+	return ItemDefinition.HELD_PROFILE_PISTOL

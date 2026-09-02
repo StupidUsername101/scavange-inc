@@ -137,6 +137,11 @@ func _test_terminal_interface() -> void:
 		false
 	) as Button
 	var scanner_card := view.find_child("OpenScanner", true, false) as Button
+	var mimic_button := view.find_child(
+		"VoiceMimicConsent",
+		true,
+		false
+	) as Button
 	_expect(
 		invite != null and not invite.disabled,
 		"invite control is enabled for an open Steam lobby"
@@ -170,6 +175,29 @@ func _test_terminal_interface() -> void:
 		scanner_card != null
 		and scanner_card.has_meta(WristTerminalView.HOVER_HINT_META),
 		"the home hero exposes the device scanner as a self-explaining service card"
+	)
+	var requested_mimic_consent := [false]
+	view.voice_mimic_consent_changed.connect(
+		func(enabled: bool) -> void: requested_mimic_consent[0] = enabled
+	)
+	if mimic_button != null:
+		mimic_button.pressed.emit()
+	_expect(
+		mimic_button != null
+		and mimic_button.has_meta(WristTerminalView.HOVER_HINT_META)
+		and str(mimic_button.get_meta(
+			WristTerminalView.HOVER_HINT_META,
+			""
+		)).contains("Nothing is saved")
+		and requested_mimic_consent[0],
+		"the home page requests explicit, session-only enemy voice-memory consent"
+	)
+	view.set_voice_mimic_consent(true)
+	_expect(
+		view.voice_mimic_consent
+		and mimic_button != null
+		and mimic_button.text.contains("ON"),
+		"only the authoritative consent acknowledgement changes the visible toggle"
 	)
 	scanner_button.pressed.emit()
 	_expect(

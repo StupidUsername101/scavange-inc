@@ -1,0 +1,23 @@
+[gd_resource type="Resource" script_class="EnemyDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/enemy_definition.gd" id="1_definition"]
+[ext_resource type="Resource" path="res://resources/enemies/behaviors/voice_mimic.tres" id="2_runner"]
+[ext_resource type="Resource" path="res://resources/enemies/anatomies/humanoid_flesh.tres" id="3_anatomy"]
+
+[resource]
+script = ExtResource("1_definition")
+display_name = "Voice Mimic"
+visual_color = Color(0.22, 0.27, 0.24, 1)
+faction_id = 2
+presentation_type = 1
+show_status_label = false
+body_size = Vector3(0.82, 1.86, 0.72)
+collision_size = Vector3(0.82, 1.86, 0.72)
+body_center_height = 0.93
+max_health = 135.0
+target_height = 1.44
+destructible_anatomy = ExtResource("3_anatomy")
+flute_runner = ExtResource("2_runner")
+death_linger_seconds = 1.8
+starts_active = true
+automatically_target_players = true

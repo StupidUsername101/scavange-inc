@@ -2,9 +2,17 @@ extends StaticBody3D
 
 const CATALOG := preload("res://scripts/enemies/dev_zoo_catalog.gd")
 const ENEMY_SCENE := preload("res://scenes/server/server_enemy.tscn")
+const PHYSICAL_SURFACE := preload("res://scripts/audio/physical_surface.gd")
+const NATURE_COLLISION_SHAPES := {
+	&"pine": preload("res://resources/world/nature_collisions/pine_tree_1_trunk_convex.tres"),
+	&"broadleaf": preload("res://resources/world/nature_collisions/tree_8_trunk_convex.tres"),
+	&"stone": preload("res://resources/world/nature_collisions/stone_2_convex.tres"),
+}
 const WALL_HEIGHT := 1.35
 const WALL_THICKNESS := 0.22
 const ENTRANCE_WIDTH := 3.2
+const GATE_BAR_COUNT := 5
+const GATE_BAR_WIDTH := 0.11
 
 #######################################################
 # Owns authoritative dev zoo simulation and exposes the state required for replication and
@@ -14,6 +22,7 @@ const ENTRANCE_WIDTH := 3.2
 var pen_descriptors: Array[Dictionary] = []
 var enemies_by_slot: Dictionary[int, ServerEnemy] = {}
 var player_ids_by_slot: Dictionary[int, Dictionary] = {}
+var nature_collision_bodies: Dictionary[StringName, StaticBody3D] = {}
 
 
 func _ready() -> void:
@@ -25,6 +34,8 @@ func _ready() -> void:
 		player_ids_by_slot[slot_index] = {}
 		_build_pen_collision(pen)
 		_build_activation_area(pen)
+	for raw_prop: Variant in layout.get("nature_props", []):
+		_build_nature_collision(raw_prop as Dictionary)
 	call_deferred("_populate_all_pens")
 
 
@@ -131,10 +142,10 @@ func _build_activation_area(pen: Dictionary) -> void:
 	var size: Vector2 = pen["size"]
 	var center: Vector3 = pen["center"]
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(size.x, 3.0, size.y)
+	shape.size = Vector3(size.x, 3.0, size.y + 6.0)
 	var collision := CollisionShape3D.new()
 	collision.shape = shape
-	collision.position = Vector3(0.0, 1.5, 0.0)
+	collision.position = Vector3(0.0, 1.5, -3.0)
 	var area := Area3D.new()
 	area.name = "Pen%dActivation" % int(pen["slot_index"])
 	area.position = center
@@ -181,6 +192,22 @@ func _build_pen_collision(pen: Dictionary) -> void:
 			),
 			Vector3(front_segment_width, WALL_HEIGHT, WALL_THICKNESS)
 		)
+	var gate_spacing := ENTRANCE_WIDTH / float(GATE_BAR_COUNT + 1)
+	for gate_index: int in range(GATE_BAR_COUNT):
+		_add_box_collision(
+			"Pen%dGateBar%d" % [int(pen["slot_index"]), gate_index],
+			center + Vector3(
+				-ENTRANCE_WIDTH * 0.5 + gate_spacing * float(gate_index + 1),
+				WALL_HEIGHT * 0.58,
+				-size.y * 0.5
+			),
+			Vector3(GATE_BAR_WIDTH, WALL_HEIGHT * 1.16, WALL_THICKNESS)
+		)
+	_add_box_collision(
+		"Pen%dGateRail" % int(pen["slot_index"]),
+		center + Vector3(0.0, WALL_HEIGHT * 1.12, -size.y * 0.5),
+		Vector3(ENTRANCE_WIDTH, WALL_THICKNESS, WALL_THICKNESS)
+	)
 
 
 func _add_box_collision(
@@ -195,3 +222,34 @@ func _add_box_collision(
 	collision.position = local_position
 	collision.shape = shape
 	add_child(collision)
+
+
+func _build_nature_collision(descriptor: Dictionary) -> void:
+	var asset_id: StringName = descriptor.get("asset_id", &"")
+	var shape := NATURE_COLLISION_SHAPES.get(asset_id) as Shape3D
+	if shape == null or StringName(descriptor.get("collision_kind", &"")).is_empty():
+		return
+	var body := _nature_collision_body(asset_id)
+	var collision := CollisionShape3D.new()
+	collision.name = str(descriptor.get("name", "Nature")) + "Collision"
+	collision.transform = CATALOG.descriptor_transform(descriptor)
+	collision.shape = shape
+	body.add_child(collision)
+
+
+func _nature_collision_body(asset_id: StringName) -> StaticBody3D:
+	var material_kind := &"stone" if asset_id == &"stone" else &"wood"
+	var existing := nature_collision_bodies.get(material_kind) as StaticBody3D
+	if existing != null:
+		return existing
+	var body := StaticBody3D.new()
+	body.name = "%sNatureCollision" % str(material_kind).capitalize()
+	PHYSICAL_SURFACE.apply_to(body, material_kind)
+	body.set_meta(&"acoustic_boundary", false)
+	body.set_meta(
+		&"acoustic_max_partial_occlusion",
+		0.55 if material_kind == &"stone" else 0.28
+	)
+	add_child(body)
+	nature_collision_bodies[material_kind] = body
+	return body

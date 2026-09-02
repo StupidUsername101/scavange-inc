@@ -79,6 +79,7 @@ signal device_command_requested(
 	payload: Dictionary
 )
 signal display_page_changed(page: StringName)
+signal voice_mimic_consent_changed(enabled: bool)
 
 #######################################################
 # Drives the equipped Fieldlink's real curved screen and its colocated invisible pointer surface.
@@ -114,6 +115,7 @@ var terminal_screen_material: ShaderMaterial
 var display_page: StringName = FIELDLINK_DISPLAY_STATE.PAGE_HOME
 var pointer_position := Vector2(SCREEN_VIEWPORT_SIZE) * 0.5
 var wrist_mount: Node3D
+var voice_mimic_consent := false
 
 
 func _ready() -> void:
@@ -170,6 +172,12 @@ func set_session_info(next_label: String, can_invite: bool) -> void:
 	invite_available = can_invite
 	if terminal_view != null:
 		terminal_view.set_session_info(session_label, invite_available)
+
+
+func set_voice_mimic_consent(enabled: bool) -> void:
+	voice_mimic_consent = enabled
+	if terminal_view != null:
+		terminal_view.set_voice_mimic_consent(enabled)
 
 
 func set_scanner_contacts(
@@ -405,6 +413,7 @@ func _pointer_to_terminal_position(pointer_position: Vector2) -> Vector2:
 func _ensure_interface() -> void:
 	if terminal_viewport != null:
 		terminal_view.set_session_info(session_label, invite_available)
+		terminal_view.set_voice_mimic_consent(voice_mimic_consent)
 		terminal_view.set_scanner_contacts(
 			scanner_contacts,
 			scanner_range_meters
@@ -423,6 +432,7 @@ func _ensure_interface() -> void:
 	terminal_view = TERMINAL_VIEW.new() as WristTerminalView
 	terminal_viewport.add_child(terminal_view)
 	terminal_view.set_session_info(session_label, invite_available)
+	terminal_view.set_voice_mimic_consent(voice_mimic_consent)
 	terminal_view.set_scanner_contacts(
 		scanner_contacts,
 		scanner_range_meters
@@ -450,6 +460,9 @@ func _ensure_interface() -> void:
 	)
 	terminal_view.display_page_changed.connect(
 		_on_display_page_changed
+	)
+	terminal_view.voice_mimic_consent_changed.connect(
+		voice_mimic_consent_changed.emit
 	)
 
 	terminal_screen_material = create_screen_material(

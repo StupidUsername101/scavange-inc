@@ -1,4 +1,4 @@
-[gd_scene load_steps=20 format=3 uid="uid://mp5bc83tor82"]
+[gd_scene load_steps=21 format=3 uid="uid://mp5bc83tor82"]
 
 [ext_resource type="Texture2D" uid="uid://boxsgn34xowyt" path="res://assets/third_party/pizza_doggy/environment/skyboxes/bleak_mountains.png" id="1_sky"]
 [ext_resource type="PackedScene" path="res://scenes/proxy/drone_crafting_station.tscn" id="2_station"]
@@ -13,6 +13,7 @@
 [ext_resource type="PackedScene" path="res://scenes/proxy/speaker_cluster_demo.tscn" id="32_speaker_cluster"]
 [ext_resource type="PackedScene" path="res://scenes/proxy/acoustic_maze.tscn" id="33_acoustic_maze"]
 [ext_resource type="PackedScene" path="res://scenes/proxy/destruction_field_test.tscn" id="34_destruction_test"]
+[ext_resource type="PackedScene" path="res://scenes/proxy/dev_zoo.tscn" id="35_zoo"]
 
 [sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_sgp6g"]
 panorama = ExtResource("1_sky")
@@ -100,6 +101,9 @@ position = Vector3(6, 0, -48)
 
 [node name="AcousticMaze" parent="." instance=ExtResource("33_acoustic_maze")]
 position = Vector3(150, 0.02, -10)
+
+[node name="DevZoo" parent="." instance=ExtResource("35_zoo")]
+position = Vector3(-72, 0.02, 60)
 
 [node name="DestructionFieldTest" parent="." instance=ExtResource("34_destruction_test")]
 position = Vector3(-12, 0, -10)

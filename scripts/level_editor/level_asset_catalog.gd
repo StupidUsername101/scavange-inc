@@ -1,6 +1,10 @@
 class_name LevelAssetCatalog
 extends RefCounted
 
+const BUILDING_KITS := preload(
+	"res://scripts/level_editor/level_building_kit_catalog.gd"
+)
+
 ## Runtime catalog for the level editor. The purchased packs include the same
 ## models as GLB, FBX, and OBJ; GLB is the project's preferred imported format,
 ## so indexing it alone prevents thousands of duplicate entries.
@@ -18,9 +22,7 @@ const CATEGORY_FURNITURE := "Furniture"
 const CATEGORY_LIGHTING := "Lighting"
 const CATEGORY_ELECTRONICS := "Electronics & Controls"
 const CATEGORY_STORAGE := "Storage & Containers"
-const CATEGORY_TREES := "Nature / Trees & Logs"
-const CATEGORY_PLANTS := "Nature / Plants"
-const CATEGORY_TERRAIN := "Nature / Rocks & Terrain"
+const CATEGORY_NATURE := "Nature"
 const CATEGORY_VEHICLES := "Vehicles"
 const CATEGORY_WEAPONS := "Weapons & Tools"
 const CATEGORY_SUPPLIES := "Supplies & Pickups"
@@ -40,9 +42,7 @@ const FUNCTIONAL_CATEGORY_ORDER := [
 	CATEGORY_LIGHTING,
 	CATEGORY_ELECTRONICS,
 	CATEGORY_STORAGE,
-	CATEGORY_TREES,
-	CATEGORY_PLANTS,
-	CATEGORY_TERRAIN,
+	CATEGORY_NATURE,
 	CATEGORY_VEHICLES,
 	CATEGORY_WEAPONS,
 	CATEGORY_SUPPLIES,
@@ -117,7 +117,19 @@ static func _scan_directory(root_path: String) -> Array[Dictionary]:
 			var display_name := _display_name(raw_name)
 			var pack := _pack_for_path(path)
 			var category := _functional_category(path, raw_name)
-			result.append({
+			var folder_path := path.get_base_dir()
+			var folder_name := _folder_display_name(folder_path, pack)
+			var subcategory := _functional_subcategory(path, raw_name, category)
+			var browser_group_path := folder_path
+			var browser_group_name := folder_name
+			var building := BUILDING_KITS.describe(path)
+			if not subcategory.is_empty():
+				browser_group_path += "::" + subcategory
+				browser_group_name += "  /  " + subcategory
+			if not building.is_empty():
+				browser_group_path = str(building["building_group_path"])
+				browser_group_name = str(building["building_group_name"])
+			var entry := {
 				"asset_id": StringName(path.trim_prefix(ASSET_ROOT + "/").get_basename()),
 				"asset_path": path,
 				"display_name": display_name,
@@ -126,11 +138,25 @@ static func _scan_directory(root_path: String) -> Array[Dictionary]:
 				"semantic_stem": _semantic_sort_stem(raw_name, category),
 				"kind_rank": _semantic_kind_rank(raw_name, category),
 				"pack": pack,
+				"folder_path": folder_path,
+				"folder_name": folder_name,
+				"subcategory": subcategory,
+				"browser_group_path": browser_group_path,
+				"browser_group_name": browser_group_name,
 				"search_text": (
-					display_name + " " + category + " " + pack + " " + path
+					display_name + " " + category + " " + subcategory + " "
+					+ pack + " "
+					+ folder_path + " " + path
 				).to_lower(),
-			})
+			}
+			entry.merge(building, true)
+			result.append(entry)
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var folder_order := str(a.get("browser_group_path", "")).naturalnocasecmp_to(
+			str(b.get("browser_group_path", ""))
+		)
+		if folder_order != 0:
+			return folder_order < 0
 		var category_order := int(a.get("category_rank", 999)) - int(
 			b.get("category_rank", 999)
 		)
@@ -170,8 +196,48 @@ static func _pack_for_path(path: String) -> String:
 	return _display_name(components[0])
 
 
+static func _folder_display_name(folder_path: String, pack: String) -> String:
+	var relative := folder_path.trim_prefix(ASSET_ROOT + "/")
+	var components := relative.split("/", false)
+	var meaningful := PackedStringArray()
+	for component: String in components:
+		var normalized := component.to_lower()
+		if normalized in [
+			"assets",
+			"environment",
+			"third_party",
+			"models",
+			"model",
+			"other-formats",
+			"other formats",
+			"glb",
+			"glb (recommended)",
+		]:
+			continue
+		if normalized.contains("glb") and normalized.contains("recommended"):
+			continue
+		meaningful.append(_display_name(component))
+	if meaningful.is_empty():
+		return pack
+	var tail := PackedStringArray()
+	var tail_start := maxi(meaningful.size() - 2, 0)
+	for index: int in range(tail_start, meaningful.size()):
+		var component := meaningful[index]
+		if component.to_lower() == pack.to_lower():
+			continue
+		tail.append(component)
+	if tail.is_empty():
+		return pack
+	return "%s  /  %s" % [pack, "  /  ".join(tail)]
+
+
 static func _functional_category(path: String, raw_name: String) -> String:
 	var lower_path := path.to_lower()
+	if (
+		lower_path.contains("/psx nature")
+		or lower_path.contains("/models/nature/")
+	):
+		return CATEGORY_NATURE
 	if lower_path.contains("/weapons & tools/"):
 		return CATEGORY_WEAPONS
 	if lower_path.contains("/buildings/"):
@@ -232,15 +298,15 @@ static func _functional_category(path: String, raw_name: String) -> String:
 	if _has_any_token(raw_name, [
 		"tree", "trees", "trunk", "stump", "log", "branch", "pine", "palm",
 	]):
-		return CATEGORY_TREES
+		return CATEGORY_NATURE
 	if _has_any_token(raw_name, [
 		"plant", "plants", "grass", "bush", "shrub", "flower", "fern", "weed", "wheat", "reed", "vine", "mushroom",
 	]):
-		return CATEGORY_PLANTS
+		return CATEGORY_NATURE
 	if _has_any_token(raw_name, [
 		"rock", "rocks", "stone", "boulder", "cliff", "terrain", "ground", "asphalt", "dirt", "sand", "snow",
 	]):
-		return CATEGORY_TERRAIN
+		return CATEGORY_NATURE
 	if _has_any_token(raw_name, [
 		"car", "truck", "vehicle", "van", "bus", "forklift", "trailer", "wheel", "tire", "tyre",
 	]):
@@ -260,6 +326,28 @@ static func _functional_category(path: String, raw_name: String) -> String:
 	if lower_path.contains("/modular structures/") or lower_path.contains("/structures/"):
 		return CATEGORY_STRUCTURE
 	return CATEGORY_OTHER
+
+
+static func _functional_subcategory(
+	_path: String,
+	raw_name: String,
+	category: String
+) -> String:
+	if category != CATEGORY_NATURE:
+		return ""
+	if _has_any_token(raw_name, [
+		"tree", "trees", "trunk", "stump", "log", "branch", "pine", "palm",
+	]):
+		return "Trees & Logs"
+	if _has_any_token(raw_name, [
+		"plant", "plants", "grass", "bush", "shrub", "flower", "fern", "weed", "wheat", "reed", "vine", "mushroom",
+	]):
+		return "Plants & Ground Cover"
+	if _has_any_token(raw_name, [
+		"rock", "rocks", "stone", "boulder", "cliff", "terrain", "ground", "asphalt", "dirt", "sand", "snow",
+	]):
+		return "Rocks & Terrain"
+	return "Misc Nature"
 
 
 static func _semantic_sort_stem(raw_name: String, category: String) -> String:

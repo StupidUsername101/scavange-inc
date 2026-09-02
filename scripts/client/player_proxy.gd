@@ -16,9 +16,6 @@ const MAX_LOOK_PITCH_DEGREES := 85.0
 # cannot fold the real forearm and terminal underneath the camera.
 const MIN_WORLD_LOOK_PITCH := deg_to_rad(-58.0)
 const MAX_LOOK_PITCH := deg_to_rad(MAX_LOOK_PITCH_DEGREES)
-const HELD_ITEM_SIDE_OFFSET := 0.43
-const HELD_ITEM_ROLL := 0.08
-const FIRST_PERSON_ITEM_SIDE_OFFSET := 0.22
 const EQUIPPED_WRIST_DEVICE_SCALE := 0.45
 const WRIST_LOOK_PITCH := deg_to_rad(-24.0)
 const FIELDLINK_POSE_MIN_PITCH := deg_to_rad(-52.0)
@@ -45,6 +42,7 @@ const FLIP_REQUEST_TIMEOUT_SECONDS := 0.75
 const FIELDLINK_HOLD_POSITION_SCALE := 1.25
 const FIELDLINK_HOLD_ROTATION_SCALE := 1.35
 const WRIST_POSE_BLEND_SPEED := 7.5
+const HELD_ITEM_POSE_RESPONSE_HZ := 9.0
 const WRIST_LOOK_RECENTER_SPEED := 8.0
 const WRIST_REQUEST_GRACE_SECONDS := 0.5
 const WRIST_SCANNER_RANGE_METERS := 36.0
@@ -115,9 +113,6 @@ const PLASMA_CUTTER_BEAM_SCRIPT := preload(
 @onready var backpack_mount: Node3D = $BodyVisual/UpperBodyPose/BackpackMount
 @onready var eyes_mount: Node3D = $BodyVisual/UpperBodyPose/Head/EyesMount
 @onready var held_item_mount: Node3D = $BodyVisual/UpperBodyPose/HeldItemMount
-@onready var first_person_item_mount: Node3D = (
-	$HeadPivot/Camera3D/FirstPersonItemMount
-)
 @onready var interface_layer: CanvasLayer = $PlayerInterface
 @onready var inventory_hud: PlayerInventoryHud = (
 	$PlayerInterface/PlayerHud
@@ -246,9 +241,12 @@ var _cached_public_inventory: Dictionary = {
 var equipment_visuals: Dictionary = {}
 var equipment_definition_paths: Dictionary = {}
 var held_item_visual: Node3D
+var held_item_definition: ItemDefinition
 var held_item_definition_path := ""
 var held_item_state: Dictionary = {}
 var held_item_signature := ""
+var held_item_presentation_profile: StringName = ItemDefinition.HELD_PROFILE_GENERIC
+var held_item_pose_weight := 0.0
 var has_left_arm := true
 var has_right_arm := true
 var has_left_leg := true
@@ -256,6 +254,7 @@ var has_right_leg := true
 var target_wrist_interface_open := false
 var target_wrist_display_page: StringName = FIELDLINK_DISPLAY_STATE.PAGE_HOME
 var local_wrist_interface_open := false
+var voice_mimic_consent := false
 var wrist_pose_weight := 0.0
 var fieldlink_pose_pitch := WRIST_LOOK_PITCH
 var fieldlink_hold_motion := HELD_DEVICE_MOTION.new()
@@ -1253,7 +1252,6 @@ func _apply_held_item_state(inventory: Dictionary) -> void:
 		definition_path
 		+ "|"
 		+ build_signature
-		+ ("|local" if is_local_player else "|remote")
 	)
 	if signature == held_item_signature:
 		return
@@ -1267,18 +1265,22 @@ func _rebuild_held_item_visual() -> void:
 	if is_instance_valid(held_item_visual):
 		held_item_visual.queue_free()
 	held_item_visual = null
+	held_item_definition = null
+	held_item_presentation_profile = ItemDefinition.HELD_PROFILE_GENERIC
+	held_item_pose_weight = 0.0
 	if held_item_definition_path.is_empty():
 		return
 	var definition := load(held_item_definition_path) as ItemDefinition
 	if (
 		definition == null
-		or not (
-			definition is GunItemDefinition
-			or definition is PlasmaCutterDefinition
-		)
+		or not definition.grippable
 		or not definition.has_method("instantiate_held_visual")
 	):
 		return
+	held_item_definition = definition
+	held_item_presentation_profile = definition.get_held_presentation_profile(
+		held_item_state
+	)
 	var mount := _get_held_item_visual_mount()
 	held_item_visual = definition.call(
 		"instantiate_held_visual",
@@ -1289,16 +1291,18 @@ func _rebuild_held_item_visual() -> void:
 		return
 	held_item_visual.name = "HeldItemVisual"
 	mount.add_child(held_item_visual)
+	held_item_visual.transform = definition.get_held_visual_transform(
+		held_item_state,
+		held_item_visual
+	)
 	_update_held_item_mount()
 	_sync_plasma_cutter_emitter()
 
 
 func _get_held_item_visual_mount() -> Node3D:
-	if is_local_player:
-		return first_person_item_mount
 	if character_skin != null and character_skin.is_usable():
 		var uses_left := not has_right_arm and has_left_arm
-		return character_skin.get_hand_item_mount(uses_left)
+		return character_skin.get_hand_grip_point(uses_left)
 	return held_item_mount
 
 
@@ -1333,21 +1337,14 @@ func _apply_limb_state(limbs: Dictionary) -> void:
 
 func _update_held_item_mount() -> void:
 	var uses_right := has_right_arm or not has_left_arm
-	held_item_mount.position.x = (
-		HELD_ITEM_SIDE_OFFSET
-		if uses_right
-		else -HELD_ITEM_SIDE_OFFSET
+	# This fallback exists only for an unavailable imported skin. Normal presentation reparents the
+	# visual to the surviving anatomical hand mount for owner and observers alike.
+	held_item_mount.position = Vector3(
+		0.31 if uses_right else -0.31,
+		-0.08,
+		-0.28
 	)
-	held_item_mount.rotation.z = (
-		-HELD_ITEM_ROLL
-		if uses_right
-		else HELD_ITEM_ROLL
-	)
-	first_person_item_mount.position.x = (
-		FIRST_PERSON_ITEM_SIDE_OFFSET
-		if uses_right
-		else -FIRST_PERSON_ITEM_SIDE_OFFSET
-	)
+	held_item_mount.rotation = Vector3(0.04, -0.08, -0.05 if uses_right else 0.05)
 	if is_instance_valid(held_item_visual):
 		held_item_visual.visible = (
 			(has_left_arm or has_right_arm)
@@ -1628,7 +1625,11 @@ func _ensure_wrist_presentation() -> void:
 	wrist_presentation.display_page_changed.connect(
 		_on_wrist_display_page_changed
 	)
+	wrist_presentation.voice_mimic_consent_changed.connect(
+		_on_voice_mimic_consent_changed
+	)
 	wrist_presentation.apply_replicated_page(target_wrist_display_page)
+	wrist_presentation.set_voice_mimic_consent(voice_mimic_consent)
 
 
 func _refresh_wrist_session_info() -> void:
@@ -1746,6 +1747,20 @@ func _on_wrist_display_page_changed(page_value: StringName) -> void:
 	var client := get_node_or_null("/root/Client")
 	if client != null:
 		client.call("set_wrist_display_page", target_wrist_display_page)
+
+
+func _on_voice_mimic_consent_changed(enabled: bool) -> void:
+	if not is_local_player:
+		return
+	var client := get_node_or_null("/root/Client")
+	if client != null:
+		client.call("set_voice_mimic_consent", enabled)
+
+
+func apply_voice_mimic_consent(enabled: bool) -> void:
+	voice_mimic_consent = enabled
+	if wrist_presentation != null:
+		wrist_presentation.set_voice_mimic_consent(enabled)
 
 
 func apply_replicated_wrist_state(
@@ -3075,6 +3090,11 @@ func _update_character_pose(delta: float) -> void:
 			fieldlink_hold_motion.position_offset
 			* FIELDLINK_HOLD_POSITION_SCALE
 		)
+		_sync_shared_hand_presentation(
+			delta,
+			pose_movement_weight,
+			pose_run_weight
+		)
 	if is_local_player:
 		if character_skin != null and character_skin.is_usable():
 			camera_pivot_rest_position = to_local(
@@ -3083,6 +3103,76 @@ func _update_character_pose(delta: float) -> void:
 			audio_listener_rest_position = camera_pivot_rest_position
 			audio_listener.position = audio_listener_rest_position
 		camera_pivot.position = camera_pivot_rest_position + character_pose.camera_position
+
+
+func _sync_shared_hand_presentation(
+	delta: float,
+	movement_weight: float,
+	run_weight: float
+) -> void:
+	if character_skin == null or not character_skin.is_usable():
+		return
+	var can_hold_item := (
+		is_instance_valid(held_item_visual)
+		and held_item_definition != null
+		and wrist_pose_weight <= 0.02
+		and not target_ragdoll_active
+		and (has_left_arm or has_right_arm)
+	)
+	var pose_response := 1.0 - exp(
+		-HELD_ITEM_POSE_RESPONSE_HZ * clampf(delta, 0.0, 0.1)
+	)
+	held_item_pose_weight = lerpf(
+		held_item_pose_weight,
+		1.0 if can_hold_item else 0.0,
+		pose_response
+	)
+	if (
+		wrist_pose_weight > 0.02
+		or target_ragdoll_active
+		or (not has_left_arm and not has_right_arm)
+	):
+		return
+	if can_hold_item:
+		var primary_left := not has_right_arm and has_left_arm
+		var held_pitch := (
+			_resolved_camera_pitch()
+			if is_local_player
+			else target_look_pitch
+		)
+		# Full vertical aim remains available, but pathological angles are absorbed at the shoulder
+		# instead of folding a weapon back through the owner's camera/body.
+		held_pitch = clampf(
+			held_pitch if is_finite(held_pitch) else 0.0,
+			deg_to_rad(-58.0),
+			deg_to_rad(72.0)
+		)
+		var aim_basis := (
+			global_basis.orthonormalized()
+			* Basis.from_euler(Vector3(held_pitch, 0.0, 0.0))
+		).orthonormalized()
+		character_skin.sync_held_item_hands(
+			held_item_presentation_profile,
+			aim_basis,
+			resolved_pose_gait_cycle,
+			movement_weight,
+			run_weight,
+			primary_left,
+			held_item_pose_weight
+		)
+		return
+	# Empty hands remain part of the same procedural body. During a run the elbows naturally fold
+	# into the lower view instead of leaving two straight T-pose-derived pendulums outside the frame.
+	if (
+		target_on_floor
+		and _resolved_kick_phase() >= 0.999
+		and movement_weight > 0.02
+	):
+		character_skin.sync_locomotion_hands(
+			resolved_pose_gait_cycle,
+			movement_weight,
+			run_weight
+		)
 
 
 func _sync_character_appearance() -> void:

@@ -131,7 +131,7 @@ func apply_authoritative_enemy(enemy: ServerEnemy) -> void:
 	else:
 		target_position = enemy.flute_runner_controller.last_known_position
 		has_target_position = enemy.flute_runner_controller.has_last_known_position
-	flute_pose_weight = 1.0 if enemy.active and enemy.alive else 0.0
+	flute_pose_weight = enemy.get_flute_pose_weight()
 	if wound_presentation != null and enemy.destructible_anatomy != null:
 		target_anatomy_state = enemy.destructible_anatomy.state_dict()
 		wound_presentation.apply_state(target_anatomy_state)

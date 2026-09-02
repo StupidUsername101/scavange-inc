@@ -34,6 +34,8 @@ extends Resource
 @export_range(0.0, 30.0, 0.1) var tackle_impulse := 8.4
 
 @export_group("Flute Program")
+@export var flute_program_enabled := true
+@export var flute_pose_enabled := true
 @export_file("*.wav", "*.ogg", "*.mp3") var flute_song_path := (
 	"res://assets/sounds/music/gameplay/flute_runner_loop.wav"
 )
@@ -41,3 +43,9 @@ extends Resource
 @export_range(1.0, 500.0, 1.0) var flute_hearing_distance := 74.0
 @export_range(0.0, 1.0, 0.01) var flute_priority := 0.64
 @export var flute_source_modifier: AcousticPathModifier
+
+@export_group("Captured Voice Mimic")
+@export var captured_voice_mimic_enabled := true
+@export_range(1.0, 120.0, 0.5) var mimic_interval_min_seconds := 9.0
+@export_range(1.0, 120.0, 0.5) var mimic_interval_max_seconds := 17.0
+@export_range(0.1, 30.0, 0.1) var mimic_unavailable_retry_seconds := 1.5
